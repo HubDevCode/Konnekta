@@ -63,7 +63,14 @@ async fn bind_payload_port(bind: IpAddr) -> Result<TcpListener> {
     Ok(TcpListener::bind(SocketAddr::new(bind, 0)).await?)
 }
 
-async fn copy_exact<R, W>(r: &mut R, w: &mut W, len: u64, base: u64, total: u64, progress: &Option<Progress>) -> Result<()>
+async fn copy_exact<R, W>(
+    r: &mut R,
+    w: &mut W,
+    len: u64,
+    base: u64,
+    total: u64,
+    progress: &Option<Progress>,
+) -> Result<()>
 where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
@@ -88,6 +95,7 @@ where
 
 /// Start a one-shot payload server. Returns the port to announce and a task
 /// that completes when the transfer finished (or failed / timed out).
+#[allow(clippy::too_many_arguments)]
 pub async fn serve(
     local: &LocalIdentity,
     peer_cert: Vec<u8>,
@@ -102,7 +110,10 @@ pub async fn serve(
     let port = listener.local_addr()?.port();
     let acceptor = TlsAcceptor::from(server_config(
         local,
-        PeerExpectation::Pinned { device_id: peer_id, cert_der: peer_cert },
+        PeerExpectation::Pinned {
+            device_id: peer_id,
+            cert_der: peer_cert,
+        },
     )?);
     let total = source.size().await?;
     let task = tokio::spawn(async move {
@@ -131,7 +142,15 @@ pub async fn serve(
             0
         };
         let mut reader = source.open_at(offset).await?;
-        copy_exact(&mut reader, &mut tls, total - offset, offset, total, &progress).await?;
+        copy_exact(
+            &mut reader,
+            &mut tls,
+            total - offset,
+            offset,
+            total,
+            &progress,
+        )
+        .await?;
         tls.shutdown().await.ok();
         Ok(())
     });
@@ -139,6 +158,7 @@ pub async fn serve(
 }
 
 /// Download a payload announced by the peer.
+#[allow(clippy::too_many_arguments)]
 pub async fn fetch<W: AsyncWrite + Unpin>(
     local: &LocalIdentity,
     peer_cert: Vec<u8>,
@@ -155,7 +175,10 @@ pub async fn fetch<W: AsyncWrite + Unpin>(
     let _ = tcp.set_nodelay(true);
     let connector = TlsConnector::from(client_config(
         local,
-        PeerExpectation::Pinned { device_id: peer_id, cert_der: peer_cert },
+        PeerExpectation::Pinned {
+            device_id: peer_id,
+            cert_der: peer_cert,
+        },
     )?);
     let mut tls = tokio::time::timeout(
         crate::link::HANDSHAKE_TIMEOUT,
@@ -190,20 +213,60 @@ mod tests {
         let lo = IpAddr::V4(Ipv4Addr::LOCALHOST);
 
         // Full transfer a -> b.
-        let (port, task) = serve(&a, b.cert_der.clone(), b.device_id.clone(), lo, lo,
-            PayloadSource::Bytes(data.clone()), false, None).await.unwrap();
+        let (port, task) = serve(
+            &a,
+            b.cert_der.clone(),
+            b.device_id.clone(),
+            lo,
+            lo,
+            PayloadSource::Bytes(data.clone()),
+            false,
+            None,
+        )
+        .await
+        .unwrap();
         let mut out = Vec::new();
-        fetch(&b, a.cert_der.clone(), a.device_id.clone(), SocketAddr::new(lo, port),
-            data.len() as u64, None, &mut out, None).await.unwrap();
+        fetch(
+            &b,
+            a.cert_der.clone(),
+            a.device_id.clone(),
+            SocketAddr::new(lo, port),
+            data.len() as u64,
+            None,
+            &mut out,
+            None,
+        )
+        .await
+        .unwrap();
         task.await.unwrap().unwrap();
         assert_eq!(out, data);
 
         // Resume from 100k.
-        let (port, task) = serve(&a, b.cert_der.clone(), b.device_id.clone(), lo, lo,
-            PayloadSource::Bytes(data.clone()), true, None).await.unwrap();
+        let (port, task) = serve(
+            &a,
+            b.cert_der.clone(),
+            b.device_id.clone(),
+            lo,
+            lo,
+            PayloadSource::Bytes(data.clone()),
+            true,
+            None,
+        )
+        .await
+        .unwrap();
         let mut out = data[..100_000].to_vec();
-        fetch(&b, a.cert_der.clone(), a.device_id.clone(), SocketAddr::new(lo, port),
-            data.len() as u64, Some(100_000), &mut out, None).await.unwrap();
+        fetch(
+            &b,
+            a.cert_der.clone(),
+            a.device_id.clone(),
+            SocketAddr::new(lo, port),
+            data.len() as u64,
+            Some(100_000),
+            &mut out,
+            None,
+        )
+        .await
+        .unwrap();
         task.await.unwrap().unwrap();
         assert_eq!(out, data);
     }
@@ -215,11 +278,30 @@ mod tests {
         let b = LocalIdentity::generate(&generate_device_id()).unwrap();
         let evil = LocalIdentity::generate(&b.device_id).unwrap();
         let lo = IpAddr::V4(Ipv4Addr::LOCALHOST);
-        let (port, task) = serve(&a, b.cert_der.clone(), b.device_id.clone(), lo, lo,
-            PayloadSource::Bytes(vec![1; 1000]), false, None).await.unwrap();
+        let (port, task) = serve(
+            &a,
+            b.cert_der.clone(),
+            b.device_id.clone(),
+            lo,
+            lo,
+            PayloadSource::Bytes(vec![1; 1000]),
+            false,
+            None,
+        )
+        .await
+        .unwrap();
         let mut out = Vec::new();
-        let r = fetch(&evil, a.cert_der.clone(), a.device_id.clone(), SocketAddr::new(lo, port),
-            1000, None, &mut out, None).await;
+        let r = fetch(
+            &evil,
+            a.cert_der.clone(),
+            a.device_id.clone(),
+            SocketAddr::new(lo, port),
+            1000,
+            None,
+            &mut out,
+            None,
+        )
+        .await;
         assert!(r.is_err() || out.is_empty());
         assert!(task.await.unwrap().is_err());
     }

@@ -42,7 +42,10 @@ pub struct TrustStore {
 
 impl TrustStore {
     pub fn in_memory() -> Self {
-        Self { path: None, devices: BTreeMap::new() }
+        Self {
+            path: None,
+            devices: BTreeMap::new(),
+        }
     }
 
     pub fn open(path: PathBuf) -> anyhow::Result<Self> {
@@ -51,7 +54,10 @@ impl TrustStore {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => BTreeMap::new(),
             Err(e) => return Err(e.into()),
         };
-        Ok(Self { path: Some(path), devices })
+        Ok(Self {
+            path: Some(path),
+            devices,
+        })
     }
 
     fn persist(&self) {

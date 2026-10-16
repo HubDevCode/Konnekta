@@ -47,7 +47,13 @@ pub struct Frame {
 
 impl Frame {
     pub fn new(kind: FrameKind, pts_us: u64, data: impl Into<Bytes>) -> Self {
-        Self { kind, flags: 0, seq: 0, pts_us, data: data.into() }
+        Self {
+            kind,
+            flags: 0,
+            seq: 0,
+            pts_us,
+            data: data.into(),
+        }
     }
 
     pub fn keyframe(mut self) -> Self {
@@ -60,7 +66,11 @@ impl Frame {
     }
 
     pub fn control(json: &serde_json::Value) -> Self {
-        Self::new(FrameKind::Control, 0, serde_json::to_vec(json).unwrap_or_default())
+        Self::new(
+            FrameKind::Control,
+            0,
+            serde_json::to_vec(json).unwrap_or_default(),
+        )
     }
 }
 
@@ -87,7 +97,9 @@ pub async fn read_frame<R: AsyncRead + Unpin>(r: &mut R) -> Result<Option<Frame>
         Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
         Err(e) => return Err(e.into()),
     }
-    let Some(kind) = FrameKind::from_u8(hdr[0]) else { bail!("unknown frame kind {}", hdr[0]) };
+    let Some(kind) = FrameKind::from_u8(hdr[0]) else {
+        bail!("unknown frame kind {}", hdr[0])
+    };
     let len = u32::from_be_bytes(hdr[14..18].try_into().unwrap()) as usize;
     if len > MAX_FRAME {
         bail!("frame too large ({len} bytes)");
@@ -110,7 +122,13 @@ mod tests {
     #[tokio::test]
     async fn roundtrip() {
         let (mut a, mut b) = tokio::io::duplex(1 << 16);
-        let f = Frame { kind: FrameKind::Video, flags: FLAG_KEYFRAME, seq: 7, pts_us: 123456, data: Bytes::from_static(b"nal") };
+        let f = Frame {
+            kind: FrameKind::Video,
+            flags: FLAG_KEYFRAME,
+            seq: 7,
+            pts_us: 123456,
+            data: Bytes::from_static(b"nal"),
+        };
         write_frame(&mut a, &f).await.unwrap();
         drop(a);
         assert_eq!(read_frame(&mut b).await.unwrap().unwrap(), f);

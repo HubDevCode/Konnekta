@@ -94,10 +94,10 @@ impl DeviceHandle {
             if !self.supports(&packet.packet_type) {
                 bail!("{} does not support {}", self.name(), packet.packet_type);
             }
-            if let Some(p) = core.permission_for_outgoing(&packet.packet_type) {
-                if !core.has_permission(self.id(), p) {
-                    bail!("permission {:?} not granted for {}", p, self.name());
-                }
+            if let Some(p) = core.permission_for_outgoing(&packet.packet_type)
+                && !core.has_permission(self.id(), p)
+            {
+                bail!("permission {:?} not granted for {}", p, self.name());
             }
         }
         self.tx.send(packet).await.context("link closed")
@@ -151,12 +151,18 @@ impl DeviceHandle {
         progress: Option<Progress>,
     ) -> Result<u64> {
         let core = self.core()?;
-        let info = packet.payload_transfer_info.context("packet has no payload")?;
+        let info = packet
+            .payload_transfer_info
+            .context("packet has no payload")?;
         let size = packet.payload_size.unwrap_or(-1);
         if size < 0 {
             bail!("streams of unknown size are not supported");
         }
-        let resume = if self.resume_supported() { resume_from.or(Some(0)) } else { None };
+        let resume = if self.resume_supported() {
+            resume_from.or(Some(0))
+        } else {
+            None
+        };
         payload::fetch(
             &core.identity,
             (*self.peer_cert).clone(),

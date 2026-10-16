@@ -57,7 +57,10 @@ impl NotificationFilter {
             return false;
         }
         let text = format!("{} {}", n.title, n.text).to_lowercase();
-        !self.muted_keywords.iter().any(|k| !k.is_empty() && text.contains(&k.to_lowercase()))
+        !self
+            .muted_keywords
+            .iter()
+            .any(|k| !k.is_empty() && text.contains(&k.to_lowercase()))
     }
 }
 
@@ -71,11 +74,21 @@ pub struct NotificationsPlugin {
 
 impl NotificationsPlugin {
     pub fn new(platform: Platform) -> Self {
-        Self { platform, core: OnceLock::new(), filter: JsonStore::default(), active: Mutex::default() }
+        Self {
+            platform,
+            core: OnceLock::new(),
+            filter: JsonStore::default(),
+            active: Mutex::default(),
+        }
     }
 
     fn sanitize(mut n: NotificationBody) -> NotificationBody {
-        let cut = |s: &str, max: usize| s.chars().filter(|c| !c.is_control() || *c == '\n').take(max).collect::<String>();
+        let cut = |s: &str, max: usize| {
+            s.chars()
+                .filter(|c| !c.is_control() || *c == '\n')
+                .take(max)
+                .collect::<String>()
+        };
         n.app_name = cut(&n.app_name, 64);
         n.title = cut(&n.title, 256);
         n.text = cut(&n.text, 4096);
@@ -97,7 +110,11 @@ impl Plugin for NotificationsPlugin {
             origin: PluginOrigin::KdeConnect,
             permission: Permission::Notifications,
             incoming: &[types::NOTIFICATION],
-            outgoing: &[types::NOTIFICATION_REQUEST, types::NOTIFICATION_REPLY, types::NOTIFICATION_ACTION],
+            outgoing: &[
+                types::NOTIFICATION_REQUEST,
+                types::NOTIFICATION_REPLY,
+                types::NOTIFICATION_ACTION,
+            ],
         }
     }
 
@@ -108,7 +125,12 @@ impl Plugin for NotificationsPlugin {
 
     async fn on_connected(&self, dev: &DeviceHandle) {
         // Ask for the notifications already present on the phone.
-        let _ = dev.send_if_supported(Packet::new(types::NOTIFICATION_REQUEST, json!({ "request": true }))).await;
+        let _ = dev
+            .send_if_supported(Packet::new(
+                types::NOTIFICATION_REQUEST,
+                json!({ "request": true }),
+            ))
+            .await;
     }
 
     async fn on_disconnected(&self, id: &str) {
@@ -145,7 +167,10 @@ impl Plugin for NotificationsPlugin {
         dev.emit("notifications", "posted", serde_json::to_value(&n)?);
         if filter.show_popups && (is_new || !n.only_once) {
             let (title, body) = if filter.privacy_mode {
-                (format!("New notification from {}", n.app_name), String::new())
+                (
+                    format!("New notification from {}", n.app_name),
+                    String::new(),
+                )
             } else {
                 (n.title.clone(), n.text.clone())
             };
@@ -162,19 +187,49 @@ impl Plugin for NotificationsPlugin {
             let core = self.core.get().cloned();
             let (dev_id, nid) = (dev.id().to_owned(), n.id.clone());
             self.platform.notifier.show(
-                DesktopNotification { id: key, app_name: n.app_name.clone(), title, body, actions, urgent: false },
+                DesktopNotification {
+                    id: key,
+                    app_name: n.app_name.clone(),
+                    title,
+                    body,
+                    actions,
+                    urgent: false,
+                },
                 Some(Box::new(move |a| {
                     let Some(core) = core else { return };
-                    let Ok(rt) = tokio::runtime::Handle::try_current() else { return };
+                    let Ok(rt) = tokio::runtime::Handle::try_current() else {
+                        return;
+                    };
                     rt.spawn(async move {
                         let r = match a.as_str() {
-                            "dismiss" => core.plugin_action(Some(&dev_id), "notifications", "dismiss", json!({ "id": nid })).await,
+                            "dismiss" => {
+                                core.plugin_action(
+                                    Some(&dev_id),
+                                    "notifications",
+                                    "dismiss",
+                                    json!({ "id": nid }),
+                                )
+                                .await
+                            }
                             "reply" => {
-                                core.emit_plugin(Some(&dev_id), "notifications", "replyRequested", json!({ "id": nid }));
+                                core.emit_plugin(
+                                    Some(&dev_id),
+                                    "notifications",
+                                    "replyRequested",
+                                    json!({ "id": nid }),
+                                );
                                 Ok(Value::Null)
                             }
                             other => match other.strip_prefix("action:") {
-                                Some(name) => core.plugin_action(Some(&dev_id), "notifications", "action", json!({ "id": nid, "action": name })).await,
+                                Some(name) => {
+                                    core.plugin_action(
+                                        Some(&dev_id),
+                                        "notifications",
+                                        "action",
+                                        json!({ "id": nid, "action": name }),
+                                    )
+                                    .await
+                                }
                                 None => Ok(Value::Null),
                             },
                         };
@@ -188,18 +243,36 @@ impl Plugin for NotificationsPlugin {
         Ok(())
     }
 
-    async fn handle_action(&self, dev: Option<&DeviceHandle>, action: &str, args: Value) -> Result<Value> {
-        let id = args.get("id").and_then(Value::as_str).unwrap_or_default().to_owned();
+    async fn handle_action(
+        &self,
+        dev: Option<&DeviceHandle>,
+        action: &str,
+        args: Value,
+    ) -> Result<Value> {
+        let id = args
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
         match action {
             "list" => {
                 let d = crate::need_dev(dev)?;
-                let v: Vec<NotificationBody> =
-                    self.active.lock().unwrap().get(d.id()).map(|m| m.values().cloned().collect()).unwrap_or_default();
+                let v: Vec<NotificationBody> = self
+                    .active
+                    .lock()
+                    .unwrap()
+                    .get(d.id())
+                    .map(|m| m.values().cloned().collect())
+                    .unwrap_or_default();
                 Ok(serde_json::to_value(v)?)
             }
             "dismiss" => {
                 let d = crate::need_dev(dev)?;
-                d.send(Packet::new(types::NOTIFICATION_REQUEST, json!({ "cancel": id }))).await?;
+                d.send(Packet::new(
+                    types::NOTIFICATION_REQUEST,
+                    json!({ "cancel": id }),
+                ))
+                .await?;
                 if let Some(m) = self.active.lock().unwrap().get_mut(d.id()) {
                     m.remove(&id);
                 }
@@ -208,7 +281,10 @@ impl Plugin for NotificationsPlugin {
             }
             "reply" => {
                 let d = crate::need_dev(dev)?;
-                let message = args.get("message").and_then(Value::as_str).unwrap_or_default();
+                let message = args
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
                 let reply_id = self
                     .active
                     .lock()
@@ -216,15 +292,27 @@ impl Plugin for NotificationsPlugin {
                     .get(d.id())
                     .and_then(|m| m.get(&id))
                     .and_then(|n| n.request_reply_id.clone());
-                let Some(reply_id) = reply_id else { bail!("this notification does not support replies") };
-                d.send(Packet::new(types::NOTIFICATION_REPLY, json!({ "requestReplyId": reply_id, "message": message })))
-                    .await?;
+                let Some(reply_id) = reply_id else {
+                    bail!("this notification does not support replies")
+                };
+                d.send(Packet::new(
+                    types::NOTIFICATION_REPLY,
+                    json!({ "requestReplyId": reply_id, "message": message }),
+                ))
+                .await?;
                 Ok(Value::Null)
             }
             "action" => {
                 let d = crate::need_dev(dev)?;
-                let name = args.get("action").and_then(Value::as_str).unwrap_or_default();
-                d.send(Packet::new(types::NOTIFICATION_ACTION, json!({ "key": id, "action": name }))).await?;
+                let name = args
+                    .get("action")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                d.send(Packet::new(
+                    types::NOTIFICATION_ACTION,
+                    json!({ "key": id, "action": name }),
+                ))
+                .await?;
                 Ok(Value::Null)
             }
             "getFilter" => Ok(serde_json::to_value(self.filter.get())?),
@@ -243,7 +331,12 @@ mod tests {
     use super::*;
 
     fn n(app: &str, title: &str) -> NotificationBody {
-        NotificationBody { id: "1".into(), app_name: app.into(), title: title.into(), ..Default::default() }
+        NotificationBody {
+            id: "1".into(),
+            app_name: app.into(),
+            title: title.into(),
+            ..Default::default()
+        }
     }
 
     #[test]

@@ -41,13 +41,21 @@ pub fn special_key(code: u32) -> Option<SpecialKey> {
 
 impl MousepadPlugin {
     pub fn new(platform: Platform) -> Self {
-        Self { platform, acc: Mutex::new((0.0, 0.0)) }
+        Self {
+            platform,
+            acc: Mutex::new((0.0, 0.0)),
+        }
     }
 
     /// Translate a mousepad packet into input events (pure, testable).
     pub fn events(&self, b: &MousepadBody) -> Vec<InputEvent> {
         let mut out = Vec::new();
-        let mods = Modifiers { ctrl: b.ctrl, shift: b.shift, alt: b.alt, meta: b.super_key };
+        let mods = Modifiers {
+            ctrl: b.ctrl,
+            shift: b.shift,
+            alt: b.alt,
+            meta: b.super_key,
+        };
         if let (Some(x), Some(y)) = (b.abs_x, b.abs_y) {
             out.push(InputEvent::MoveAbsolute { x, y });
         }
@@ -72,14 +80,20 @@ impl MousepadPlugin {
         }
         if let Some(code) = b.special_key.filter(|c| *c != 0) {
             if let Some(k) = special_key(code) {
-                out.push(InputEvent::Key { key: Key::Special(k), modifiers: mods });
+                out.push(InputEvent::Key {
+                    key: Key::Special(k),
+                    modifiers: mods,
+                });
             }
         } else if let Some(text) = b.key.as_deref().filter(|k| !k.is_empty()) {
             let text: String = text.chars().take(4096).collect();
             if mods.ctrl || mods.alt || mods.meta {
                 // Shortcut such as ctrl+c: one key with modifiers.
                 if let Some(c) = text.chars().next() {
-                    out.push(InputEvent::Key { key: Key::Char(c.to_ascii_lowercase()), modifiers: mods });
+                    out.push(InputEvent::Key {
+                        key: Key::Char(c.to_ascii_lowercase()),
+                        modifiers: mods,
+                    });
                 }
             } else {
                 out.push(InputEvent::Text { text });
@@ -99,7 +113,10 @@ impl MousepadPlugin {
                         s => s,
                     }
                 };
-                out.push(InputEvent::Scroll { dx: -steps(dx), dy: steps(dy) });
+                out.push(InputEvent::Scroll {
+                    dx: -steps(dx),
+                    dy: steps(dy),
+                });
             } else {
                 let mut acc = self.acc.lock().unwrap();
                 acc.0 += dx.clamp(-2000.0, 2000.0);
@@ -108,7 +125,10 @@ impl MousepadPlugin {
                 acc.0 -= ix;
                 acc.1 -= iy;
                 if ix != 0.0 || iy != 0.0 {
-                    out.push(InputEvent::MoveRelative { dx: ix as i32, dy: iy as i32 });
+                    out.push(InputEvent::MoveRelative {
+                        dx: ix as i32,
+                        dy: iy as i32,
+                    });
                 }
             }
         }
@@ -132,7 +152,10 @@ impl Plugin for MousepadPlugin {
 
     async fn on_connected(&self, dev: &DeviceHandle) {
         let _ = dev
-            .send_if_supported(Packet::new(types::MOUSEPAD_KEYBOARDSTATE, json!({ "state": true })))
+            .send_if_supported(Packet::new(
+                types::MOUSEPAD_KEYBOARDSTATE,
+                json!({ "state": true }),
+            ))
             .await;
     }
 
@@ -144,7 +167,8 @@ impl Plugin for MousepadPlugin {
         if body.send_ack {
             let mut echo = p.body.clone();
             echo.insert("isAck".into(), Value::Bool(true));
-            dev.send_if_supported(Packet::new(types::MOUSEPAD_ECHO, echo)).await?;
+            dev.send_if_supported(Packet::new(types::MOUSEPAD_ECHO, echo))
+                .await?;
         }
         Ok(())
     }
@@ -162,22 +186,65 @@ mod tests {
     #[test]
     fn subpixel_accumulation() {
         let p = plugin();
-        let b = MousepadBody { dx: Some(0.6), dy: Some(-0.6), ..Default::default() };
+        let b = MousepadBody {
+            dx: Some(0.6),
+            dy: Some(-0.6),
+            ..Default::default()
+        };
         assert!(p.events(&b).is_empty());
-        assert_eq!(p.events(&b), vec![InputEvent::MoveRelative { dx: 1, dy: -1 }]);
+        assert_eq!(
+            p.events(&b),
+            vec![InputEvent::MoveRelative { dx: 1, dy: -1 }]
+        );
     }
 
     #[test]
     fn keys_and_clicks() {
         let p = plugin();
-        let b = MousepadBody { special_key: Some(12), ..Default::default() };
-        assert_eq!(p.events(&b), vec![InputEvent::Key { key: Key::Special(SpecialKey::Return), modifiers: Modifiers::default() }]);
-        let b = MousepadBody { key: Some("C".into()), ctrl: true, ..Default::default() };
-        assert!(matches!(p.events(&b)[0], InputEvent::Key { key: Key::Char('c'), modifiers: Modifiers { ctrl: true, .. } }));
-        let b = MousepadBody { key: Some("ciao".into()), ..Default::default() };
-        assert_eq!(p.events(&b), vec![InputEvent::Text { text: "ciao".into() }]);
-        let b = MousepadBody { rightclick: true, ..Default::default() };
-        assert_eq!(p.events(&b), vec![InputEvent::Button { button: MouseButton::Right, action: ButtonAction::Click }]);
+        let b = MousepadBody {
+            special_key: Some(12),
+            ..Default::default()
+        };
+        assert_eq!(
+            p.events(&b),
+            vec![InputEvent::Key {
+                key: Key::Special(SpecialKey::Return),
+                modifiers: Modifiers::default()
+            }]
+        );
+        let b = MousepadBody {
+            key: Some("C".into()),
+            ctrl: true,
+            ..Default::default()
+        };
+        assert!(matches!(
+            p.events(&b)[0],
+            InputEvent::Key {
+                key: Key::Char('c'),
+                modifiers: Modifiers { ctrl: true, .. }
+            }
+        ));
+        let b = MousepadBody {
+            key: Some("ciao".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            p.events(&b),
+            vec![InputEvent::Text {
+                text: "ciao".into()
+            }]
+        );
+        let b = MousepadBody {
+            rightclick: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            p.events(&b),
+            vec![InputEvent::Button {
+                button: MouseButton::Right,
+                action: ButtonAction::Click
+            }]
+        );
         assert_eq!(special_key(21), Some(SpecialKey::F(1)));
         assert_eq!(special_key(32), Some(SpecialKey::F(12)));
         assert_eq!(special_key(99), None);
@@ -186,9 +253,17 @@ mod tests {
     #[test]
     fn scroll_direction() {
         let p = plugin();
-        let b = MousepadBody { dy: Some(-30.0), scroll: true, ..Default::default() };
+        let b = MousepadBody {
+            dy: Some(-30.0),
+            scroll: true,
+            ..Default::default()
+        };
         assert_eq!(p.events(&b), vec![InputEvent::Scroll { dx: 0, dy: 3 }]);
-        let b = MousepadBody { dy: Some(2.0), scroll: true, ..Default::default() };
+        let b = MousepadBody {
+            dy: Some(2.0),
+            scroll: true,
+            ..Default::default()
+        };
         assert_eq!(p.events(&b), vec![InputEvent::Scroll { dx: 0, dy: -1 }]);
     }
 }

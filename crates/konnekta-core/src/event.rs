@@ -8,24 +8,52 @@ use serde_json::Value;
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "event", rename_all = "camelCase")]
 pub enum Event {
-    DeviceConnected { device: DeviceInfo },
-    DeviceUpdated { device: DeviceInfo },
+    DeviceConnected {
+        device: DeviceInfo,
+    },
+    DeviceUpdated {
+        device: DeviceInfo,
+    },
     #[serde(rename_all = "camelCase")]
-    DeviceDisconnected { device_id: String },
+    DeviceDisconnected {
+        device_id: String,
+    },
     /// A remote device asks to pair. Show `verification_key` and ask the user.
     #[serde(rename_all = "camelCase")]
-    PairRequested { device_id: String, device_name: String, verification_key: String },
+    PairRequested {
+        device_id: String,
+        device_name: String,
+        verification_key: String,
+    },
     /// We asked to pair; the same key must be displayed on the other device.
     #[serde(rename_all = "camelCase")]
-    PairOutgoing { device_id: String, verification_key: String },
+    PairOutgoing {
+        device_id: String,
+        verification_key: String,
+    },
     #[serde(rename_all = "camelCase")]
-    Paired { device_id: String },
+    Paired {
+        device_id: String,
+    },
     #[serde(rename_all = "camelCase")]
-    Unpaired { device_id: String },
+    Unpaired {
+        device_id: String,
+    },
     #[serde(rename_all = "camelCase")]
-    PairRejected { device_id: String, reason: String },
+    PairRejected {
+        device_id: String,
+        reason: String,
+    },
     #[serde(rename_all = "camelCase")]
-    SecurityWarning { device_id: Option<String>, message: String },
+    SecurityWarning {
+        device_id: Option<String>,
+        message: String,
+    },
     #[serde(rename_all = "camelCase")]
-    Plugin { device_id: Option<String>, plugin: String, kind: String, data: Value },
+    Plugin {
+        device_id: Option<String>,
+        plugin: String,
+        kind: String,
+        data: Value,
+    },
 }

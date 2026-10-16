@@ -19,13 +19,21 @@ impl ProcessPipeline {
         let mut cmd = Command::new(program);
         cmd.args(args)
             .stdin(if stdin { Stdio::piped() } else { Stdio::null() })
-            .stdout(if stdout { Stdio::piped() } else { Stdio::null() })
+            .stdout(if stdout {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
             .stderr(Stdio::null())
             .kill_on_drop(true);
         let mut child = cmd
             .spawn()
             .with_context(|| format!("cannot start {program} (is it installed and in PATH?)"))?;
-        Ok(Self { stdin: child.stdin.take(), stdout: child.stdout.take(), child })
+        Ok(Self {
+            stdin: child.stdin.take(),
+            stdout: child.stdout.take(),
+            child,
+        })
     }
 }
 
@@ -34,17 +42,40 @@ impl ProcessPipeline {
 pub fn screen_capture_command(q: Quality) -> Result<(String, Vec<String>)> {
     let fps = q.fps.to_string();
     let enc = |input: Vec<&str>| -> Vec<String> {
-        let mut a: Vec<String> = vec!["-loglevel".into(), "error".into(), "-fflags".into(), "nobuffer".into()];
+        let mut a: Vec<String> = vec![
+            "-loglevel".into(),
+            "error".into(),
+            "-fflags".into(),
+            "nobuffer".into(),
+        ];
         a.extend(input.into_iter().map(String::from));
         a.extend(
             [
-                "-vf", &format!("scale=-2:{}", q.height),
-                "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency",
-                "-pix_fmt", "yuv420p", "-bf", "0", "-g", &(q.fps * 2).to_string(),
-                "-b:v", &format!("{}k", q.bitrate_kbps),
-                "-maxrate", &format!("{}k", q.bitrate_kbps),
-                "-bufsize", &format!("{}k", q.bitrate_kbps / 2),
-                "-bsf:v", "dump_extra", "-f", "h264", "-",
+                "-vf",
+                &format!("scale=-2:{}", q.height),
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-tune",
+                "zerolatency",
+                "-pix_fmt",
+                "yuv420p",
+                "-bf",
+                "0",
+                "-g",
+                &(q.fps * 2).to_string(),
+                "-b:v",
+                &format!("{}k", q.bitrate_kbps),
+                "-maxrate",
+                &format!("{}k", q.bitrate_kbps),
+                "-bufsize",
+                &format!("{}k", q.bitrate_kbps / 2),
+                "-bsf:v",
+                "dump_extra",
+                "-f",
+                "h264",
+                "-",
             ]
             .into_iter()
             .map(String::from),
@@ -58,9 +89,21 @@ pub fn screen_capture_command(q: Quality) -> Result<(String, Vec<String>)> {
                 return Ok((
                     "wf-recorder".into(),
                     [
-                        "-y", "-m", "h264", "-c", "libx264", "-r", &fps,
-                        "-p", "preset=ultrafast", "-p", "tune=zerolatency",
-                        "-p", &format!("b={}k", q.bitrate_kbps), "-f", "/dev/stdout",
+                        "-y",
+                        "-m",
+                        "h264",
+                        "-c",
+                        "libx264",
+                        "-r",
+                        &fps,
+                        "-p",
+                        "preset=ultrafast",
+                        "-p",
+                        "tune=zerolatency",
+                        "-p",
+                        &format!("b={}k", q.bitrate_kbps),
+                        "-f",
+                        "/dev/stdout",
                     ]
                     .into_iter()
                     .map(String::from)
@@ -75,17 +118,32 @@ pub fn screen_capture_command(q: Quality) -> Result<(String, Vec<String>)> {
             }
         }
         let display = std::env::var("DISPLAY").unwrap_or_else(|_| ":0".into());
-        return Ok(("ffmpeg".into(), enc(vec!["-f", "x11grab", "-framerate", &fps, "-i", &display])));
+        return Ok((
+            "ffmpeg".into(),
+            enc(vec!["-f", "x11grab", "-framerate", &fps, "-i", &display]),
+        ));
     }
     #[cfg(windows)]
     {
-        return Ok(("ffmpeg".into(), enc(vec!["-f", "gdigrab", "-framerate", &fps, "-i", "desktop"])));
+        return Ok((
+            "ffmpeg".into(),
+            enc(vec!["-f", "gdigrab", "-framerate", &fps, "-i", "desktop"]),
+        ));
     }
     #[cfg(target_os = "macos")]
     {
         return Ok((
             "ffmpeg".into(),
-            enc(vec!["-f", "avfoundation", "-framerate", &fps, "-capture_cursor", "1", "-i", "Capture screen 0:none"]),
+            enc(vec![
+                "-f",
+                "avfoundation",
+                "-framerate",
+                &fps,
+                "-capture_cursor",
+                "1",
+                "-i",
+                "Capture screen 0:none",
+            ]),
         ));
     }
     #[allow(unreachable_code)]
@@ -101,10 +159,17 @@ pub fn system_audio_command() -> Result<(String, Vec<String>)> {
     {
         return Ok((
             "parec".into(),
-            ["--device=@DEFAULT_MONITOR@", "--format=s16le", "--rate=48000", "--channels=2", "--latency-msec=20", "--raw"]
-                .into_iter()
-                .map(String::from)
-                .collect(),
+            [
+                "--device=@DEFAULT_MONITOR@",
+                "--format=s16le",
+                "--rate=48000",
+                "--channels=2",
+                "--latency-msec=20",
+                "--raw",
+            ]
+            .into_iter()
+            .map(String::from)
+            .collect(),
         ));
     }
     #[allow(unreachable_code)]
@@ -114,8 +179,11 @@ pub fn system_audio_command() -> Result<(String, Vec<String>)> {
 }
 
 pub fn which(program: &str) -> bool {
-    let Some(path) = std::env::var_os("PATH") else { return false };
-    std::env::split_paths(&path).any(|d| d.join(program).is_file() || d.join(format!("{program}.exe")).is_file())
+    let Some(path) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&path)
+        .any(|d| d.join(program).is_file() || d.join(format!("{program}.exe")).is_file())
 }
 
 /// Splits an H.264 Annex B byte stream into NAL units (start code included).
@@ -160,17 +228,21 @@ impl AnnexBSplitter {
     pub fn push(&mut self, data: &[u8]) -> Vec<Nal> {
         self.buf.extend_from_slice(data);
         let mut out = Vec::new();
-        loop {
-            let Some((s, sl)) = find_start(&self.buf, 0) else { break };
+        while let Some((s, sl)) = find_start(&self.buf, 0) {
             if s > 0 {
                 // Garbage before the first start code.
                 let _ = self.buf.split_to(s);
                 continue;
             }
-            let Some((next, _)) = find_start(&self.buf, sl) else { break };
+            let Some((next, _)) = find_start(&self.buf, sl) else {
+                break;
+            };
             let nal = self.buf.split_to(next).freeze();
             let nal_type = nal.get(sl).map(|h| h & 0x1f).unwrap_or(0);
-            out.push(Nal { data: nal, nal_type });
+            out.push(Nal {
+                data: nal,
+                nal_type,
+            });
         }
         out
     }
@@ -180,7 +252,10 @@ impl AnnexBSplitter {
         let (_, sl) = find_start(&self.buf, 0)?;
         let nal = self.buf.split().freeze();
         let nal_type = nal.get(sl).map(|h| h & 0x1f).unwrap_or(0);
-        Some(Nal { data: nal, nal_type })
+        Some(Nal {
+            data: nal,
+            nal_type,
+        })
     }
 }
 
@@ -206,18 +281,21 @@ mod tests {
         let types: Vec<u8> = nals.iter().map(|n| n.nal_type).collect();
         assert_eq!(types, vec![7, 8, 5, 1]);
         assert!(nals[0].is_config() && nals[2].is_key() && !nals[3].is_key());
-        assert_eq!(nals.iter().map(|n| n.data.len()).sum::<usize>(), stream.len());
+        assert_eq!(
+            nals.iter().map(|n| n.data.len()).sum::<usize>(),
+            stream.len()
+        );
     }
 
     #[test]
     fn screen_command_has_low_latency_flags() {
-        if let Ok((prog, args)) = screen_capture_command(crate::abr::DEFAULT_LADDER[2]) {
-            if prog == "ffmpeg" {
-                let joined = args.join(" ");
-                assert!(joined.contains("zerolatency"));
-                assert!(joined.contains("-bf 0"));
-                assert!(joined.contains("2000k"));
-            }
+        if let Ok((prog, args)) = screen_capture_command(crate::abr::DEFAULT_LADDER[2])
+            && prog == "ffmpeg"
+        {
+            let joined = args.join(" ");
+            assert!(joined.contains("zerolatency"));
+            assert!(joined.contains("-bf 0"));
+            assert!(joined.contains("2000k"));
         }
     }
 }

@@ -42,7 +42,10 @@ pub async fn read_line_limited<R: AsyncBufRead + Unpin>(
             out.extend_from_slice(&buf[..pos]);
             r.consume(pos + 1);
             if out.len() > max {
-                return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "line too long"));
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "line too long",
+                ));
             }
             return Ok(Some(out));
         }
@@ -50,7 +53,10 @@ pub async fn read_line_limited<R: AsyncBufRead + Unpin>(
         out.extend_from_slice(buf);
         r.consume(n);
         if out.len() > max {
-            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "line too long"));
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "line too long",
+            ));
         }
     }
 }
@@ -62,7 +68,10 @@ pub fn identity_from_packet(p: &Packet) -> Result<IdentityBody> {
     let body: IdentityBody = p.body_as()?;
     body.validate().map_err(anyhow::Error::msg)?;
     if body.protocol_version < 8 {
-        bail!("protocol version {} not supported (need >= 8)", body.protocol_version);
+        bail!(
+            "protocol version {} not supported (need >= 8)",
+            body.protocol_version
+        );
     }
     Ok(body)
 }
@@ -81,10 +90,13 @@ pub async fn read_plain_identity(stream: &mut TcpStream) -> Result<IdentityBody>
     // Read byte-wise through a small BufReader we then discard: the peer must
     // not send anything else before the TLS ClientHello it waits for.
     let mut reader = BufReader::with_capacity(1, stream);
-    let line = tokio::time::timeout(HANDSHAKE_TIMEOUT, read_line_limited(&mut reader, MAX_IDENTITY_LEN))
-        .await
-        .context("identity timeout")??
-        .context("connection closed before identity")?;
+    let line = tokio::time::timeout(
+        HANDSHAKE_TIMEOUT,
+        read_line_limited(&mut reader, MAX_IDENTITY_LEN),
+    )
+    .await
+    .context("identity timeout")??
+    .context("connection closed before identity")?;
     identity_from_packet(&Packet::from_line(&line)?)
 }
 
@@ -139,10 +151,13 @@ pub async fn exchange_identity<S: AsyncRead + AsyncWrite + Unpin>(
 ) -> Result<IdentityBody> {
     stream.get_mut().write_all(&my_identity.to_line()).await?;
     stream.get_mut().flush().await?;
-    let line = tokio::time::timeout(HANDSHAKE_TIMEOUT, read_line_limited(stream, MAX_IDENTITY_LEN))
-        .await
-        .context("identity timeout")??
-        .context("closed during identity exchange")?;
+    let line = tokio::time::timeout(
+        HANDSHAKE_TIMEOUT,
+        read_line_limited(stream, MAX_IDENTITY_LEN),
+    )
+    .await
+    .context("identity timeout")??
+    .context("closed during identity exchange")?;
     identity_from_packet(&Packet::from_line(&line)?)
 }
 
@@ -163,7 +178,10 @@ mod tests {
     async fn line_limit() {
         let data = b"short\nthis line is definitely too long\n".to_vec();
         let mut r = BufReader::new(&data[..]);
-        assert_eq!(read_line_limited(&mut r, 10).await.unwrap().unwrap(), b"short");
+        assert_eq!(
+            read_line_limited(&mut r, 10).await.unwrap().unwrap(),
+            b"short"
+        );
         assert!(read_line_limited(&mut r, 10).await.is_err());
     }
 

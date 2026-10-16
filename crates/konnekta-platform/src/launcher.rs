@@ -73,7 +73,12 @@ impl LauncherBackend for NativeLauncher {
                     timed_out: false,
                 })
             }
-            Err(_) => Ok(CommandOutput { code: None, stdout: String::new(), stderr: String::new(), timed_out: true }),
+            Err(_) => Ok(CommandOutput {
+                code: None,
+                stdout: String::new(),
+                stderr: String::new(),
+                timed_out: true,
+            }),
         }
     }
 
@@ -126,8 +131,11 @@ impl LauncherBackend for NativeLauncher {
             cmd = Command::new(app);
             cmd.args(args);
         }
-        cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
-        cmd.spawn().with_context(|| format!("cannot launch {app}"))?;
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        cmd.spawn()
+            .with_context(|| format!("cannot launch {app}"))?;
         Ok(())
     }
 }
@@ -140,10 +148,16 @@ mod tests {
     #[tokio::test]
     async fn runs_and_times_out() {
         let l = NativeLauncher;
-        let out = l.run_shell("echo hi", Duration::from_secs(5)).await.unwrap();
+        let out = l
+            .run_shell("echo hi", Duration::from_secs(5))
+            .await
+            .unwrap();
         assert_eq!(out.stdout.trim(), "hi");
         assert_eq!(out.code, Some(0));
-        let out = l.run_shell("sleep 5", Duration::from_millis(100)).await.unwrap();
+        let out = l
+            .run_shell("sleep 5", Duration::from_millis(100))
+            .await
+            .unwrap();
         assert!(out.timed_out);
     }
 }

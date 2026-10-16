@@ -10,8 +10,8 @@
 use anyhow::{Context, Result};
 use konnekta_core::proto::Packet;
 use konnekta_core::{Config, Konnekta, SecureChannel};
-use konnekta_media::frame::{Frame, FrameKind, read_frame};
 use konnekta_media::FrameSender;
+use konnekta_media::frame::{Frame, FrameKind, read_frame};
 use konnekta_plugins::bridge::{PendingPayloads, mobile};
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -41,11 +41,16 @@ fn cstr(p: *const c_char) -> Result<String> {
     if p.is_null() {
         return Ok(String::new());
     }
-    Ok(unsafe { CStr::from_ptr(p) }.to_str().context("invalid UTF-8")?.to_owned())
+    Ok(unsafe { CStr::from_ptr(p) }
+        .to_str()
+        .context("invalid UTF-8")?
+        .to_owned())
 }
 
 fn out(s: String) -> *mut c_char {
-    CString::new(s.replace('\0', "")).map(CString::into_raw).unwrap_or(std::ptr::null_mut())
+    CString::new(s.replace('\0', ""))
+        .map(CString::into_raw)
+        .unwrap_or(std::ptr::null_mut())
 }
 
 fn start(config_json: &str, data_dir: &str) -> Result<Handle> {
@@ -53,13 +58,18 @@ fn start(config_json: &str, data_dir: &str) -> Result<Handle> {
     {
         use tracing_subscriber::layer::SubscriberExt;
         if let Ok(layer) = tracing_android::layer("Konnekta") {
-            let _ = tracing::subscriber::set_global_default(tracing_subscriber::registry().with(layer));
+            let _ =
+                tracing::subscriber::set_global_default(tracing_subscriber::registry().with(layer));
         }
     }
     #[cfg(not(target_os = "android"))]
     let _ = tracing_subscriber::fmt().with_env_filter("info").try_init();
 
-    let v: Value = if config_json.is_empty() { json!({}) } else { serde_json::from_str(config_json)? };
+    let v: Value = if config_json.is_empty() {
+        json!({})
+    } else {
+        serde_json::from_str(config_json)?
+    };
     let mut cfg = Config::default();
     if let Some(n) = v.get("deviceName").and_then(Value::as_str) {
         cfg.device_name = n.into();
@@ -73,12 +83,21 @@ fn start(config_json: &str, data_dir: &str) -> Result<Handle> {
     if let Some(a) = v.get("announce").and_then(Value::as_bool) {
         cfg.announce = a;
     }
-    let call_control = v.get("callControl").and_then(Value::as_bool).unwrap_or(false);
+    let call_control = v
+        .get("callControl")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let pending = Arc::new(PendingPayloads::default());
-    let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build()?;
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()?;
     let dir = PathBuf::from(data_dir);
     let k = rt.block_on(async {
-        let k = Konnekta::builder(cfg).data_dir(&dir).plugins(mobile(pending.clone(), call_control)).build()?;
+        let k = Konnekta::builder(cfg)
+            .data_dir(&dir)
+            .plugins(mobile(pending.clone(), call_control))
+            .build()?;
         k.start().await?;
         anyhow::Ok(k)
     })?;
@@ -88,7 +107,10 @@ fn start(config_json: &str, data_dir: &str) -> Result<Handle> {
         loop {
             match sub.recv().await {
                 Ok(ev) => {
-                    if tx.send(serde_json::to_string(&ev).unwrap_or_default()).is_err() {
+                    if tx
+                        .send(serde_json::to_string(&ev).unwrap_or_default())
+                        .is_err()
+                    {
                         break;
                     }
                 }
@@ -111,8 +133,13 @@ fn start(config_json: &str, data_dir: &str) -> Result<Handle> {
 
 impl Handle {
     fn dev(&self, p: &Value) -> Result<konnekta_core::DeviceHandle> {
-        let id = p.get("deviceId").and_then(Value::as_str).context("missing deviceId")?;
-        self.k.device_handle(id).context("device not connected or not paired")
+        let id = p
+            .get("deviceId")
+            .and_then(Value::as_str)
+            .context("missing deviceId")?;
+        self.k
+            .device_handle(id)
+            .context("device not connected or not paired")
     }
 
     fn new_stream(&self, s: Stream) -> u64 {
@@ -121,7 +148,12 @@ impl Handle {
         id
     }
 
-    fn attach_channel(streams: &Arc<Mutex<HashMap<u64, Stream>>>, id: u64, ch: SecureChannel, write: bool) {
+    fn attach_channel(
+        streams: &Arc<Mutex<HashMap<u64, Stream>>>,
+        id: u64,
+        ch: SecureChannel,
+        write: bool,
+    ) {
         let s = if write {
             Stream::Writer(FrameSender::new(ch, 30))
         } else {
@@ -146,25 +178,49 @@ impl Handle {
         Ok(match method {
             // Send a packet on behalf of a bridge plugin (permission-checked).
             "sendPacket" => {
-                let ty = p.get("type").and_then(Value::as_str).context("missing type")?;
-                self.dev(&p)?.send(Packet::new(ty, p.get("body").cloned().unwrap_or(json!({})))).await?;
+                let ty = p
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .context("missing type")?;
+                self.dev(&p)?
+                    .send(Packet::new(ty, p.get("body").cloned().unwrap_or(json!({}))))
+                    .await?;
                 Value::Null
             }
             "sendFile" => {
                 let d = self.dev(&p)?;
-                let ty = p.get("type").and_then(Value::as_str).unwrap_or(konnekta_core::proto::types::SHARE_REQUEST);
-                let path = p.get("path").and_then(Value::as_str).context("missing path")?;
+                let ty = p
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .unwrap_or(konnekta_core::proto::types::SHARE_REQUEST);
+                let path = p
+                    .get("path")
+                    .and_then(Value::as_str)
+                    .context("missing path")?;
                 let packet = Packet::new(ty, p.get("body").cloned().unwrap_or(json!({})));
                 let task = d
-                    .send_with_payload(packet, konnekta_core::payload::PayloadSource::File(path.into()), None)
+                    .send_with_payload(
+                        packet,
+                        konnekta_core::payload::PayloadSource::File(path.into()),
+                        None,
+                    )
                     .await?;
                 task.await??;
                 Value::Null
             }
             "fetchPayload" => {
-                let key = p.get("payloadKey").and_then(Value::as_str).context("missing payloadKey")?;
-                let path = p.get("path").and_then(Value::as_str).context("missing path")?;
-                let (dev_id, packet) = self.pending.take(key).context("payload expired or unknown")?;
+                let key = p
+                    .get("payloadKey")
+                    .and_then(Value::as_str)
+                    .context("missing payloadKey")?;
+                let path = p
+                    .get("path")
+                    .and_then(Value::as_str)
+                    .context("missing path")?;
+                let (dev_id, packet) = self
+                    .pending
+                    .take(key)
+                    .context("payload expired or unknown")?;
                 let d = self.k.device_handle(&dev_id).context("device gone")?;
                 let mut f = tokio::fs::File::create(path).await?;
                 let n = d.fetch_payload(&packet, &mut f, None, None).await?;
@@ -190,7 +246,10 @@ impl Handle {
             // Consumer side: connect to an offered port, then read frames.
             "streamConnect" => {
                 let d = self.dev(&p)?;
-                let port = p.get("port").and_then(Value::as_u64).context("missing port")? as u16;
+                let port = p
+                    .get("port")
+                    .and_then(Value::as_u64)
+                    .context("missing port")? as u16;
                 let ch = d.connect_channel(port).await?;
                 let id = self.new_stream(Stream::Pending);
                 Self::attach_channel(&self.streams, id, ch, false);
@@ -209,8 +268,15 @@ impl Handle {
 /// Start the core. `config_json` may contain `deviceName`, `deviceType`
 /// ("phone"/"tablet"), `downloadDir`, `announce`, `callControl`.
 /// Returns NULL on failure (details in the log).
+/// # Safety
+/// Pointer arguments must be NULL or valid for the documented use: handles
+/// returned by `konnekta_start` and not yet stopped, NUL-terminated UTF-8
+/// strings, and buffers of at least the given length.
 #[unsafe(no_mangle)]
-pub extern "C" fn konnekta_start(config_json: *const c_char, data_dir: *const c_char) -> *mut Handle {
+pub unsafe extern "C" fn konnekta_start(
+    config_json: *const c_char,
+    data_dir: *const c_char,
+) -> *mut Handle {
     let r = (|| start(&cstr(config_json)?, &cstr(data_dir)?))();
     match r {
         Ok(h) => Box::into_raw(Box::new(h)),
@@ -224,13 +290,27 @@ pub extern "C" fn konnekta_start(config_json: *const c_char, data_dir: *const c_
 /// Call an API method (see `konnekta_core::api` plus `sendPacket`,
 /// `sendFile`, `fetchPayload`, `streamListen`, `streamConnect`,
 /// `streamClose`). Returns `{"result": ...}` or `{"error": "..."}`.
+/// # Safety
+/// Pointer arguments must be NULL or valid for the documented use: handles
+/// returned by `konnekta_start` and not yet stopped, NUL-terminated UTF-8
+/// strings, and buffers of at least the given length.
 #[unsafe(no_mangle)]
-pub extern "C" fn konnekta_call(h: *mut Handle, method: *const c_char, params_json: *const c_char) -> *mut c_char {
-    let Some(h) = (unsafe { h.as_ref() }) else { return out(json!({ "error": "null handle" }).to_string()) };
+pub unsafe extern "C" fn konnekta_call(
+    h: *mut Handle,
+    method: *const c_char,
+    params_json: *const c_char,
+) -> *mut c_char {
+    let Some(h) = (unsafe { h.as_ref() }) else {
+        return out(json!({ "error": "null handle" }).to_string());
+    };
     let r = (|| -> Result<Value> {
         let method = cstr(method)?;
         let raw = cstr(params_json)?;
-        let params: Value = if raw.is_empty() { Value::Null } else { serde_json::from_str(&raw)? };
+        let params: Value = if raw.is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_str(&raw)?
+        };
         h.rt.block_on(h.call(&method, params))
     })();
     out(match r {
@@ -240,9 +320,15 @@ pub extern "C" fn konnekta_call(h: *mut Handle, method: *const c_char, params_js
 }
 
 /// Wait up to `timeout_ms` for the next event (JSON). Returns NULL on timeout.
+/// # Safety
+/// Pointer arguments must be NULL or valid for the documented use: handles
+/// returned by `konnekta_start` and not yet stopped, NUL-terminated UTF-8
+/// strings, and buffers of at least the given length.
 #[unsafe(no_mangle)]
-pub extern "C" fn konnekta_next_event(h: *mut Handle, timeout_ms: i32) -> *mut c_char {
-    let Some(h) = (unsafe { h.as_ref() }) else { return std::ptr::null_mut() };
+pub unsafe extern "C" fn konnekta_next_event(h: *mut Handle, timeout_ms: i32) -> *mut c_char {
+    let Some(h) = (unsafe { h.as_ref() }) else {
+        return std::ptr::null_mut();
+    };
     let rx = h.events.lock().unwrap();
     match rx.recv_timeout(Duration::from_millis(timeout_ms.max(0) as u64)) {
         Ok(s) => out(s),
@@ -252,8 +338,12 @@ pub extern "C" fn konnekta_next_event(h: *mut Handle, timeout_ms: i32) -> *mut c
 
 /// Queue a media frame on a producer channel.
 /// Returns 0 = queued, 1 = dropped (congestion), -1 = closed / unknown.
+/// # Safety
+/// Pointer arguments must be NULL or valid for the documented use: handles
+/// returned by `konnekta_start` and not yet stopped, NUL-terminated UTF-8
+/// strings, and buffers of at least the given length.
 #[unsafe(no_mangle)]
-pub extern "C" fn konnekta_stream_write(
+pub unsafe extern "C" fn konnekta_stream_write(
     h: *mut Handle,
     channel: u64,
     kind: u8,
@@ -262,7 +352,9 @@ pub extern "C" fn konnekta_stream_write(
     data: *const u8,
     len: usize,
 ) -> i32 {
-    let Some(h) = (unsafe { h.as_ref() }) else { return -1 };
+    let Some(h) = (unsafe { h.as_ref() }) else {
+        return -1;
+    };
     if data.is_null() && len > 0 {
         return -1;
     }
@@ -271,7 +363,11 @@ pub extern "C" fn konnekta_stream_write(
         2 => FrameKind::Video,
         _ => FrameKind::Control,
     };
-    let bytes = if len == 0 { Vec::new() } else { unsafe { std::slice::from_raw_parts(data, len) }.to_vec() };
+    let bytes = if len == 0 {
+        Vec::new()
+    } else {
+        unsafe { std::slice::from_raw_parts(data, len) }.to_vec()
+    };
     let streams = h.streams.lock().unwrap();
     match streams.get(&channel) {
         Some(Stream::Writer(w)) if !w.is_closed() => {
@@ -289,8 +385,12 @@ pub extern "C" fn konnekta_stream_write(
 /// Returns the frame length, 0 on timeout, -1 when closed, -2 if `cap` is too
 /// small (the frame is discarded). `meta` (may be NULL) receives
 /// `[kind, flags]` and `pts_us`.
+/// # Safety
+/// Pointer arguments must be NULL or valid for the documented use: handles
+/// returned by `konnekta_start` and not yet stopped, NUL-terminated UTF-8
+/// strings, and buffers of at least the given length.
 #[unsafe(no_mangle)]
-pub extern "C" fn konnekta_stream_read(
+pub unsafe extern "C" fn konnekta_stream_read(
     h: *mut Handle,
     channel: u64,
     buf: *mut u8,
@@ -299,7 +399,9 @@ pub extern "C" fn konnekta_stream_read(
     pts_us: *mut u64,
     timeout_ms: i32,
 ) -> i64 {
-    let Some(h) = (unsafe { h.as_ref() }) else { return -1 };
+    let Some(h) = (unsafe { h.as_ref() }) else {
+        return -1;
+    };
     let rx = match h.streams.lock().unwrap().get(&channel) {
         Some(Stream::Reader(rx)) => rx.clone(),
         _ => return -1,
@@ -329,16 +431,24 @@ pub extern "C" fn konnekta_stream_read(
     frame.data.len() as i64
 }
 
+/// # Safety
+/// Pointer arguments must be NULL or valid for the documented use: handles
+/// returned by `konnekta_start` and not yet stopped, NUL-terminated UTF-8
+/// strings, and buffers of at least the given length.
 #[unsafe(no_mangle)]
-pub extern "C" fn konnekta_free_string(s: *mut c_char) {
+pub unsafe extern "C" fn konnekta_free_string(s: *mut c_char) {
     if !s.is_null() {
         drop(unsafe { CString::from_raw(s) });
     }
 }
 
 /// Stop the core and free the handle.
+/// # Safety
+/// Pointer arguments must be NULL or valid for the documented use: handles
+/// returned by `konnekta_start` and not yet stopped, NUL-terminated UTF-8
+/// strings, and buffers of at least the given length.
 #[unsafe(no_mangle)]
-pub extern "C" fn konnekta_stop(h: *mut Handle) {
+pub unsafe extern "C" fn konnekta_stop(h: *mut Handle) {
     if h.is_null() {
         return;
     }
@@ -354,24 +464,33 @@ mod tests {
 
     #[test]
     fn start_call_stop() {
-        let dir = std::env::temp_dir().join(format!("konnekta-ffi-test-{}", std::process::id()));
-        let cfg = CString::new(r#"{"deviceName":"Test Phone","deviceType":"phone","announce":false}"#).unwrap();
-        let d = CString::new(dir.to_string_lossy().as_bytes()).unwrap();
-        let h = konnekta_start(cfg.as_ptr(), d.as_ptr());
-        assert!(!h.is_null());
-        let m = CString::new("info").unwrap();
-        let r = konnekta_call(h, m.as_ptr(), std::ptr::null());
-        let s = unsafe { CStr::from_ptr(r) }.to_str().unwrap().to_owned();
-        konnekta_free_string(r);
-        let v: Value = serde_json::from_str(&s).unwrap();
-        assert_eq!(v["result"]["deviceName"], "Test Phone");
-        let m = CString::new("bogus").unwrap();
-        let r = konnekta_call(h, m.as_ptr(), std::ptr::null());
-        assert!(unsafe { CStr::from_ptr(r) }.to_str().unwrap().contains("error"));
-        konnekta_free_string(r);
-        assert!(konnekta_next_event(h, 10).is_null());
-        assert_eq!(konnekta_stream_write(h, 99, 1, 0, 0, std::ptr::null(), 0), -1);
-        konnekta_stop(h);
-        let _ = std::fs::remove_dir_all(dir);
+        unsafe {
+            let dir =
+                std::env::temp_dir().join(format!("konnekta-ffi-test-{}", std::process::id()));
+            let cfg = CString::new(
+                r#"{"deviceName":"Test Phone","deviceType":"phone","announce":false}"#,
+            )
+            .unwrap();
+            let d = CString::new(dir.to_string_lossy().as_bytes()).unwrap();
+            let h = konnekta_start(cfg.as_ptr(), d.as_ptr());
+            assert!(!h.is_null());
+            let m = CString::new("info").unwrap();
+            let r = konnekta_call(h, m.as_ptr(), std::ptr::null());
+            let s = CStr::from_ptr(r).to_str().unwrap().to_owned();
+            konnekta_free_string(r);
+            let v: Value = serde_json::from_str(&s).unwrap();
+            assert_eq!(v["result"]["deviceName"], "Test Phone");
+            let m = CString::new("bogus").unwrap();
+            let r = konnekta_call(h, m.as_ptr(), std::ptr::null());
+            assert!(CStr::from_ptr(r).to_str().unwrap().contains("error"));
+            konnekta_free_string(r);
+            assert!(konnekta_next_event(h, 10).is_null());
+            assert_eq!(
+                konnekta_stream_write(h, 99, 1, 0, 0, std::ptr::null(), 0),
+                -1
+            );
+            konnekta_stop(h);
+            let _ = std::fs::remove_dir_all(dir);
+        }
     }
 }

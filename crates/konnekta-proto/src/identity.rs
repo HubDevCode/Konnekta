@@ -74,7 +74,9 @@ mod tests {
         assert!(is_valid_device_id("0123456789abcdef0123456789abcdef"));
         assert!(is_valid_device_id("_0123456789abcdef0123456789abcde_"));
         assert!(!is_valid_device_id("short"));
-        assert!(!is_valid_device_id("../../../../etc/passwd/aaaaaaaaaaaaaaa"));
+        assert!(!is_valid_device_id(
+            "../../../../etc/passwd/aaaaaaaaaaaaaaa"
+        ));
     }
 
     #[test]

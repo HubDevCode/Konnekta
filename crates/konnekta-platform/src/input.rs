@@ -31,13 +31,30 @@ pub enum ButtonAction {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum InputEvent {
-    MoveRelative { dx: i32, dy: i32 },
+    MoveRelative {
+        dx: i32,
+        dy: i32,
+    },
     /// Normalised coordinates on the primary display (0.0..=1.0).
-    MoveAbsolute { x: f64, y: f64 },
-    Button { button: MouseButton, action: ButtonAction },
-    Scroll { dx: i32, dy: i32 },
-    Text { text: String },
-    Key { key: Key, modifiers: Modifiers },
+    MoveAbsolute {
+        x: f64,
+        y: f64,
+    },
+    Button {
+        button: MouseButton,
+        action: ButtonAction,
+    },
+    Scroll {
+        dx: i32,
+        dy: i32,
+    },
+    Text {
+        text: String,
+    },
+    Key {
+        key: Key,
+        modifiers: Modifiers,
+    },
 }
 
 pub trait InputBackend: Send + Sync {
@@ -96,7 +113,9 @@ mod enigo_backend {
 
     impl InputBackend for EnigoInput {
         fn send(&self, ev: InputEvent) -> Result<()> {
-            self.tx.send(ev).map_err(|_| anyhow::anyhow!("input thread stopped"))
+            self.tx
+                .send(ev)
+                .map_err(|_| anyhow::anyhow!("input thread stopped"))
         }
     }
 
@@ -278,9 +297,13 @@ mod ydotool {
         fn send(&self, ev: InputEvent) -> Result<()> {
             let s = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
             match ev {
-                InputEvent::MoveRelative { dx, dy } => {
-                    run(s(&["mousemove", "-x", &dx.to_string(), "-y", &dy.to_string()]))
-                }
+                InputEvent::MoveRelative { dx, dy } => run(s(&[
+                    "mousemove",
+                    "-x",
+                    &dx.to_string(),
+                    "-y",
+                    &dy.to_string(),
+                ])),
                 InputEvent::MoveAbsolute { .. } => {
                     anyhow::bail!("absolute pointer not supported by ydotool backend")
                 }
@@ -303,7 +326,12 @@ mod ydotool {
                     run(a)
                 }
                 InputEvent::Scroll { dx, dy } => run(s(&[
-                    "mousemove", "--wheel", "-x", &dx.to_string(), "-y", &(-dy).to_string(),
+                    "mousemove",
+                    "--wheel",
+                    "-x",
+                    &dx.to_string(),
+                    "-y",
+                    &(-dy).to_string(),
                 ])),
                 InputEvent::Text { text } => run(vec!["type".into(), "--".into(), text]),
                 InputEvent::Key { key, modifiers: m } => {

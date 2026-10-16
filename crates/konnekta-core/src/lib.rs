@@ -26,8 +26,8 @@ pub mod trust;
 pub mod util;
 
 pub use crate::core::{Konnekta, KonnektaBuilder};
-pub use config::Config;
 pub use channel::SecureChannel;
+pub use config::Config;
 pub use device::{DeviceHandle, DeviceInfo};
 pub use event::Event;
 pub use permissions::Permission;

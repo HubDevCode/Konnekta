@@ -104,7 +104,9 @@ impl CoreHandle {
 
     /// All connected and paired devices.
     pub fn devices(&self) -> Vec<DeviceHandle> {
-        self.upgrade().map(|i| i.paired_handles()).unwrap_or_default()
+        self.upgrade()
+            .map(|i| i.paired_handles())
+            .unwrap_or_default()
     }
 
     pub fn download_dir(&self) -> PathBuf {
@@ -115,13 +117,20 @@ impl CoreHandle {
 
     /// Private per-plugin storage directory (created on demand).
     pub fn plugin_data_dir(&self, plugin_id: &str) -> Option<PathBuf> {
-        let dir = self.upgrade()?.data_dir.as_ref()?.join("plugins").join(plugin_id);
+        let dir = self
+            .upgrade()?
+            .data_dir
+            .as_ref()?
+            .join("plugins")
+            .join(plugin_id);
         std::fs::create_dir_all(&dir).ok()?;
         Some(dir)
     }
 
     pub fn local_device_id(&self) -> String {
-        self.upgrade().map(|i| i.identity.device_id.clone()).unwrap_or_default()
+        self.upgrade()
+            .map(|i| i.identity.device_id.clone())
+            .unwrap_or_default()
     }
 
     /// Invoke another plugin's local action (used by the Deck and macros).
@@ -132,7 +141,9 @@ impl CoreHandle {
         action: &str,
         args: Value,
     ) -> Result<Value> {
-        let Some(inner) = self.upgrade() else { bail!("core stopped") };
+        let Some(inner) = self.upgrade() else {
+            bail!("core stopped")
+        };
         inner.plugin_action(device_id, plugin, action, args).await
     }
 

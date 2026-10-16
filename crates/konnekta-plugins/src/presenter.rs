@@ -29,7 +29,10 @@ pub struct PresenterConfig {
 }
 
 fn map(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
-    pairs.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect()
+    pairs
+        .iter()
+        .map(|(a, b)| (a.to_string(), b.to_string()))
+        .collect()
 }
 
 impl Default for PresenterConfig {
@@ -37,25 +40,64 @@ impl Default for PresenterConfig {
         let mut keymaps = BTreeMap::new();
         keymaps.insert(
             "powerpoint".into(),
-            map(&[("next", "PageDown"), ("previous", "PageUp"), ("start", "F5"), ("startCurrent", "shift+F5"), ("stop", "Escape"), ("black", "b"), ("white", "w")]),
+            map(&[
+                ("next", "PageDown"),
+                ("previous", "PageUp"),
+                ("start", "F5"),
+                ("startCurrent", "shift+F5"),
+                ("stop", "Escape"),
+                ("black", "b"),
+                ("white", "w"),
+            ]),
         );
         keymaps.insert(
             "libreoffice".into(),
-            map(&[("next", "PageDown"), ("previous", "PageUp"), ("start", "F5"), ("startCurrent", "shift+F5"), ("stop", "Escape"), ("black", "b"), ("white", "w")]),
+            map(&[
+                ("next", "PageDown"),
+                ("previous", "PageUp"),
+                ("start", "F5"),
+                ("startCurrent", "shift+F5"),
+                ("stop", "Escape"),
+                ("black", "b"),
+                ("white", "w"),
+            ]),
         );
         keymaps.insert(
             "keynote".into(),
-            map(&[("next", "Right"), ("previous", "Left"), ("start", "meta+alt+p"), ("stop", "Escape"), ("black", "b"), ("white", "w")]),
+            map(&[
+                ("next", "Right"),
+                ("previous", "Left"),
+                ("start", "meta+alt+p"),
+                ("stop", "Escape"),
+                ("black", "b"),
+                ("white", "w"),
+            ]),
         );
         keymaps.insert(
             "googleslides".into(),
-            map(&[("next", "Right"), ("previous", "Left"), ("start", "ctrl+F5"), ("stop", "Escape"), ("black", "b"), ("white", "w")]),
+            map(&[
+                ("next", "Right"),
+                ("previous", "Left"),
+                ("start", "ctrl+F5"),
+                ("stop", "Escape"),
+                ("black", "b"),
+                ("white", "w"),
+            ]),
         );
         keymaps.insert(
             "pdf".into(),
-            map(&[("next", "Right"), ("previous", "Left"), ("start", "F11"), ("stop", "Escape")]),
+            map(&[
+                ("next", "Right"),
+                ("previous", "Left"),
+                ("start", "F11"),
+                ("stop", "Escape"),
+            ]),
         );
-        Self { program: "powerpoint".into(), keymaps, sensitivity: 1000.0 }
+        Self {
+            program: "powerpoint".into(),
+            keymaps,
+            sensitivity: 1000.0,
+        }
     }
 }
 
@@ -66,14 +108,22 @@ pub struct PresenterPlugin {
 
 impl PresenterPlugin {
     pub fn new(platform: Platform) -> Self {
-        Self { platform, config: JsonStore::default() }
+        Self {
+            platform,
+            config: JsonStore::default(),
+        }
     }
 
     fn press(&self, command: &str) -> Result<()> {
         let shortcut = self.config.with(|c| {
-            c.keymaps.get(&c.program).and_then(|m| m.get(command)).cloned()
+            c.keymaps
+                .get(&c.program)
+                .and_then(|m| m.get(command))
+                .cloned()
         });
-        let Some(shortcut) = shortcut else { bail!("no shortcut for '{command}'") };
+        let Some(shortcut) = shortcut else {
+            bail!("no shortcut for '{command}'")
+        };
         let (modifiers, key) = parse_shortcut(&shortcut)?;
         self.platform.input.send(InputEvent::Key { key, modifiers })
     }
@@ -118,7 +168,12 @@ impl Plugin for PresenterPlugin {
         Ok(())
     }
 
-    async fn handle_action(&self, _: Option<&DeviceHandle>, action: &str, args: Value) -> Result<Value> {
+    async fn handle_action(
+        &self,
+        _: Option<&DeviceHandle>,
+        action: &str,
+        args: Value,
+    ) -> Result<Value> {
         match action {
             "getConfig" => Ok(serde_json::to_value(self.config.get())?),
             "setConfig" => {
@@ -132,7 +187,10 @@ impl Plugin for PresenterPlugin {
                 Ok(Value::Null)
             }
             "press" => {
-                let cmd = args.get("command").and_then(Value::as_str).unwrap_or_default();
+                let cmd = args
+                    .get("command")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
                 self.press(cmd)?;
                 Ok(Value::Null)
             }

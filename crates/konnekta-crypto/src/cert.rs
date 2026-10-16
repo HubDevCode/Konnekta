@@ -59,7 +59,11 @@ impl LocalIdentity {
                 "certificate CN does not match device id".into(),
             ));
         }
-        Ok(Self { device_id, cert_der, key_der })
+        Ok(Self {
+            device_id,
+            cert_der,
+            key_der,
+        })
     }
 
     pub fn key_der(&self) -> &[u8] {
@@ -82,8 +86,8 @@ pub fn cert_fingerprint(cert_der: &[u8]) -> String {
 }
 
 fn parse(cert_der: &[u8]) -> Result<X509Certificate<'_>> {
-    let (rest, cert) = X509Certificate::from_der(cert_der)
-        .map_err(|e| CryptoError::InvalidCert(e.to_string()))?;
+    let (rest, cert) =
+        X509Certificate::from_der(cert_der).map_err(|e| CryptoError::InvalidCert(e.to_string()))?;
     if !rest.is_empty() {
         return Err(CryptoError::InvalidCert("trailing data".into()));
     }
@@ -152,8 +156,14 @@ mod tests {
         assert_eq!(ab, ba);
         assert_eq!(ab.len(), 8);
         // A MITM (m) talking to both sides yields different codes.
-        assert_ne!(verification_key(&a.cert_der, &m.cert_der, 1234).unwrap(), ab);
-        assert_ne!(verification_key(&a.cert_der, &b.cert_der, 1235).unwrap(), ab);
+        assert_ne!(
+            verification_key(&a.cert_der, &m.cert_der, 1234).unwrap(),
+            ab
+        );
+        assert_ne!(
+            verification_key(&a.cert_der, &b.cert_der, 1235).unwrap(),
+            ab
+        );
     }
 
     #[test]

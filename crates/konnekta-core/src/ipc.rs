@@ -11,7 +11,9 @@ use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader
 pub fn endpoint(data_dir: &std::path::Path) -> PathBuf {
     #[cfg(unix)]
     {
-        let base = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from).unwrap_or_else(|| data_dir.to_path_buf());
+        let base = std::env::var_os("XDG_RUNTIME_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| data_dir.to_path_buf());
         base.join("konnekta.sock")
     }
     #[cfg(windows)]
@@ -30,9 +32,15 @@ where
     let (rd, mut wr) = tokio::io::split(stream);
     let mut lines = BufReader::new(rd).lines();
     while let Ok(Some(line)) = lines.next_line().await {
-        let Ok(req) = serde_json::from_str::<Value>(&line) else { break };
+        let Ok(req) = serde_json::from_str::<Value>(&line) else {
+            break;
+        };
         let id = req.get("id").cloned().unwrap_or(Value::Null);
-        let method = req.get("method").and_then(Value::as_str).unwrap_or_default().to_owned();
+        let method = req
+            .get("method")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
         if method == "subscribe" {
             let mut rx = k.subscribe();
             loop {
@@ -68,7 +76,10 @@ pub async fn listen(path: PathBuf, k: crate::Konnekta) -> Result<()> {
     if path.exists() {
         // Refuse to steal the socket of a running daemon.
         if tokio::net::UnixStream::connect(&path).await.is_ok() {
-            bail!("another konnekta daemon is already running ({})", path.display());
+            bail!(
+                "another konnekta daemon is already running ({})",
+                path.display()
+            );
         }
         std::fs::remove_file(&path)?;
     }
@@ -94,7 +105,9 @@ pub async fn listen(path: PathBuf, k: crate::Konnekta) -> Result<()> {
     loop {
         server.connect().await?;
         let client = server;
-        server = ServerOptions::new().reject_remote_clients(true).create(&name)?;
+        server = ServerOptions::new()
+            .reject_remote_clients(true)
+            .create(&name)?;
         tokio::spawn(serve_client(client, k.clone()));
     }
 }
@@ -111,7 +124,9 @@ impl Client {
         let s = tokio::net::UnixStream::connect(path).await;
         #[cfg(windows)]
         let s = tokio::net::windows::named_pipe::ClientOptions::new().open(path);
-        let s = s.with_context(|| "cannot reach the Konnekta daemon — start it with `konnekta daemon`".to_string())?;
+        let s = s.with_context(|| {
+            "cannot reach the Konnekta daemon — start it with `konnekta daemon`".to_string()
+        })?;
         let (rd, wr) = tokio::io::split(s);
         Ok(Self {
             rd: BufReader::new(Box::new(rd) as Box<dyn AsyncRead + Unpin + Send>).lines(),
@@ -121,7 +136,8 @@ impl Client {
     }
 
     async fn send(&mut self, method: &str, params: Value) -> Result<()> {
-        let mut out = serde_json::to_vec(&json!({ "id": self.next, "method": method, "params": params }))?;
+        let mut out =
+            serde_json::to_vec(&json!({ "id": self.next, "method": method, "params": params }))?;
         out.push(b'\n');
         self.next += 1;
         self.wr.write_all(&out).await?;
@@ -130,7 +146,11 @@ impl Client {
 
     pub async fn call(&mut self, method: &str, params: Value) -> Result<Value> {
         self.send(method, params).await?;
-        let line = self.rd.next_line().await?.context("daemon closed the connection")?;
+        let line = self
+            .rd
+            .next_line()
+            .await?
+            .context("daemon closed the connection")?;
         let v: Value = serde_json::from_str(&line)?;
         if let Some(e) = v.get("error").and_then(Value::as_str) {
             bail!("{e}");

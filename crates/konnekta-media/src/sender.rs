@@ -31,13 +31,15 @@ impl SenderStats {
     }
 }
 
+type KeyframeCallback = Arc<Mutex<Option<Box<dyn Fn() + Send + Sync>>>>;
+
 pub struct FrameSender {
     tx: mpsc::Sender<(Instant, Frame)>,
     seq: AtomicU32,
     need_keyframe: AtomicBool,
     pub stats: Arc<SenderStats>,
     closed: Arc<AtomicBool>,
-    request_keyframe: Arc<Mutex<Option<Box<dyn Fn() + Send + Sync>>>>,
+    request_keyframe: KeyframeCallback,
 }
 
 impl FrameSender {
@@ -48,7 +50,8 @@ impl FrameSender {
         let (s, c) = (stats.clone(), closed.clone());
         tokio::spawn(async move {
             while let Some((t, f)) = rx.recv().await {
-                s.last_delay_us.store(t.elapsed().as_micros() as u64, Ordering::Relaxed);
+                s.last_delay_us
+                    .store(t.elapsed().as_micros() as u64, Ordering::Relaxed);
                 if write_frame(&mut w, &f).await.is_err() || w.flush().await.is_err() {
                     break;
                 }
@@ -94,10 +97,10 @@ impl FrameSender {
                 self.stats.dropped.fetch_add(1, Ordering::Relaxed);
                 if kind == FrameKind::Video {
                     self.need_keyframe.store(true, Ordering::Relaxed);
-                    if let Ok(cb) = self.request_keyframe.try_lock() {
-                        if let Some(cb) = cb.as_ref() {
-                            cb();
-                        }
+                    if let Ok(cb) = self.request_keyframe.try_lock()
+                        && let Some(cb) = cb.as_ref()
+                    {
+                        cb();
                     }
                 }
                 false

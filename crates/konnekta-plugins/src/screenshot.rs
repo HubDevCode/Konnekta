@@ -36,7 +36,12 @@ pub struct ScreenshotConfig {
 
 impl Default for ScreenshotConfig {
     fn default() -> Self {
-        Self { save: true, folder: None, copy_to_clipboard: true, auto_transfer: true }
+        Self {
+            save: true,
+            folder: None,
+            copy_to_clipboard: true,
+            auto_transfer: true,
+        }
     }
 }
 
@@ -54,7 +59,12 @@ pub struct ScreenshotPlugin {
 
 impl ScreenshotPlugin {
     pub fn new(platform: Platform) -> Self {
-        Self { platform, core: OnceLock::new(), config: JsonStore::default(), seen: JsonStore::default() }
+        Self {
+            platform,
+            core: OnceLock::new(),
+            config: JsonStore::default(),
+            seen: JsonStore::default(),
+        }
     }
 
     fn folder(&self) -> PathBuf {
@@ -83,7 +93,10 @@ impl ScreenshotPlugin {
     async fn send_config(&self, dev: &DeviceHandle) {
         let auto = self.config.with(|c| c.auto_transfer);
         let _ = dev
-            .send_if_supported(Packet::new(types::K_SCREENSHOT, json!({ "config": { "autoTransfer": auto } })))
+            .send_if_supported(Packet::new(
+                types::K_SCREENSHOT,
+                json!({ "config": { "autoTransfer": auto } }),
+            ))
             .await;
     }
 }
@@ -126,11 +139,11 @@ impl Plugin for ScreenshotPlugin {
         }
         // Dedupe early when the phone provides the hash.
         let announced = p.get_str("sha256").map(str::to_lowercase);
-        if let Some(h) = &announced {
-            if self.seen.with(|s| s.hashes.iter().any(|x| x == h)) {
-                tracing::debug!("duplicate screenshot skipped");
-                return Ok(());
-            }
+        if let Some(h) = &announced
+            && self.seen.with(|s| s.hashes.iter().any(|x| x == h))
+        {
+            tracing::debug!("duplicate screenshot skipped");
+            return Ok(());
         }
         let mut data = Vec::with_capacity(size as usize);
         if let Err(e) = dev.fetch_payload(&p, &mut data, None, None).await {
@@ -139,7 +152,11 @@ impl Plugin for ScreenshotPlugin {
         }
         let hash = hex::encode(Sha256::digest(&data));
         if announced.as_ref().is_some_and(|h| *h != hash) {
-            dev.emit("screenshot", "failed", json!({ "error": "integrity check failed" }));
+            dev.emit(
+                "screenshot",
+                "failed",
+                json!({ "error": "integrity check failed" }),
+            );
             bail!("screenshot hash mismatch");
         }
         if !self.remember(&hash) {
@@ -163,13 +180,21 @@ impl Plugin for ScreenshotPlugin {
                 tracing::info!("screenshot is not PNG; not copied to clipboard");
             }
         }
-        dev.emit("screenshot", "received", json!({ "path": saved, "copied": copied, "sha256": hash }));
+        dev.emit(
+            "screenshot",
+            "received",
+            json!({ "path": saved, "copied": copied, "sha256": hash }),
+        );
         let _ = self.platform.notifier.show(
             DesktopNotification {
                 id: format!("screenshot-{hash}"),
                 app_name: dev.name().into(),
                 title: "Screenshot received".into(),
-                body: if copied { "Copied to the clipboard — paste it anywhere".into() } else { saved.map(|p| p.display().to_string()).unwrap_or_default() },
+                body: if copied {
+                    "Copied to the clipboard — paste it anywhere".into()
+                } else {
+                    saved.map(|p| p.display().to_string()).unwrap_or_default()
+                },
                 ..Default::default()
             },
             None,
@@ -177,7 +202,12 @@ impl Plugin for ScreenshotPlugin {
         Ok(())
     }
 
-    async fn handle_action(&self, _: Option<&DeviceHandle>, action: &str, args: Value) -> Result<Value> {
+    async fn handle_action(
+        &self,
+        _: Option<&DeviceHandle>,
+        action: &str,
+        args: Value,
+    ) -> Result<Value> {
         match action {
             "getConfig" => {
                 let mut v = serde_json::to_value(self.config.get())?;

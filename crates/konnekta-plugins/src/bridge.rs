@@ -52,7 +52,9 @@ impl Plugin for BridgePlugin {
     }
 
     async fn handle_packet(&self, dev: &DeviceHandle, p: Packet) -> Result<()> {
-        let payload_key = p.has_payload().then(|| self.pending.put(dev.id(), p.clone()));
+        let payload_key = p
+            .has_payload()
+            .then(|| self.pending.put(dev.id(), p.clone()));
         dev.emit(
             self.info.id,
             "packet",
@@ -79,27 +81,139 @@ macro_rules! bridge {
 /// Phone-side plugin set. `call_control` should be false on iOS.
 pub fn mobile(pending: Arc<PendingPayloads>, call_control: bool) -> Vec<Arc<dyn Plugin>> {
     use types::*;
-    let telephony_in: &'static [&'static str] =
-        if call_control { &[TELEPHONY_REQUEST_MUTE, K_CALL_ACTION] } else { &[TELEPHONY_REQUEST_MUTE] };
+    let telephony_in: &'static [&'static str] = if call_control {
+        &[TELEPHONY_REQUEST_MUTE, K_CALL_ACTION]
+    } else {
+        &[TELEPHONY_REQUEST_MUTE]
+    };
     let mut infos = vec![
         bridge!("ping", "Ping", KdeConnect, Ping, [PING], [PING]),
         bridge!("battery", "Battery", KdeConnect, Battery, [], [BATTERY]),
-        bridge!("clipboard", "Clipboard", KdeConnect, Clipboard, [CLIPBOARD, CLIPBOARD_CONNECT], [CLIPBOARD, CLIPBOARD_CONNECT]),
-        bridge!("share", "Share", KdeConnect, Files, [SHARE_REQUEST, SHARE_REQUEST_UPDATE], [SHARE_REQUEST, SHARE_REQUEST_UPDATE]),
-        bridge!("mpris", "Media control", KdeConnect, MediaControl, [MPRIS, MPRIS_REQUEST], [MPRIS_REQUEST, MPRIS]),
-        bridge!("mousepad", "Remote input", KdeConnect, RemoteInput, [MOUSEPAD_KEYBOARDSTATE, MOUSEPAD_ECHO], [MOUSEPAD_REQUEST]),
-        bridge!("presenter", "Presentation remote", KdeConnect, Presenter, [], [PRESENTER]),
-        bridge!("runcommand", "Custom commands", KdeConnect, Commands, [RUNCOMMAND], [RUNCOMMAND_REQUEST]),
-        bridge!("notifications", "Notifications", KdeConnect, Notifications, [NOTIFICATION_REQUEST, NOTIFICATION_REPLY, NOTIFICATION_ACTION], [NOTIFICATION]),
-        bridge!("findmyphone", "Find my phone", KdeConnect, FindMyPhone, [FINDMYPHONE_REQUEST], []),
-        bridge!("deck", "Mobile Deck", Konnekta, Deck, [K_DECK], [K_DECK_REQUEST]),
-        bridge!("dnd", "Do Not Disturb sync", Konnekta, DoNotDisturb, [K_DND], [K_DND]),
-        bridge!("screenshot", "Screenshots", Konnekta, Screenshots, [K_SCREENSHOT], [K_SCREENSHOT]),
-        bridge!("microphone", "Microphone", Konnekta, Microphone, [K_MICROPHONE], [K_MICROPHONE]),
+        bridge!(
+            "clipboard",
+            "Clipboard",
+            KdeConnect,
+            Clipboard,
+            [CLIPBOARD, CLIPBOARD_CONNECT],
+            [CLIPBOARD, CLIPBOARD_CONNECT]
+        ),
+        bridge!(
+            "share",
+            "Share",
+            KdeConnect,
+            Files,
+            [SHARE_REQUEST, SHARE_REQUEST_UPDATE],
+            [SHARE_REQUEST, SHARE_REQUEST_UPDATE]
+        ),
+        bridge!(
+            "mpris",
+            "Media control",
+            KdeConnect,
+            MediaControl,
+            [MPRIS, MPRIS_REQUEST],
+            [MPRIS_REQUEST, MPRIS]
+        ),
+        bridge!(
+            "mousepad",
+            "Remote input",
+            KdeConnect,
+            RemoteInput,
+            [MOUSEPAD_KEYBOARDSTATE, MOUSEPAD_ECHO],
+            [MOUSEPAD_REQUEST]
+        ),
+        bridge!(
+            "presenter",
+            "Presentation remote",
+            KdeConnect,
+            Presenter,
+            [],
+            [PRESENTER]
+        ),
+        bridge!(
+            "runcommand",
+            "Custom commands",
+            KdeConnect,
+            Commands,
+            [RUNCOMMAND],
+            [RUNCOMMAND_REQUEST]
+        ),
+        bridge!(
+            "notifications",
+            "Notifications",
+            KdeConnect,
+            Notifications,
+            [
+                NOTIFICATION_REQUEST,
+                NOTIFICATION_REPLY,
+                NOTIFICATION_ACTION
+            ],
+            [NOTIFICATION]
+        ),
+        bridge!(
+            "findmyphone",
+            "Find my phone",
+            KdeConnect,
+            FindMyPhone,
+            [FINDMYPHONE_REQUEST],
+            []
+        ),
+        bridge!(
+            "deck",
+            "Mobile Deck",
+            Konnekta,
+            Deck,
+            [K_DECK],
+            [K_DECK_REQUEST]
+        ),
+        bridge!(
+            "dnd",
+            "Do Not Disturb sync",
+            Konnekta,
+            DoNotDisturb,
+            [K_DND],
+            [K_DND]
+        ),
+        bridge!(
+            "screenshot",
+            "Screenshots",
+            Konnekta,
+            Screenshots,
+            [K_SCREENSHOT],
+            [K_SCREENSHOT]
+        ),
+        bridge!(
+            "microphone",
+            "Microphone",
+            Konnekta,
+            Microphone,
+            [K_MICROPHONE],
+            [K_MICROPHONE]
+        ),
         bridge!("camera", "Camera", Konnekta, Camera, [K_CAMERA], [K_CAMERA]),
-        bridge!("phonescreen", "Phone screen", Konnekta, Desktop, [K_PHONE_SCREEN], [K_PHONE_SCREEN]),
-        bridge!("desktop", "Remote desktop", Konnekta, Desktop, [K_DESKTOP], [K_DESKTOP]),
-        bridge!("systemaudio", "Computer audio", Konnekta, SystemAudio, [K_SYSTEM_AUDIO], [K_SYSTEM_AUDIO]),
+        bridge!(
+            "phonescreen",
+            "Phone screen",
+            Konnekta,
+            Desktop,
+            [K_PHONE_SCREEN],
+            [K_PHONE_SCREEN]
+        ),
+        bridge!(
+            "desktop",
+            "Remote desktop",
+            Konnekta,
+            Desktop,
+            [K_DESKTOP],
+            [K_DESKTOP]
+        ),
+        bridge!(
+            "systemaudio",
+            "Computer audio",
+            Konnekta,
+            SystemAudio,
+            [K_SYSTEM_AUDIO],
+            [K_SYSTEM_AUDIO]
+        ),
     ];
     infos.push(PluginInfo {
         id: "telephony",
@@ -112,6 +226,11 @@ pub fn mobile(pending: Arc<PendingPayloads>, call_control: bool) -> Vec<Arc<dyn 
     });
     infos
         .into_iter()
-        .map(|info| Arc::new(BridgePlugin { info, pending: pending.clone() }) as Arc<dyn Plugin>)
+        .map(|info| {
+            Arc::new(BridgePlugin {
+                info,
+                pending: pending.clone(),
+            }) as Arc<dyn Plugin>
+        })
         .collect()
 }

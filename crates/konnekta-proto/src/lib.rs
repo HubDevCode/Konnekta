@@ -16,7 +16,7 @@ pub mod packet;
 pub mod types;
 
 pub use identity::{DeviceType, IdentityBody, is_valid_device_id};
-pub use packet::{Packet, PacketError, PayloadTransferInfo, MAX_PACKET_LEN};
+pub use packet::{MAX_PACKET_LEN, Packet, PacketError, PayloadTransferInfo};
 
 /// KDE Connect protocol version implemented.
 pub const PROTOCOL_VERSION: u32 = 8;

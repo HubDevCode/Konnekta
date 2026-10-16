@@ -61,7 +61,12 @@ pub struct KonnektaBuilder {
 
 impl KonnektaBuilder {
     pub fn new(config: Config) -> Self {
-        Self { config, data_dir: None, identity: None, plugins: Vec::new() }
+        Self {
+            config,
+            data_dir: None,
+            identity: None,
+            plugins: Vec::new(),
+        }
     }
 
     /// Persist identity, trusted devices and plugin data in `dir`.
@@ -135,7 +140,9 @@ impl Konnekta {
     }
 
     pub fn handle(&self) -> CoreHandle {
-        CoreHandle { inner: Arc::downgrade(&self.inner) }
+        CoreHandle {
+            inner: Arc::downgrade(&self.inner),
+        }
     }
 
     pub fn device_id(&self) -> &str {
@@ -207,13 +214,17 @@ impl Konnekta {
             }
             l.context("no free TCP port in 1716-1764")?
         };
-        inner.tcp_port.store(listener.local_addr()?.port(), Ordering::Relaxed);
+        inner
+            .tcp_port
+            .store(listener.local_addr()?.port(), Ordering::Relaxed);
         tracing::info!(port = self.tcp_port(), device_id = %self.device_id(), "listening");
 
         let weak = Arc::downgrade(inner);
         let accept = tokio::spawn(async move {
             loop {
-                let Ok((tcp, from)) = listener.accept().await else { continue };
+                let Ok((tcp, from)) = listener.accept().await else {
+                    continue;
+                };
                 let Some(inner) = weak.upgrade() else { break };
                 tokio::spawn(async move {
                     if let Err(e) = inner.clone().handle_incoming(tcp).await {
@@ -225,11 +236,14 @@ impl Konnekta {
         inner.background.lock().unwrap().push(accept.abort_handle());
 
         // UDP discovery.
-        let udp_addr = SocketAddr::new(cfg.bind_addr, if cfg.listen_udp { cfg.udp_port } else { 0 });
+        let udp_addr =
+            SocketAddr::new(cfg.bind_addr, if cfg.listen_udp { cfg.udp_port } else { 0 });
         match discovery::bind_udp(udp_addr) {
             Ok(sock) => {
                 let sock = Arc::new(sock);
-                inner.udp_port.store(sock.local_addr()?.port(), Ordering::Relaxed);
+                inner
+                    .udp_port
+                    .store(sock.local_addr()?.port(), Ordering::Relaxed);
                 *inner.udp.lock().unwrap() = Some(sock.clone());
                 if cfg.listen_udp {
                     let weak = Arc::downgrade(inner);
@@ -237,7 +251,9 @@ impl Konnekta {
                     let t = tokio::spawn(async move {
                         let mut buf = vec![0u8; 16 * 1024];
                         loop {
-                            let Ok((n, from)) = s.recv_from(&mut buf).await else { continue };
+                            let Ok((n, from)) = s.recv_from(&mut buf).await else {
+                                continue;
+                            };
                             let Some(inner) = weak.upgrade() else { break };
                             if let Some(id) = discovery::parse_announcement(&buf[..n]) {
                                 inner.on_announcement(id, from);
@@ -293,8 +309,15 @@ impl Konnekta {
     /// Ask a device at a known address to connect to us (like KDE Connect's
     /// "add device by IP"): sends our identity to `addr` (UDP port).
     pub async fn connect_to(&self, addr: SocketAddr) -> Result<()> {
-        let sock = self.inner.udp.lock().unwrap().clone().context("UDP socket not bound")?;
-        sock.send_to(&self.inner.identity_packet().to_line(), addr).await?;
+        let sock = self
+            .inner
+            .udp
+            .lock()
+            .unwrap()
+            .clone()
+            .context("UDP socket not bound")?;
+        sock.send_to(&self.inner.identity_packet().to_line(), addr)
+            .await?;
         Ok(())
     }
 
@@ -380,7 +403,9 @@ impl Konnekta {
         action: &str,
         args: Value,
     ) -> Result<Value> {
-        self.inner.plugin_action(device_id, plugin, action, args).await
+        self.inner
+            .plugin_action(device_id, plugin, action, args)
+            .await
     }
 }
 
@@ -398,11 +423,20 @@ impl Inner {
             .find(|p| p.info().id == plugin)
             .cloned()
             .with_context(|| format!("unknown plugin {plugin}"))?;
-        if self.config.read().unwrap().disabled_plugins.contains(plugin) {
+        if self
+            .config
+            .read()
+            .unwrap()
+            .disabled_plugins
+            .contains(plugin)
+        {
             bail!("plugin {plugin} is disabled");
         }
         let dev = match device_id {
-            Some(id) => Some(self.paired_handle(id).context("device not connected or not paired")?),
+            Some(id) => Some(
+                self.paired_handle(id)
+                    .context("device not connected or not paired")?,
+            ),
             None => None,
         };
         p.handle_action(dev.as_ref(), action, args).await
@@ -455,7 +489,9 @@ impl Inner {
                 device_id: device_id.to_owned(),
                 cert_der: t.cert_der(),
             },
-            None => PeerExpectation::Unpaired { device_id: device_id.to_owned() },
+            None => PeerExpectation::Unpaired {
+                device_id: device_id.to_owned(),
+            },
         }
     }
 
@@ -482,10 +518,10 @@ impl Inner {
         }
         {
             let mut c = self.connecting.lock().unwrap();
-            if let Some(t) = c.get(&id.device_id) {
-                if t.elapsed() < OUTGOING_RETRY {
-                    return;
-                }
+            if let Some(t) = c.get(&id.device_id)
+                && t.elapsed() < OUTGOING_RETRY
+            {
+                return;
             }
             c.insert(id.device_id.clone(), Instant::now());
         }
@@ -603,7 +639,11 @@ impl Inner {
         let trusted = self.trust.lock().unwrap().is_trusted(&device_id);
         let entry = LinkEntry {
             handle: handle.clone(),
-            pair: if trusted { PairState::Paired } else { PairState::NotPaired },
+            pair: if trusted {
+                PairState::Paired
+            } else {
+                PairState::NotPaired
+            },
             tasks: vec![reader.abort_handle(), writer.abort_handle()],
             denied: HashSet::new(),
         };
@@ -643,7 +683,9 @@ impl Inner {
                 t.abort();
             }
             tracing::info!(device = %device_id, "device disconnected");
-            let _ = self.events.send(Event::DeviceDisconnected { device_id: device_id.to_owned() });
+            let _ = self.events.send(Event::DeviceDisconnected {
+                device_id: device_id.to_owned(),
+            });
             if entry.pair.is_paired() {
                 for p in &self.plugins {
                     p.on_disconnected(device_id).await;
@@ -774,7 +816,11 @@ impl Inner {
     }
 
     fn link_handle(&self, id: &str) -> Option<(DeviceHandle, PairState)> {
-        self.links.lock().unwrap().get(id).map(|l| (l.handle.clone(), l.pair))
+        self.links
+            .lock()
+            .unwrap()
+            .get(id)
+            .map(|l| (l.handle.clone(), l.pair))
     }
 
     fn set_pair_state(&self, id: &str, state: PairState) {
@@ -786,7 +832,9 @@ impl Inner {
     // --- dispatch --------------------------------------------------------------
 
     async fn dispatch(self: &Arc<Self>, device_id: &str, link_id: u64, packet: Packet) {
-        let Some((handle, state)) = self.link_handle(device_id) else { return };
+        let Some((handle, state)) = self.link_handle(device_id) else {
+            return;
+        };
         if handle.link_id != link_id || packet.packet_type.is_empty() {
             return;
         }
@@ -801,7 +849,16 @@ impl Inner {
         if !state.is_paired() || !self.trust.lock().unwrap().is_trusted(device_id) {
             tracing::warn!(device = %device_id, packet = %packet.packet_type, "dropping packet from unpaired device");
             // Tell the peer we consider it unpaired so its state resyncs.
-            let _ = handle.tx.send(Packet::new(types::PAIR, PairBody { pair: false, timestamp: None })).await;
+            let _ = handle
+                .tx
+                .send(Packet::new(
+                    types::PAIR,
+                    PairBody {
+                        pair: false,
+                        timestamp: None,
+                    },
+                ))
+                .await;
             return;
         }
         let disabled_global = self.config.read().unwrap().disabled_plugins.clone();
@@ -867,12 +924,20 @@ impl Inner {
     async fn send_pair(&self, handle: &DeviceHandle, pair: bool, ts: Option<u64>) {
         let _ = handle
             .tx
-            .send(Packet::new(types::PAIR, PairBody { pair, timestamp: ts }))
+            .send(Packet::new(
+                types::PAIR,
+                PairBody {
+                    pair,
+                    timestamp: ts,
+                },
+            ))
             .await;
     }
 
     async fn handle_pair(self: Arc<Self>, handle: DeviceHandle, state: PairState, packet: Packet) {
-        let Ok(body) = packet.body_as::<PairBody>() else { return };
+        let Ok(body) = packet.body_as::<PairBody>() else {
+            return;
+        };
         let id = handle.id().to_owned();
         if body.pair {
             match state {
@@ -891,7 +956,13 @@ impl Inner {
                         });
                         return;
                     }
-                    self.set_pair_state(&id, PairState::RequestedByPeer { timestamp: ts, since: Instant::now() });
+                    self.set_pair_state(
+                        &id,
+                        PairState::RequestedByPeer {
+                            timestamp: ts,
+                            since: Instant::now(),
+                        },
+                    );
                     let _ = self.events.send(Event::PairRequested {
                         device_id: id.clone(),
                         device_name: handle.name().to_owned(),
@@ -958,7 +1029,9 @@ impl Inner {
         });
         self.set_pair_state(&id, PairState::Paired);
         tracing::info!(device = %handle.name(), "paired");
-        let _ = self.events.send(Event::Paired { device_id: id.clone() });
+        let _ = self.events.send(Event::Paired {
+            device_id: id.clone(),
+        });
         self.emit_updated(&id);
         self.notify_plugins_connected(handle).await;
     }
@@ -974,10 +1047,19 @@ impl Inner {
             _ => {}
         }
         let ts = pairing::now_secs();
-        self.set_pair_state(id, PairState::RequestedByUs { timestamp: ts, since: Instant::now() });
+        self.set_pair_state(
+            id,
+            PairState::RequestedByUs {
+                timestamp: ts,
+                since: Instant::now(),
+            },
+        );
         self.send_pair(&handle, true, Some(ts)).await;
         let key = self.vkey(&handle, ts);
-        let _ = self.events.send(Event::PairOutgoing { device_id: id.to_owned(), verification_key: key.clone() });
+        let _ = self.events.send(Event::PairOutgoing {
+            device_id: id.to_owned(),
+            verification_key: key.clone(),
+        });
         self.spawn_pair_timeout(id.to_owned(), ts);
         Ok(key)
     }
@@ -1016,7 +1098,9 @@ impl Inner {
             for p in &self.plugins {
                 p.on_disconnected(id).await;
             }
-            let _ = self.events.send(Event::Unpaired { device_id: id.to_owned() });
+            let _ = self.events.send(Event::Unpaired {
+                device_id: id.to_owned(),
+            });
         }
         Ok(())
     }

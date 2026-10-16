@@ -24,7 +24,11 @@ pub enum Action {
     /// Shell command (sh -c / cmd /C).
     Shell {
         command: String,
-        #[serde(default, rename = "timeoutSecs", skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            rename = "timeoutSecs",
+            skip_serializing_if = "Option::is_none"
+        )]
         timeout_secs: Option<u64>,
     },
     /// Start an application.
@@ -83,11 +87,17 @@ impl Action {
     /// Validate user input before saving.
     pub fn validate(&self) -> Result<()> {
         match self {
-            Self::Shell { command, .. } if command.trim().is_empty() => bail!("empty shell command"),
+            Self::Shell { command, .. } if command.trim().is_empty() => {
+                bail!("empty shell command")
+            }
             Self::LaunchApp { app, .. } if app.trim().is_empty() => bail!("empty application"),
             Self::Shortcut { keys } => parse_shortcut(keys).map(drop),
-            Self::Media { action } if MediaAction::parse(action).is_none() => bail!("unknown media action {action}"),
-            Self::Delay { ms } if *ms > MAX_DELAY_MS => bail!("delay too long (max {MAX_DELAY_MS} ms)"),
+            Self::Media { action } if MediaAction::parse(action).is_none() => {
+                bail!("unknown media action {action}")
+            }
+            Self::Delay { ms } if *ms > MAX_DELAY_MS => {
+                bail!("delay too long (max {MAX_DELAY_MS} ms)")
+            }
             _ => Ok(()),
         }
     }
@@ -138,8 +148,12 @@ impl Executor {
     async fn run_one(&self, core: Option<&CoreHandle>, a: &Action, depth: u8) -> Result<Value> {
         let p = &self.platform;
         Ok(match a {
-            Action::Shell { command, timeout_secs } => {
-                let t = Duration::from_secs(timeout_secs.unwrap_or(DEFAULT_SHELL_TIMEOUT).min(3600));
+            Action::Shell {
+                command,
+                timeout_secs,
+            } => {
+                let t =
+                    Duration::from_secs(timeout_secs.unwrap_or(DEFAULT_SHELL_TIMEOUT).min(3600));
                 serde_json::to_value(p.launcher.run_shell(command, t).await?)?
             }
             Action::LaunchApp { app, args } => {
@@ -160,7 +174,8 @@ impl Executor {
                 Value::Null
             }
             Action::Media { action } => {
-                let m = MediaAction::parse(action).ok_or_else(|| anyhow::anyhow!("bad media action"))?;
+                let m = MediaAction::parse(action)
+                    .ok_or_else(|| anyhow::anyhow!("bad media action"))?;
                 p.media.action(None, m).await?;
                 Value::Null
             }
@@ -188,9 +203,15 @@ impl Executor {
                     .actions;
                 Value::Array(self.run_depth(core, &actions, depth + 1).await?)
             }
-            Action::Plugin { plugin, action, args, device } => {
+            Action::Plugin {
+                plugin,
+                action,
+                args,
+                device,
+            } => {
                 let core = core.ok_or_else(|| anyhow::anyhow!("plugin actions need the core"))?;
-                core.plugin_action(device.as_deref(), plugin, action, args.clone()).await?
+                core.plugin_action(device.as_deref(), plugin, action, args.clone())
+                    .await?
             }
         })
     }
@@ -211,11 +232,21 @@ mod tests {
         exec.run(
             None,
             &[
-                Action::Shortcut { keys: "ctrl+c".into() },
+                Action::Shortcut {
+                    keys: "ctrl+c".into(),
+                },
                 Action::Delay { ms: 50 },
-                Action::Media { action: "Next".into() },
-                Action::Volume { set: None, delta: Some(10) },
-                Action::Shell { command: "echo hi".into(), timeout_secs: None },
+                Action::Media {
+                    action: "Next".into(),
+                },
+                Action::Volume {
+                    set: None,
+                    delta: Some(10),
+                },
+                Action::Shell {
+                    command: "echo hi".into(),
+                    timeout_secs: None,
+                },
             ],
         )
         .await
@@ -230,9 +261,27 @@ mod tests {
 
     #[test]
     fn validation() {
-        assert!(Action::Shortcut { keys: "ctrl+nope".into() }.validate().is_err());
-        assert!(Action::Delay { ms: MAX_DELAY_MS + 1 }.validate().is_err());
-        assert!(Action::Media { action: "Explode".into() }.validate().is_err());
+        assert!(
+            Action::Shortcut {
+                keys: "ctrl+nope".into()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            Action::Delay {
+                ms: MAX_DELAY_MS + 1
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            Action::Media {
+                action: "Explode".into()
+            }
+            .validate()
+            .is_err()
+        );
         assert!(validate_all(&vec![Action::Delay { ms: 1 }; MAX_STEPS + 1]).is_err());
         let a: Action = serde_json::from_str(r#"{"type":"shortcut","keys":"alt+tab"}"#).unwrap();
         assert!(a.validate().is_ok());

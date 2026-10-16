@@ -19,7 +19,11 @@ use serde_json::{Value, json};
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "konnekta", version, about = "Connect your phone and computer — securely")]
+#[command(
+    name = "konnekta",
+    version,
+    about = "Connect your phone and computer — securely"
+)]
 struct Cli {
     /// Configuration / key directory.
     #[arg(long, env = "KONNEKTA_DATA_DIR", global = true)]
@@ -62,7 +66,10 @@ enum Cmd {
     /// Revoke permissions.
     Revoke { device: String, perms: Vec<String> },
     /// Send a ping.
-    Ping { device: String, message: Option<String> },
+    Ping {
+        device: String,
+        message: Option<String>,
+    },
     /// Send files.
     Send { device: String, files: Vec<PathBuf> },
     /// Send text (lands in the phone clipboard / share sheet).
@@ -90,7 +97,9 @@ enum Cmd {
 }
 
 fn data_dir(cli: &Cli) -> PathBuf {
-    cli.data_dir.clone().unwrap_or_else(Config::default_data_dir)
+    cli.data_dir
+        .clone()
+        .unwrap_or_else(Config::default_data_dir)
 }
 
 async fn run_daemon(dir: PathBuf, name: Option<String>, no_announce: bool) -> Result<()> {
@@ -110,13 +119,22 @@ async fn run_daemon(dir: PathBuf, name: Option<String>, no_announce: bool) -> Re
         .plugins(konnekta_plugins::all(platform))
         .build()?;
     k.start().await?;
-    println!("Konnekta {} — device id {}", env!("CARGO_PKG_VERSION"), k.device_id());
+    println!(
+        "Konnekta {} — device id {}",
+        env!("CARGO_PKG_VERSION"),
+        k.device_id()
+    );
     println!("certificate fingerprint {}", k.fingerprint());
 
     let mut events = k.subscribe();
     tokio::spawn(async move {
         while let Ok(ev) = events.recv().await {
-            if let konnekta_core::Event::PairRequested { device_name, verification_key, device_id } = &ev {
+            if let konnekta_core::Event::PairRequested {
+                device_name,
+                verification_key,
+                device_id,
+            } = &ev
+            {
                 println!(
                     "\n>>> Pairing request from \"{device_name}\" — verification code {verification_key}\n    \
                      compare it with the code on the other device, then run: konnekta accept {device_id}\n"
@@ -163,22 +181,42 @@ async fn resolve(c: &mut ipc::Client, q: &str) -> Result<String> {
 fn print_devices(v: &Value) {
     let devs = v.as_array().cloned().unwrap_or_default();
     if devs.is_empty() {
-        println!("No devices. Make sure both devices are on the same network, or use `konnekta connect <ip>`.");
+        println!(
+            "No devices. Make sure both devices are on the same network, or use `konnekta connect <ip>`."
+        );
     }
     for d in devs {
         println!(
             "{:<24} {:<8} {:<10} {:<16} {}",
             d["name"].as_str().unwrap_or_default(),
             d["deviceType"].as_str().unwrap_or_default(),
-            if d["paired"].as_bool() == Some(true) { "paired" } else { d["pairState"].as_str().unwrap_or_default() },
-            if d["connected"].as_bool() == Some(true) { d["address"].as_str().unwrap_or("online") } else { "offline" },
+            if d["paired"].as_bool() == Some(true) {
+                "paired"
+            } else {
+                d["pairState"].as_str().unwrap_or_default()
+            },
+            if d["connected"].as_bool() == Some(true) {
+                d["address"].as_str().unwrap_or("online")
+            } else {
+                "offline"
+            },
             d["id"].as_str().unwrap_or_default(),
         );
     }
 }
 
-async fn action(c: &mut ipc::Client, dev: Option<String>, plugin: &str, action: &str, args: Value) -> Result<Value> {
-    c.call("pluginAction", json!({ "deviceId": dev, "plugin": plugin, "action": action, "args": args })).await
+async fn action(
+    c: &mut ipc::Client,
+    dev: Option<String>,
+    plugin: &str,
+    action: &str,
+    args: Value,
+) -> Result<Value> {
+    c.call(
+        "pluginAction",
+        json!({ "deviceId": dev, "plugin": plugin, "action": action, "args": args }),
+    )
+    .await
 }
 
 fn print(v: &Value) {
@@ -191,10 +229,22 @@ fn print(v: &Value) {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     let dir = data_dir(&cli);
-    if let Cmd::Daemon { name, no_announce, verbose } = cli.cmd {
-        let filter = if verbose { "konnekta=debug,info" } else { "info" };
+    if let Cmd::Daemon {
+        name,
+        no_announce,
+        verbose,
+    } = cli.cmd
+    {
+        let filter = if verbose {
+            "konnekta=debug,info"
+        } else {
+            "info"
+        };
         tracing_subscriber::fmt()
-            .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| filter.into()))
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| filter.into()),
+            )
             .init();
         return run_daemon(dir, name, no_announce).await;
     }
@@ -234,14 +284,28 @@ async fn main() -> Result<()> {
             let d = c.call("device", json!({ "deviceId": id })).await?;
             let granted: Vec<String> =
                 serde_json::from_value(d["permissions"].clone()).unwrap_or_default();
-            for p in c.call("permissions", Value::Null).await?.as_array().cloned().unwrap_or_default() {
+            for p in c
+                .call("permissions", Value::Null)
+                .await?
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+            {
                 let pid = p["id"].as_str().unwrap_or_default();
                 println!(
                     "[{}] {:<14} {}{}",
-                    if granted.iter().any(|g| g == pid) { "x" } else { " " },
+                    if granted.iter().any(|g| g == pid) {
+                        "x"
+                    } else {
+                        " "
+                    },
                     pid,
                     p["label"].as_str().unwrap_or_default(),
-                    if p["sensitive"].as_bool() == Some(true) { "  (sensitive)" } else { "" }
+                    if p["sensitive"].as_bool() == Some(true) {
+                        "  (sensitive)"
+                    } else {
+                        ""
+                    }
                 );
             }
         }
@@ -251,18 +315,33 @@ async fn main() -> Result<()> {
         Cmd::Grant { device, perms } => {
             let id = resolve(&mut c, &device).await?;
             for p in perms {
-                c.call("setPermission", json!({ "deviceId": id, "permission": p, "granted": true })).await?;
+                c.call(
+                    "setPermission",
+                    json!({ "deviceId": id, "permission": p, "granted": true }),
+                )
+                .await?;
             }
         }
         Cmd::Revoke { device, perms } => {
             let id = resolve(&mut c, &device).await?;
             for p in perms {
-                c.call("setPermission", json!({ "deviceId": id, "permission": p, "granted": false })).await?;
+                c.call(
+                    "setPermission",
+                    json!({ "deviceId": id, "permission": p, "granted": false }),
+                )
+                .await?;
             }
         }
         Cmd::Ping { device, message } => {
             let id = resolve(&mut c, &device).await?;
-            action(&mut c, Some(id), "ping", "send", json!({ "message": message })).await?;
+            action(
+                &mut c,
+                Some(id),
+                "ping",
+                "send",
+                json!({ "message": message }),
+            )
+            .await?;
         }
         Cmd::Send { device, files } => {
             let id = resolve(&mut c, &device).await?;
@@ -270,22 +349,46 @@ async fn main() -> Result<()> {
                 .into_iter()
                 .map(|f| std::fs::canonicalize(&f).with_context(|| format!("{}", f.display())))
                 .collect::<Result<_>>()?;
-            action(&mut c, Some(id), "share", "sendFiles", json!({ "paths": files })).await?;
+            action(
+                &mut c,
+                Some(id),
+                "share",
+                "sendFiles",
+                json!({ "paths": files }),
+            )
+            .await?;
             println!("Transfer started (follow it with `konnekta events`).");
         }
         Cmd::Text { device, text } => {
             let id = resolve(&mut c, &device).await?;
-            action(&mut c, Some(id), "share", "sendText", json!({ "text": text })).await?;
+            action(
+                &mut c,
+                Some(id),
+                "share",
+                "sendText",
+                json!({ "text": text }),
+            )
+            .await?;
         }
         Cmd::Ring { device } => {
             let id = resolve(&mut c, &device).await?;
             action(&mut c, Some(id), "findmyphone", "ring", Value::Null).await?;
         }
         Cmd::Plugins => {
-            for p in c.call("plugins", Value::Null).await?.as_array().cloned().unwrap_or_default() {
+            for p in c
+                .call("plugins", Value::Null)
+                .await?
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+            {
                 println!(
                     "[{}] {:<14} {:<10} {}",
-                    if p["enabled"].as_bool() == Some(true) { "x" } else { " " },
+                    if p["enabled"].as_bool() == Some(true) {
+                        "x"
+                    } else {
+                        " "
+                    },
                     p["id"].as_str().unwrap_or_default(),
                     p["origin"].as_str().unwrap_or_default(),
                     p["description"].as_str().unwrap_or_default()
@@ -293,12 +396,25 @@ async fn main() -> Result<()> {
             }
         }
         Cmd::Enable { plugin } => {
-            c.call("setPluginEnabled", json!({ "plugin": plugin, "enabled": true })).await?;
+            c.call(
+                "setPluginEnabled",
+                json!({ "plugin": plugin, "enabled": true }),
+            )
+            .await?;
         }
         Cmd::Disable { plugin } => {
-            c.call("setPluginEnabled", json!({ "plugin": plugin, "enabled": false })).await?;
+            c.call(
+                "setPluginEnabled",
+                json!({ "plugin": plugin, "enabled": false }),
+            )
+            .await?;
         }
-        Cmd::Action { plugin, action: a, device, args } => {
+        Cmd::Action {
+            plugin,
+            action: a,
+            device,
+            args,
+        } => {
             let dev = match device {
                 Some(d) => Some(resolve(&mut c, &d).await?),
                 None => None,

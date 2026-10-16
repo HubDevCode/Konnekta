@@ -7,11 +7,15 @@ use serde_json::{Value, json};
 use std::net::{IpAddr, SocketAddr};
 
 fn s<'a>(p: &'a Value, k: &str) -> Result<&'a str> {
-    p.get(k).and_then(Value::as_str).with_context(|| format!("missing '{k}'"))
+    p.get(k)
+        .and_then(Value::as_str)
+        .with_context(|| format!("missing '{k}'"))
 }
 
 fn b(p: &Value, k: &str) -> Result<bool> {
-    p.get(k).and_then(Value::as_bool).with_context(|| format!("missing '{k}'"))
+    p.get(k)
+        .and_then(Value::as_bool)
+        .with_context(|| format!("missing '{k}'"))
 }
 
 pub fn parse_address(addr: &str) -> Result<SocketAddr> {
@@ -62,8 +66,9 @@ pub async fn call(k: &Konnekta, method: &str, p: Value) -> Result<Value> {
                 .collect(),
         ),
         "setPermission" => {
-            let perm: Permission = serde_json::from_value(p.get("permission").cloned().unwrap_or_default())
-                .context("unknown permission")?;
+            let perm: Permission =
+                serde_json::from_value(p.get("permission").cloned().unwrap_or_default())
+                    .context("unknown permission")?;
             k.set_permission(s(&p, "deviceId")?, perm, b(&p, "granted")?)?;
             Value::Null
         }
@@ -87,16 +92,26 @@ pub async fn call(k: &Konnekta, method: &str, p: Value) -> Result<Value> {
         }
         "pluginAction" => {
             let dev = p.get("deviceId").and_then(Value::as_str);
-            k.plugin_action(dev, s(&p, "plugin")?, s(&p, "action")?, p.get("args").cloned().unwrap_or(Value::Null))
-                .await?
+            k.plugin_action(
+                dev,
+                s(&p, "plugin")?,
+                s(&p, "action")?,
+                p.get("args").cloned().unwrap_or(Value::Null),
+            )
+            .await?
         }
         "getConfig" => serde_json::to_value(k.config())?,
         "setConfig" => {
-            let name = p.get("deviceName").and_then(Value::as_str).map(str::to_owned);
-            if let Some(n) = &name {
-                if n.trim().is_empty() || n.chars().count() > 32 || n.chars().any(char::is_control) {
-                    bail!("invalid device name");
-                }
+            let name = p
+                .get("deviceName")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            if let Some(n) = &name
+                && (n.trim().is_empty()
+                    || n.chars().count() > 32
+                    || n.chars().any(char::is_control))
+            {
+                bail!("invalid device name");
             }
             k.update_config(|c| {
                 if let Some(n) = name {

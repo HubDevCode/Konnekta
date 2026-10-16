@@ -18,7 +18,7 @@ pub use cert::{
     LocalIdentity, cert_common_name, cert_fingerprint, generate_device_id, public_key_der,
     verification_key,
 };
-pub use store::{KeyStore, FileKeyStore, write_private_file};
+pub use store::{FileKeyStore, KeyStore, write_private_file};
 pub use tls::{PeerExpectation, client_config, server_config};
 
 #[derive(Debug, thiserror::Error)]

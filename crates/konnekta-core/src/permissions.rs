@@ -69,7 +69,11 @@ impl Permission {
     }
 
     pub fn defaults() -> BTreeSet<Permission> {
-        Self::ALL.iter().copied().filter(|p| !p.is_sensitive()).collect()
+        Self::ALL
+            .iter()
+            .copied()
+            .filter(|p| !p.is_sensitive())
+            .collect()
     }
 
     pub fn label(self) -> &'static str {
@@ -112,6 +116,9 @@ mod tests {
 
     #[test]
     fn serde_names() {
-        assert_eq!(serde_json::to_string(&Permission::RemoteInput).unwrap(), "\"remoteInput\"");
+        assert_eq!(
+            serde_json::to_string(&Permission::RemoteInput).unwrap(),
+            "\"remoteInput\""
+        );
     }
 }

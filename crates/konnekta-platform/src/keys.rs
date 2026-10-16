@@ -73,11 +73,15 @@ pub fn parse_shortcut(s: &str) -> Result<(Modifiers, Key)> {
                 if key.is_some() {
                     bail!("shortcut '{s}' has more than one key");
                 }
-                key = Some(parse_key(other).ok_or_else(|| anyhow::anyhow!("unknown key '{part}'"))?);
+                key =
+                    Some(parse_key(other).ok_or_else(|| anyhow::anyhow!("unknown key '{part}'"))?);
             }
         }
     }
-    Ok((mods, key.ok_or_else(|| anyhow::anyhow!("shortcut '{s}' has no key"))?))
+    Ok((
+        mods,
+        key.ok_or_else(|| anyhow::anyhow!("shortcut '{s}' has no key"))?,
+    ))
 }
 
 fn parse_key(k: &str) -> Option<Key> {
@@ -131,7 +135,10 @@ mod tests {
         let (m, k) = parse_shortcut("Alt+F4").unwrap();
         assert!(m.alt);
         assert_eq!(k, Key::Special(SpecialKey::F(4)));
-        assert_eq!(parse_shortcut("PageDown").unwrap().1, Key::Special(SpecialKey::PageDown));
+        assert_eq!(
+            parse_shortcut("PageDown").unwrap().1,
+            Key::Special(SpecialKey::PageDown)
+        );
         assert!(parse_shortcut("ctrl+").is_err());
         assert!(parse_shortcut("a+b").is_err());
         assert!(parse_shortcut("ctrl").is_err());

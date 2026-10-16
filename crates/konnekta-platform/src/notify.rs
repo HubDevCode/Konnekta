@@ -34,7 +34,11 @@ impl NotifierBackend for NativeNotifier {
             let mut notif = notify_rust::Notification::new();
             notif
                 .appname("Konnekta")
-                .summary(&if n.app_name.is_empty() { n.title.clone() } else { format!("{} — {}", n.app_name, n.title) })
+                .summary(&if n.app_name.is_empty() {
+                    n.title.clone()
+                } else {
+                    format!("{} — {}", n.app_name, n.title)
+                })
                 .body(&n.body);
             #[cfg(all(unix, not(target_os = "macos")))]
             {

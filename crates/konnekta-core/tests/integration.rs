@@ -3,7 +3,9 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use konnekta_core::proto::{Packet, types};
-use konnekta_core::{Config, DeviceHandle, Event, Konnekta, Permission, Plugin, PluginInfo, PluginOrigin};
+use konnekta_core::{
+    Config, DeviceHandle, Event, Konnekta, Permission, Plugin, PluginInfo, PluginOrigin,
+};
 use serde_json::{Value, json};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
@@ -60,7 +62,12 @@ impl Plugin for Danger {
         *self.ran.lock().unwrap() += 1;
         Ok(())
     }
-    async fn handle_action(&self, dev: Option<&DeviceHandle>, _a: &str, _args: Value) -> Result<Value> {
+    async fn handle_action(
+        &self,
+        dev: Option<&DeviceHandle>,
+        _a: &str,
+        _args: Value,
+    ) -> Result<Value> {
         dev.unwrap()
             .send(Packet::new(types::RUNCOMMAND_REQUEST, json!({"key": "x"})))
             .await?;
@@ -97,10 +104,18 @@ async fn node(name: &str) -> Node {
         .unwrap();
     let events = k.subscribe();
     k.start().await.unwrap();
-    Node { k, rec, danger, events }
+    Node {
+        k,
+        rec,
+        danger,
+        events,
+    }
 }
 
-async fn wait_for<F: FnMut(&Event) -> bool>(rx: &mut broadcast::Receiver<Event>, mut f: F) -> Event {
+async fn wait_for<F: FnMut(&Event) -> bool>(
+    rx: &mut broadcast::Receiver<Event>,
+    mut f: F,
+) -> Event {
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             let e = rx.recv().await.unwrap();
@@ -124,22 +139,36 @@ async fn eventually<F: FnMut() -> bool>(mut f: F) {
 }
 
 async fn connect(a: &mut Node, b: &mut Node) {
-    a.k.connect_to(SocketAddr::new(LO, b.k.udp_port())).await.unwrap();
-    wait_for(&mut a.events, |e| matches!(e, Event::DeviceConnected { .. })).await;
-    wait_for(&mut b.events, |e| matches!(e, Event::DeviceConnected { .. })).await;
+    a.k.connect_to(SocketAddr::new(LO, b.k.udp_port()))
+        .await
+        .unwrap();
+    wait_for(&mut a.events, |e| {
+        matches!(e, Event::DeviceConnected { .. })
+    })
+    .await;
+    wait_for(&mut b.events, |e| {
+        matches!(e, Event::DeviceConnected { .. })
+    })
+    .await;
 }
 
 async fn pair(a: &mut Node, b: &mut Node) {
     let b_id = b.k.device_id().to_string();
     let a_id = a.k.device_id().to_string();
     let key_a = a.k.request_pair(&b_id).await.unwrap();
-    let Event::PairRequested { verification_key, device_id, .. } =
-        wait_for(&mut b.events, |e| matches!(e, Event::PairRequested { .. })).await
+    let Event::PairRequested {
+        verification_key,
+        device_id,
+        ..
+    } = wait_for(&mut b.events, |e| matches!(e, Event::PairRequested { .. })).await
     else {
         unreachable!()
     };
     assert_eq!(device_id, a_id);
-    assert_eq!(verification_key, key_a, "both sides must show the same code");
+    assert_eq!(
+        verification_key, key_a,
+        "both sides must show the same code"
+    );
     b.k.accept_pair(&a_id).await.unwrap();
     wait_for(&mut a.events, |e| matches!(e, Event::Paired { .. })).await;
 }
@@ -165,9 +194,14 @@ async fn discover_pair_and_exchange() {
 
     // Ping is a default permission.
     let h = a.k.device_handle(&b_id).unwrap();
-    h.send(Packet::new(types::PING, json!({"message": "ciao"}))).await.unwrap();
+    h.send(Packet::new(types::PING, json!({"message": "ciao"})))
+        .await
+        .unwrap();
     eventually(|| b.rec.got.lock().unwrap().len() == 1).await;
-    assert_eq!(b.rec.got.lock().unwrap()[0].get_str("message"), Some("ciao"));
+    assert_eq!(
+        b.rec.got.lock().unwrap()[0].get_str("message"),
+        Some("ciao")
+    );
 }
 
 #[tokio::test]
@@ -180,22 +214,38 @@ async fn sensitive_permissions_are_enforced() {
     let a_id = a.k.device_id().to_string();
 
     // A refuses to *send* commands to B: not granted locally.
-    assert!(a.k.plugin_action(Some(&b_id), "runcommand", "run", Value::Null).await.is_err());
+    assert!(
+        a.k.plugin_action(Some(&b_id), "runcommand", "run", Value::Null)
+            .await
+            .is_err()
+    );
 
     // A grants itself the right, but B still has not granted Commands to A.
-    a.k.set_permission(&b_id, Permission::Commands, true).unwrap();
-    a.k.plugin_action(Some(&b_id), "runcommand", "run", Value::Null).await.unwrap();
-    wait_for(&mut b.events, |e| matches!(e, Event::SecurityWarning { .. })).await;
+    a.k.set_permission(&b_id, Permission::Commands, true)
+        .unwrap();
+    a.k.plugin_action(Some(&b_id), "runcommand", "run", Value::Null)
+        .await
+        .unwrap();
+    wait_for(&mut b.events, |e| {
+        matches!(e, Event::SecurityWarning { .. })
+    })
+    .await;
     assert_eq!(*b.danger.ran.lock().unwrap(), 0);
 
     // Once B grants it, the command is delivered.
-    b.k.set_permission(&a_id, Permission::Commands, true).unwrap();
-    a.k.plugin_action(Some(&b_id), "runcommand", "run", Value::Null).await.unwrap();
+    b.k.set_permission(&a_id, Permission::Commands, true)
+        .unwrap();
+    a.k.plugin_action(Some(&b_id), "runcommand", "run", Value::Null)
+        .await
+        .unwrap();
     eventually(|| *b.danger.ran.lock().unwrap() == 1).await;
 
     // Revoking stops it again.
-    b.k.set_permission(&a_id, Permission::Commands, false).unwrap();
-    a.k.plugin_action(Some(&b_id), "runcommand", "run", Value::Null).await.unwrap();
+    b.k.set_permission(&a_id, Permission::Commands, false)
+        .unwrap();
+    a.k.plugin_action(Some(&b_id), "runcommand", "run", Value::Null)
+        .await
+        .unwrap();
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(*b.danger.ran.lock().unwrap(), 1);
 }
@@ -233,8 +283,18 @@ async fn paired_device_reconnects_with_pinned_certificate() {
             .unwrap()
     };
     let (ka, kb) = (mk("Alpha", dir_a.path()), mk("Beta", dir_b.path()));
-    let mut a = Node { events: ka.subscribe(), k: ka, rec: Default::default(), danger: Default::default() };
-    let mut b = Node { events: kb.subscribe(), k: kb, rec: Default::default(), danger: Default::default() };
+    let mut a = Node {
+        events: ka.subscribe(),
+        k: ka,
+        rec: Default::default(),
+        danger: Default::default(),
+    };
+    let mut b = Node {
+        events: kb.subscribe(),
+        k: kb,
+        rec: Default::default(),
+        danger: Default::default(),
+    };
     a.k.start().await.unwrap();
     b.k.start().await.unwrap();
     connect(&mut a, &mut b).await;
@@ -246,10 +306,20 @@ async fn paired_device_reconnects_with_pinned_certificate() {
 
     // Restart A from disk: same identity, B still trusted.
     let ka = mk("Alpha", dir_a.path());
-    let mut a2 = Node { events: ka.subscribe(), k: ka, rec: Default::default(), danger: Default::default() };
+    let mut a2 = Node {
+        events: ka.subscribe(),
+        k: ka,
+        rec: Default::default(),
+        danger: Default::default(),
+    };
     a2.k.start().await.unwrap();
     let kb = mk("Beta", dir_b.path());
-    let mut b2 = Node { events: kb.subscribe(), k: kb, rec: Default::default(), danger: Default::default() };
+    let mut b2 = Node {
+        events: kb.subscribe(),
+        k: kb,
+        rec: Default::default(),
+        danger: Default::default(),
+    };
     b2.k.start().await.unwrap();
     assert_eq!(b2.k.device_id(), b_id);
     connect(&mut a2, &mut b2).await;
@@ -264,9 +334,17 @@ async fn paired_device_reconnects_with_pinned_certificate() {
         .unwrap();
     evil.start().await.unwrap();
     b2.k.shutdown();
-    wait_for(&mut a2.events, |e| matches!(e, Event::DeviceDisconnected { .. })).await;
-    evil.connect_to(SocketAddr::new(LO, a2.k.udp_port())).await.unwrap();
-    wait_for(&mut a2.events, |e| matches!(e, Event::SecurityWarning { .. })).await;
+    wait_for(&mut a2.events, |e| {
+        matches!(e, Event::DeviceDisconnected { .. })
+    })
+    .await;
+    evil.connect_to(SocketAddr::new(LO, a2.k.udp_port()))
+        .await
+        .unwrap();
+    wait_for(&mut a2.events, |e| {
+        matches!(e, Event::SecurityWarning { .. })
+    })
+    .await;
     assert!(a2.k.device_handle(&b_id).is_none());
 }
 

@@ -12,11 +12,31 @@ pub struct Quality {
 }
 
 pub const DEFAULT_LADDER: &[Quality] = &[
-    Quality { height: 360, fps: 15, bitrate_kbps: 400 },
-    Quality { height: 480, fps: 24, bitrate_kbps: 900 },
-    Quality { height: 720, fps: 30, bitrate_kbps: 2000 },
-    Quality { height: 1080, fps: 30, bitrate_kbps: 4500 },
-    Quality { height: 1080, fps: 60, bitrate_kbps: 8000 },
+    Quality {
+        height: 360,
+        fps: 15,
+        bitrate_kbps: 400,
+    },
+    Quality {
+        height: 480,
+        fps: 24,
+        bitrate_kbps: 900,
+    },
+    Quality {
+        height: 720,
+        fps: 30,
+        bitrate_kbps: 2000,
+    },
+    Quality {
+        height: 1080,
+        fps: 30,
+        bitrate_kbps: 4500,
+    },
+    Quality {
+        height: 1080,
+        fps: 60,
+        bitrate_kbps: 8000,
+    },
 ];
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -67,7 +87,11 @@ impl AdaptiveBitrate {
             self.stable_since = now;
             if self.level > 0 && now.duration_since(self.last_change) >= self.min_interval {
                 // Severe congestion: drop two steps.
-                let step = if s.queue_delay > Duration::from_millis(500) || s.dropped > 10 { 2 } else { 1 };
+                let step = if s.queue_delay > Duration::from_millis(500) || s.dropped > 10 {
+                    2
+                } else {
+                    1
+                };
                 self.level = self.level.saturating_sub(step);
                 self.last_change = now;
                 return Some(self.current());
@@ -101,12 +125,33 @@ mod tests {
         let t0 = Instant::now();
         let mut abr = AdaptiveBitrate::new(DEFAULT_LADDER, 3, 4);
         assert_eq!(abr.current().height, 1080);
-        let q = abr.update(NetworkSample { queue_delay: Duration::from_millis(200), dropped: 0 }, t0);
+        let q = abr.update(
+            NetworkSample {
+                queue_delay: Duration::from_millis(200),
+                dropped: 0,
+            },
+            t0,
+        );
         assert_eq!(q.unwrap().height, 720);
         // Within min_interval: no further change.
-        assert!(abr.update(NetworkSample { queue_delay: Duration::from_millis(200), dropped: 1 }, t0 + Duration::from_millis(500)).is_none());
+        assert!(
+            abr.update(
+                NetworkSample {
+                    queue_delay: Duration::from_millis(200),
+                    dropped: 1
+                },
+                t0 + Duration::from_millis(500)
+            )
+            .is_none()
+        );
         // Severe -> two steps.
-        let q = abr.update(NetworkSample { queue_delay: Duration::from_secs(1), dropped: 20 }, t0 + Duration::from_secs(3));
+        let q = abr.update(
+            NetworkSample {
+                queue_delay: Duration::from_secs(1),
+                dropped: 20,
+            },
+            t0 + Duration::from_secs(3),
+        );
         assert_eq!(abr.level(), 0);
         assert_eq!(q.unwrap().height, 360);
         // Stable for a while -> up one.

@@ -71,7 +71,11 @@ pub struct ShareConfig {
 
 impl Default for ShareConfig {
     fn default() -> Self {
-        Self { destination: None, text_to_clipboard: true, max_file_size: 0 }
+        Self {
+            destination: None,
+            text_to_clipboard: true,
+            max_file_size: 0,
+        }
     }
 }
 
@@ -143,14 +147,21 @@ impl SharePlugin {
 
     fn emit(&self, t: &Transfer) {
         if let Some(c) = self.core.get() {
-            c.emit_plugin(Some(&t.device_id), "share", "transfer", serde_json::to_value(t).unwrap_or_default());
+            c.emit_plugin(
+                Some(&t.device_id),
+                "share",
+                "transfer",
+                serde_json::to_value(t).unwrap_or_default(),
+            );
         }
     }
 
     fn update(&self, id: &str, f: impl FnOnce(&mut Transfer)) {
         let t = {
             let mut v = self.transfers.lock().unwrap();
-            let Some(t) = v.iter_mut().find(|t| t.id == id) else { return };
+            let Some(t) = v.iter_mut().find(|t| t.id == id) else {
+                return;
+            };
             f(t);
             t.clone()
         };
@@ -165,7 +176,9 @@ impl SharePlugin {
         Arc::new(move |done, total| {
             let snapshot = {
                 let mut v = transfers.lock().unwrap();
-                let Some(t) = v.iter_mut().find(|t| t.id == id) else { return };
+                let Some(t) = v.iter_mut().find(|t| t.id == id) else {
+                    return;
+                };
                 t.transferred = done;
                 t.size = total;
                 let mut l = last.lock().unwrap();
@@ -176,7 +189,12 @@ impl SharePlugin {
                 t.clone()
             };
             if let Some(c) = &core {
-                c.emit_plugin(Some(&snapshot.device_id), "share", "transfer", serde_json::to_value(&snapshot).unwrap_or_default());
+                c.emit_plugin(
+                    Some(&snapshot.device_id),
+                    "share",
+                    "transfer",
+                    serde_json::to_value(&snapshot).unwrap_or_default(),
+                );
             }
         })
     }
@@ -193,16 +211,25 @@ impl SharePlugin {
             bail!("file {name} exceeds the configured size limit");
         }
         let dir = self.destination();
-        tokio::fs::create_dir_all(&dir).await.with_context(|| format!("cannot create {}", dir.display()))?;
+        tokio::fs::create_dir_all(&dir)
+            .await
+            .with_context(|| format!("cannot create {}", dir.display()))?;
 
-        let sha = body.sha256.as_deref().filter(|s| valid_sha(s)).map(str::to_lowercase);
+        let sha = body
+            .sha256
+            .as_deref()
+            .filter(|s| valid_sha(s))
+            .map(str::to_lowercase);
         let resumable = sha.is_some() && dev.resume_supported();
         let part = match &sha {
             Some(h) if resumable => dir.join(format!(".{name}.{}.part", &h[..16])),
             _ => unique_path(&dir, &format!(".{name}.part")),
         };
         let offset = if resumable {
-            tokio::fs::metadata(&part).await.map(|m| m.len().min(size)).unwrap_or(0)
+            tokio::fs::metadata(&part)
+                .await
+                .map(|m| m.len().min(size))
+                .unwrap_or(0)
         } else {
             0
         };
@@ -229,7 +256,9 @@ impl SharePlugin {
             .open(&part)
             .await?;
         let resume = if resumable { Some(offset) } else { None };
-        let r = dev.fetch_payload(p, &mut file, resume, Some(self.progress(&id))).await;
+        let r = dev
+            .fetch_payload(p, &mut file, resume, Some(self.progress(&id)))
+            .await;
         file.flush().await.ok();
         drop(file);
         if let Err(e) = r {
@@ -238,7 +267,11 @@ impl SharePlugin {
                 let _ = tokio::fs::remove_file(&part).await;
             }
             self.update(&id, |t| {
-                t.state = if keep { TransferState::Interrupted } else { TransferState::Failed };
+                t.state = if keep {
+                    TransferState::Interrupted
+                } else {
+                    TransferState::Failed
+                };
                 t.error = Some(e.to_string());
             });
             return Err(e);
@@ -284,12 +317,23 @@ impl SharePlugin {
         Ok(())
     }
 
-    async fn send_file(&self, dev: &DeviceHandle, path: PathBuf, total_files: u32, total_size: u64) -> Result<String> {
-        let meta = tokio::fs::metadata(&path).await.with_context(|| format!("cannot read {}", path.display()))?;
+    async fn send_file(
+        &self,
+        dev: &DeviceHandle,
+        path: PathBuf,
+        total_files: u32,
+        total_size: u64,
+    ) -> Result<String> {
+        let meta = tokio::fs::metadata(&path)
+            .await
+            .with_context(|| format!("cannot read {}", path.display()))?;
         if !meta.is_file() {
             bail!("{} is not a file", path.display());
         }
-        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "file".into());
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "file".into());
         let id = uuid::Uuid::new_v4().simple().to_string();
         self.add(Transfer {
             id: id.clone(),
@@ -304,9 +348,15 @@ impl SharePlugin {
             started_at: now_millis(),
             resumed: false,
         });
-        let sha = if dev.resume_supported() { Some(sha256_file(&path).await?) } else { None };
+        let sha = if dev.resume_supported() {
+            Some(sha256_file(&path).await?)
+        } else {
+            None
+        };
         let ms = |t: std::io::Result<std::time::SystemTime>| {
-            t.ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_millis() as i64)
+            t.ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as i64)
         };
         let body = ShareBody {
             filename: Some(name),
@@ -318,7 +368,11 @@ impl SharePlugin {
             ..Default::default()
         };
         let task = dev
-            .send_with_payload(Packet::new(types::SHARE_REQUEST, body), PayloadSource::File(path), Some(self.progress(&id)))
+            .send_with_payload(
+                Packet::new(types::SHARE_REQUEST, body),
+                PayloadSource::File(path),
+                Some(self.progress(&id)),
+            )
             .await;
         let result = match task {
             Ok(task) => task.await.map_err(anyhow::Error::from).and_then(|r| r),
@@ -331,7 +385,11 @@ impl SharePlugin {
             }),
             Err(e) => {
                 self.update(&id, |t| {
-                    t.state = if t.transferred > 0 { TransferState::Interrupted } else { TransferState::Failed };
+                    t.state = if t.transferred > 0 {
+                        TransferState::Interrupted
+                    } else {
+                        TransferState::Failed
+                    };
                     t.error = Some(e.to_string());
                 });
                 return Err(e);
@@ -343,7 +401,10 @@ impl SharePlugin {
     async fn send_files(self: &Arc<Self>, dev: DeviceHandle, paths: Vec<PathBuf>) -> Result<()> {
         let mut total = 0u64;
         for p in &paths {
-            total += tokio::fs::metadata(p).await.with_context(|| format!("cannot read {}", p.display()))?.len();
+            total += tokio::fs::metadata(p)
+                .await
+                .with_context(|| format!("cannot read {}", p.display()))?
+                .len();
         }
         let n = paths.len() as u32;
         if n > 1 {
@@ -433,7 +494,11 @@ impl Plugin for SharePlugin {
             dev.emit("share", "url", json!({ "url": url, "safeScheme": safe }));
             let launcher = self.platform.launcher.clone();
             let open_url = url.clone();
-            let actions = if safe { vec![("open".to_string(), "Open".to_string())] } else { vec![] };
+            let actions = if safe {
+                vec![("open".to_string(), "Open".to_string())]
+            } else {
+                vec![]
+            };
             let _ = self.platform.notifier.show(
                 DesktopNotification {
                     id: format!("share-url-{}", dev.id()),
@@ -446,7 +511,11 @@ impl Plugin for SharePlugin {
                 Some(Box::new(move |a| {
                     if a == "open" {
                         tokio::runtime::Handle::try_current()
-                            .map(|h| h.spawn(async move { let _ = launcher.open(&open_url).await; }))
+                            .map(|h| {
+                                h.spawn(async move {
+                                    let _ = launcher.open(&open_url).await;
+                                })
+                            })
                             .ok();
                     }
                 })),
@@ -455,10 +524,16 @@ impl Plugin for SharePlugin {
         Ok(())
     }
 
-    async fn handle_action(&self, dev: Option<&DeviceHandle>, action: &str, args: Value) -> Result<Value> {
+    async fn handle_action(
+        &self,
+        dev: Option<&DeviceHandle>,
+        action: &str,
+        args: Value,
+    ) -> Result<Value> {
         match action {
             "sendFiles" => {
-                let paths: Vec<PathBuf> = crate::args(args.get("paths").cloned().unwrap_or_default())?;
+                let paths: Vec<PathBuf> =
+                    crate::args(args.get("paths").cloned().unwrap_or_default())?;
                 if paths.is_empty() {
                     bail!("no files selected");
                 }
@@ -468,22 +543,45 @@ impl Plugin for SharePlugin {
                 Ok(Value::Null)
             }
             "sendText" => {
-                let text = args.get("text").and_then(Value::as_str).unwrap_or_default().to_owned();
+                let text = args
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned();
                 crate::need_dev(dev)?
-                    .send(Packet::new(types::SHARE_REQUEST, ShareBody { text: Some(text), ..Default::default() }))
+                    .send(Packet::new(
+                        types::SHARE_REQUEST,
+                        ShareBody {
+                            text: Some(text),
+                            ..Default::default()
+                        },
+                    ))
                     .await?;
                 Ok(Value::Null)
             }
             "sendUrl" => {
-                let url = args.get("url").and_then(Value::as_str).unwrap_or_default().to_owned();
+                let url = args
+                    .get("url")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned();
                 crate::need_dev(dev)?
-                    .send(Packet::new(types::SHARE_REQUEST, ShareBody { url: Some(url), ..Default::default() }))
+                    .send(Packet::new(
+                        types::SHARE_REQUEST,
+                        ShareBody {
+                            url: Some(url),
+                            ..Default::default()
+                        },
+                    ))
                     .await?;
                 Ok(Value::Null)
             }
             "transfers" => Ok(serde_json::to_value(&*self.transfers.lock().unwrap())?),
             "clearFinished" => {
-                self.transfers.lock().unwrap().retain(|t| t.state == TransferState::InProgress);
+                self.transfers
+                    .lock()
+                    .unwrap()
+                    .retain(|t| t.state == TransferState::InProgress);
                 Ok(Value::Null)
             }
             "retry" => {

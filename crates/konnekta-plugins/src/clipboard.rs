@@ -32,7 +32,10 @@ pub struct ClipboardConfig {
 
 impl Default for ClipboardConfig {
     fn default() -> Self {
-        Self { auto_send: true, auto_receive: true }
+        Self {
+            auto_send: true,
+            auto_receive: true,
+        }
     }
 }
 
@@ -57,7 +60,12 @@ impl ClipboardPlugin {
     }
 
     pub fn with_poll(platform: Platform, poll: Duration) -> Self {
-        Self { platform, state: Mutex::default(), config: JsonStore::default(), poll }
+        Self {
+            platform,
+            state: Mutex::default(),
+            config: JsonStore::default(),
+            poll,
+        }
     }
 
     /// Returns the content to broadcast if this is a genuine local change.
@@ -85,7 +93,13 @@ impl ClipboardPlugin {
     async fn broadcast(core: &CoreHandle, text: &str) {
         for dev in core.devices() {
             if dev.has_permission(Permission::Clipboard) && dev.supports(types::CLIPBOARD) {
-                let p = Packet::new(types::CLIPBOARD, ClipboardBody { content: text.into(), timestamp: None });
+                let p = Packet::new(
+                    types::CLIPBOARD,
+                    ClipboardBody {
+                        content: text.into(),
+                        timestamp: None,
+                    },
+                );
                 if let Err(e) = dev.send(p).await {
                     tracing::debug!("clipboard send failed: {e}");
                 }
@@ -100,7 +114,11 @@ impl ClipboardPlugin {
         if self.accept_remote(&content, at) {
             self.platform.clipboard.set_text(&content).await?;
             tracing::debug!(device = %dev.name(), content = %konnekta_core::util::redact(&content), "clipboard updated");
-            dev.emit("clipboard", "received", json!({ "length": content.chars().count() }));
+            dev.emit(
+                "clipboard",
+                "received",
+                json!({ "length": content.chars().count() }),
+            );
         }
         Ok(())
     }
@@ -134,14 +152,16 @@ impl Plugin for ClipboardPlugin {
                 if !core.is_alive() {
                     break;
                 }
-                let Ok(Some(text)) = me.platform.clipboard.get_text().await else { continue };
+                let Ok(Some(text)) = me.platform.clipboard.get_text().await else {
+                    continue;
+                };
                 if text.is_empty() || text.len() > MAX_CLIPBOARD {
                     continue;
                 }
-                if let Some(changed) = me.observe_local(text) {
-                    if me.config.with(|c| c.auto_send) {
-                        Self::broadcast(&core, &changed).await;
-                    }
+                if let Some(changed) = me.observe_local(text)
+                    && me.config.with(|c| c.auto_send)
+                {
+                    Self::broadcast(&core, &changed).await;
                 }
             }
         });
@@ -156,7 +176,13 @@ impl Plugin for ClipboardPlugin {
             (s.current.clone(), s.changed_at)
         };
         if let Some(content) = content {
-            let p = Packet::new(types::CLIPBOARD_CONNECT, ClipboardBody { content, timestamp: Some(ts) });
+            let p = Packet::new(
+                types::CLIPBOARD_CONNECT,
+                ClipboardBody {
+                    content,
+                    timestamp: Some(ts),
+                },
+            );
             let _ = dev.send_if_supported(p).await;
         }
     }
@@ -168,19 +194,39 @@ impl Plugin for ClipboardPlugin {
             types::CLIPBOARD_CONNECT => {
                 let ts = body.timestamp.unwrap_or(0);
                 let newer = ts > 0 && ts > self.state.lock().unwrap().changed_at;
-                if newer { self.apply_remote(dev, body.content, ts).await } else { Ok(()) }
+                if newer {
+                    self.apply_remote(dev, body.content, ts).await
+                } else {
+                    Ok(())
+                }
             }
             _ => Ok(()),
         }
     }
 
-    async fn handle_action(&self, dev: Option<&DeviceHandle>, action: &str, args: Value) -> Result<Value> {
+    async fn handle_action(
+        &self,
+        dev: Option<&DeviceHandle>,
+        action: &str,
+        args: Value,
+    ) -> Result<Value> {
         match action {
             "send" => {
                 // Explicit push of the current clipboard to one device.
-                let text = self.platform.clipboard.get_text().await?.unwrap_or_default();
+                let text = self
+                    .platform
+                    .clipboard
+                    .get_text()
+                    .await?
+                    .unwrap_or_default();
                 crate::need_dev(dev)?
-                    .send(Packet::new(types::CLIPBOARD, ClipboardBody { content: text, timestamp: None }))
+                    .send(Packet::new(
+                        types::CLIPBOARD,
+                        ClipboardBody {
+                            content: text,
+                            timestamp: None,
+                        },
+                    ))
                     .await?;
                 Ok(Value::Null)
             }
@@ -204,7 +250,11 @@ mod tests {
     fn loop_prevention_state_machine() {
         let p = ClipboardPlugin::new(MockPlatform::new().platform());
         assert_eq!(p.observe_local("a".into()), Some("a".into()));
-        assert_eq!(p.observe_local("a".into()), None, "unchanged content is not resent");
+        assert_eq!(
+            p.observe_local("a".into()),
+            None,
+            "unchanged content is not resent"
+        );
         assert!(p.accept_remote("b", 1));
         // The watcher now sees "b" locally (we wrote it): must not echo.
         assert_eq!(p.observe_local("b".into()), None);

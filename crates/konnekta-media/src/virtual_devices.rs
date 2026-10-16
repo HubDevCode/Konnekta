@@ -21,7 +21,11 @@ pub struct VirtualMic {
 
 enum MicImpl {
     #[cfg(target_os = "linux")]
-    Pipe { fifo: tokio::fs::File, module: String, path: std::path::PathBuf },
+    Pipe {
+        fifo: tokio::fs::File,
+        module: String,
+        path: std::path::PathBuf,
+    },
     #[cfg(any(windows, target_os = "macos"))]
     Cpal(cpal_out::CpalOutput),
     #[allow(dead_code)]
@@ -37,7 +41,12 @@ impl VirtualMic {
                 .unwrap_or_else(std::env::temp_dir);
             let path = dir.join(format!("konnekta-mic-{}", std::process::id()));
             let _ = std::fs::remove_file(&path);
-            let st = tokio::process::Command::new("mkfifo").arg("-m").arg("600").arg(&path).status().await?;
+            let st = tokio::process::Command::new("mkfifo")
+                .arg("-m")
+                .arg("600")
+                .arg(&path)
+                .status()
+                .await?;
             if !st.success() {
                 bail!("mkfifo failed");
             }
@@ -57,14 +66,25 @@ impl VirtualMic {
                 .context("pactl not found (install pipewire-pulse or pulseaudio-utils)")?;
             if !out.status.success() {
                 let _ = std::fs::remove_file(&path);
-                bail!("cannot create virtual microphone: {}", String::from_utf8_lossy(&out.stderr));
+                bail!(
+                    "cannot create virtual microphone: {}",
+                    String::from_utf8_lossy(&out.stderr)
+                );
             }
             let module = String::from_utf8_lossy(&out.stdout).trim().to_string();
             let p = path.clone();
-            let fifo = tokio::task::spawn_blocking(move || std::fs::OpenOptions::new().write(true).open(p))
-                .await??;
+            let fifo = tokio::task::spawn_blocking(move || {
+                std::fs::OpenOptions::new().write(true).open(p)
+            })
+            .await??;
             tracing::info!("virtual microphone 'Konnekta Microphone' ready");
-            return Ok(Self { inner: MicImpl::Pipe { fifo: tokio::fs::File::from_std(fifo), module, path } });
+            return Ok(Self {
+                inner: MicImpl::Pipe {
+                    fifo: tokio::fs::File::from_std(fifo),
+                    module,
+                    path,
+                },
+            });
         }
         #[cfg(any(windows, target_os = "macos"))]
         {
@@ -72,7 +92,9 @@ impl VirtualMic {
             const NAMES: &[&str] = &["CABLE Input", "VB-Audio"];
             #[cfg(target_os = "macos")]
             const NAMES: &[&str] = &["BlackHole"];
-            return Ok(Self { inner: MicImpl::Cpal(cpal_out::CpalOutput::open(NAMES, 1)?) });
+            return Ok(Self {
+                inner: MicImpl::Cpal(cpal_out::CpalOutput::open(NAMES, 1)?),
+            });
         }
         #[allow(unreachable_code)]
         {
@@ -102,7 +124,9 @@ impl Drop for VirtualMic {
     fn drop(&mut self) {
         #[cfg(target_os = "linux")]
         if let MicImpl::Pipe { module, path, .. } = &self.inner {
-            let _ = std::process::Command::new("pactl").args(["unload-module", module]).status();
+            let _ = std::process::Command::new("pactl")
+                .args(["unload-module", module])
+                .status();
             let _ = std::fs::remove_file(path);
         }
     }
@@ -117,17 +141,40 @@ pub struct VirtualCamera {
 impl VirtualCamera {
     pub async fn create(width: u32, height: u32, fps: u32) -> Result<Self> {
         let _ = (width, height);
-        let mut args: Vec<String> = ["-loglevel", "error", "-fflags", "nobuffer", "-flags", "low_delay", "-f", "h264", "-i", "-"]
-            .into_iter()
-            .map(String::from)
-            .collect();
+        let mut args: Vec<String> = [
+            "-loglevel",
+            "error",
+            "-fflags",
+            "nobuffer",
+            "-flags",
+            "low_delay",
+            "-f",
+            "h264",
+            "-i",
+            "-",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
         #[cfg(target_os = "linux")]
         let description = {
             let dev = find_v4l2loopback().context(
                 "no v4l2loopback device found. Install v4l2loopback and run: \
                  sudo modprobe v4l2loopback card_label=\"Konnekta Camera\" exclusive_caps=1",
             )?;
-            args.extend(["-r", &fps.to_string(), "-pix_fmt", "yuv420p", "-f", "v4l2", &dev].into_iter().map(String::from));
+            args.extend(
+                [
+                    "-r",
+                    &fps.to_string(),
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-f",
+                    "v4l2",
+                    &dev,
+                ]
+                .into_iter()
+                .map(String::from),
+            );
             format!("v4l2 device {dev}")
         };
         #[cfg(not(target_os = "linux"))]
@@ -136,15 +183,28 @@ impl VirtualCamera {
             // drivers; until then we feed OBS (Media Source) whose Virtual
             // Camera is visible to every app.
             let url = format!("udp://127.0.0.1:{}?pkt_size=1316", OBS_UDP_PORT);
-            args.extend(["-c:v", "copy", "-r", &fps.to_string(), "-f", "mpegts", &url].into_iter().map(String::from));
-            format!("OBS Media Source at udp://127.0.0.1:{OBS_UDP_PORT} (then start OBS Virtual Camera)")
+            args.extend(
+                ["-c:v", "copy", "-r", &fps.to_string(), "-f", "mpegts", &url]
+                    .into_iter()
+                    .map(String::from),
+            );
+            format!(
+                "OBS Media Source at udp://127.0.0.1:{OBS_UDP_PORT} (then start OBS Virtual Camera)"
+            )
         };
         let pipeline = crate::pipeline::ProcessPipeline::spawn("ffmpeg", &args, true, false)?;
-        Ok(Self { pipeline, description })
+        Ok(Self {
+            pipeline,
+            description,
+        })
     }
 
     pub async fn write(&mut self, h264: &[u8]) -> Result<()> {
-        let stdin = self.pipeline.stdin.as_mut().context("camera pipeline closed")?;
+        let stdin = self
+            .pipeline
+            .stdin
+            .as_mut()
+            .context("camera pipeline closed")?;
         stdin.write_all(h264).await?;
         Ok(())
     }
@@ -171,8 +231,19 @@ pub fn find_v4l2loopback() -> Option<String> {
 /// Window showing the phone screen on the desktop (ffplay).
 pub fn screen_viewer(title: &str) -> Result<crate::pipeline::ProcessPipeline> {
     let args: Vec<String> = [
-        "-loglevel", "error", "-fflags", "nobuffer", "-flags", "low_delay", "-framedrop",
-        "-window_title", title, "-f", "h264", "-i", "-",
+        "-loglevel",
+        "error",
+        "-fflags",
+        "nobuffer",
+        "-flags",
+        "low_delay",
+        "-framedrop",
+        "-window_title",
+        title,
+        "-f",
+        "h264",
+        "-i",
+        "-",
     ]
     .into_iter()
     .map(String::from)
@@ -210,12 +281,20 @@ impl SystemAudioCapture {
                     }
                 }
             });
-            return Ok(Self { rx, stop, _proc: Some(p) });
+            return Ok(Self {
+                rx,
+                stop,
+                _proc: Some(p),
+            });
         }
         #[cfg(any(windows, target_os = "macos"))]
         {
             cpal_out::start_loopback(tx, stop.clone())?;
-            return Ok(Self { rx, stop, _proc: None });
+            return Ok(Self {
+                rx,
+                stop,
+                _proc: None,
+            });
         }
         #[allow(unreachable_code)]
         {
@@ -246,7 +325,12 @@ mod cpal_out {
 
     impl CpalOutput {
         pub fn open(names: &'static [&'static str], channels: u8) -> Result<Self> {
-            let jitter = Arc::new(Mutex::new(JitterBuffer::new(SAMPLE_RATE, channels, 60, 250)));
+            let jitter = Arc::new(Mutex::new(JitterBuffer::new(
+                SAMPLE_RATE,
+                channels,
+                60,
+                250,
+            )));
             let stop = Arc::new(AtomicBool::new(false));
             let (j, s) = (jitter.clone(), stop.clone());
             let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<()>>();
@@ -320,7 +404,10 @@ mod cpal_out {
 
     /// Loopback capture of the default output (Windows WASAPI) or of the
     /// BlackHole input (macOS), converted to s16le 48 kHz stereo.
-    pub fn start_loopback(tx: tokio::sync::mpsc::Sender<Vec<u8>>, stop: Arc<AtomicBool>) -> Result<()> {
+    pub fn start_loopback(
+        tx: tokio::sync::mpsc::Sender<Vec<u8>>,
+        stop: Arc<AtomicBool>,
+    ) -> Result<()> {
         let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<()>>();
         std::thread::spawn(move || {
             let r = (|| -> Result<cpal::Stream> {
@@ -331,7 +418,9 @@ mod cpal_out {
                 let dev = host
                     .input_devices()?
                     .find(|d| d.name().map(|n| n.contains("BlackHole")).unwrap_or(false))
-                    .context("install BlackHole and route system output to it (Multi-Output Device)")?;
+                    .context(
+                        "install BlackHole and route system output to it (Multi-Output Device)",
+                    )?;
                 #[cfg(windows)]
                 let cfg = dev.default_output_config()?;
                 #[cfg(target_os = "macos")]

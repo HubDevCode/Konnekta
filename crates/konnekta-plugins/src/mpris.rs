@@ -58,8 +58,15 @@ impl MprisPlugin {
 
     async fn send_player_list(&self, dev: &DeviceHandle) -> Result<()> {
         let players = self.platform.media.players().await.unwrap_or_default();
-        let mut p = Packet::new(types::MPRIS, MprisBody { player_list: Some(players), ..Default::default() });
-        p.body.insert("supportAlbumArtPayload".into(), Value::Bool(false));
+        let mut p = Packet::new(
+            types::MPRIS,
+            MprisBody {
+                player_list: Some(players),
+                ..Default::default()
+            },
+        );
+        p.body
+            .insert("supportAlbumArtPayload".into(), Value::Bool(false));
         dev.send(p).await
     }
 
@@ -78,18 +85,28 @@ impl MprisPlugin {
         if let Some(off) = req.seek {
             m.seek(player.as_deref(), off).await?;
         }
-        if let Some(pos_ms) = req.set_position {
-            if let Ok(Some(s)) = m.status(player.as_deref()).await {
-                m.seek(player.as_deref(), (pos_ms - s.position_ms) * 1000).await?;
-            }
+        if let Some(pos_ms) = req.set_position
+            && let Ok(Some(s)) = m.status(player.as_deref()).await
+        {
+            m.seek(player.as_deref(), (pos_ms - s.position_ms) * 1000)
+                .await?;
         }
         if req.request_player_list == Some(true) {
             self.send_player_list(dev).await?;
         }
-        if req.request_now_playing == Some(true) || req.request_volume == Some(true) || req.action.is_some() {
-            self.subscribers.lock().unwrap().insert(dev.id().to_owned(), player.clone());
+        if req.request_now_playing == Some(true)
+            || req.request_volume == Some(true)
+            || req.action.is_some()
+        {
+            self.subscribers
+                .lock()
+                .unwrap()
+                .insert(dev.id().to_owned(), player.clone());
             if let Some(b) = self.now_playing(player.as_deref()).await {
-                self.last_sent.lock().unwrap().insert(dev.id().to_owned(), b.clone());
+                self.last_sent
+                    .lock()
+                    .unwrap()
+                    .insert(dev.id().to_owned(), b.clone());
                 dev.send(Packet::new(types::MPRIS, b)).await?;
             }
         }
@@ -117,15 +134,27 @@ impl Plugin for MprisPlugin {
             let mut tick = tokio::time::interval(Duration::from_secs(1));
             while core.is_alive() {
                 tick.tick().await;
-                let subs: Vec<(String, Option<String>)> =
-                    self.subscribers.lock().unwrap().iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                let subs: Vec<(String, Option<String>)> = self
+                    .subscribers
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
                 for (id, player) in subs {
-                    let Some(dev) = core.device(&id) else { continue };
-                    let Some(mut b) = self.now_playing(player.as_deref()).await else { continue };
+                    let Some(dev) = core.device(&id) else {
+                        continue;
+                    };
+                    let Some(mut b) = self.now_playing(player.as_deref()).await else {
+                        continue;
+                    };
                     let changed = {
                         let last = self.last_sent.lock().unwrap();
                         // Position always moves while playing: compare without it.
-                        let strip = |x: &MprisBody| MprisBody { pos: None, ..x.clone() };
+                        let strip = |x: &MprisBody| MprisBody {
+                            pos: None,
+                            ..x.clone()
+                        };
                         last.get(&id).map(|l| strip(l) != strip(&b)).unwrap_or(true)
                     };
                     if changed {
@@ -153,7 +182,12 @@ impl Plugin for MprisPlugin {
                 let key = b.player.clone().unwrap_or_default();
                 dev.emit("mpris", "remoteStatus", Value::Object(p.body.clone()));
                 if b.player_list.is_none() {
-                    self.remote.lock().unwrap().entry(dev.id().to_owned()).or_default().insert(key, b);
+                    self.remote
+                        .lock()
+                        .unwrap()
+                        .entry(dev.id().to_owned())
+                        .or_default()
+                        .insert(key, b);
                 }
                 Ok(())
             }
@@ -161,48 +195,87 @@ impl Plugin for MprisPlugin {
         }
     }
 
-    async fn handle_action(&self, dev: Option<&DeviceHandle>, action: &str, args: Value) -> Result<Value> {
-        let player = args.get("player").and_then(Value::as_str).map(str::to_owned);
+    async fn handle_action(
+        &self,
+        dev: Option<&DeviceHandle>,
+        action: &str,
+        args: Value,
+    ) -> Result<Value> {
+        let player = args
+            .get("player")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
         match action {
             // Local player status (for the desktop UI).
-            "localStatus" => Ok(serde_json::to_value(self.platform.media.status(player.as_deref()).await?)?),
+            "localStatus" => Ok(serde_json::to_value(
+                self.platform.media.status(player.as_deref()).await?,
+            )?),
             "localPlayers" => Ok(serde_json::to_value(self.platform.media.players().await?)?),
             // Control media on the phone.
             "remoteRefresh" => {
                 crate::need_dev(dev)?
                     .send(Packet::new(
                         types::MPRIS_REQUEST,
-                        MprisRequestBody { request_player_list: Some(true), request_now_playing: Some(true), player, ..Default::default() },
+                        MprisRequestBody {
+                            request_player_list: Some(true),
+                            request_now_playing: Some(true),
+                            player,
+                            ..Default::default()
+                        },
                     ))
                     .await?;
                 Ok(Value::Null)
             }
             "remoteControl" => {
-                let a = args.get("action").and_then(Value::as_str).unwrap_or_default();
+                let a = args
+                    .get("action")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
                 if MediaAction::parse(a).is_none() {
                     bail!("unknown media action {a}");
                 }
                 crate::need_dev(dev)?
                     .send(Packet::new(
                         types::MPRIS_REQUEST,
-                        MprisRequestBody { player, action: Some(a.to_owned()), ..Default::default() },
+                        MprisRequestBody {
+                            player,
+                            action: Some(a.to_owned()),
+                            ..Default::default()
+                        },
                     ))
                     .await?;
                 Ok(Value::Null)
             }
             "remoteVolume" => {
-                let v = args.get("volume").and_then(Value::as_i64).unwrap_or(50).clamp(0, 100) as i32;
+                let v = args
+                    .get("volume")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(50)
+                    .clamp(0, 100) as i32;
                 crate::need_dev(dev)?
-                    .send(Packet::new(types::MPRIS_REQUEST, MprisRequestBody { player, set_volume: Some(v), ..Default::default() }))
+                    .send(Packet::new(
+                        types::MPRIS_REQUEST,
+                        MprisRequestBody {
+                            player,
+                            set_volume: Some(v),
+                            ..Default::default()
+                        },
+                    ))
                     .await?;
                 Ok(Value::Null)
             }
             "remoteStatus" => {
                 let d = crate::need_dev(dev)?;
-                Ok(serde_json::to_value(self.remote.lock().unwrap().get(d.id()).cloned().unwrap_or_default())?)
+                Ok(serde_json::to_value(
+                    self.remote
+                        .lock()
+                        .unwrap()
+                        .get(d.id())
+                        .cloned()
+                        .unwrap_or_default(),
+                )?)
             }
             _ => bail!("unknown action {action}"),
         }
     }
 }
-

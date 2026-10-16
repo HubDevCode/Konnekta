@@ -39,7 +39,12 @@ async fn node(name: &str) -> Node {
         .unwrap();
     let ev = k.subscribe();
     k.start().await.unwrap();
-    Node { k, mock, ev, _dir: dir }
+    Node {
+        k,
+        mock,
+        ev,
+        _dir: dir,
+    }
 }
 
 async fn wait<F: FnMut(&Event) -> bool>(rx: &mut broadcast::Receiver<Event>, mut f: F) -> Event {
@@ -69,7 +74,9 @@ async fn eventually<F: FnMut() -> bool>(mut f: F) {
 async fn paired_pair() -> (Node, Node) {
     let mut a = node("Desktop").await;
     let mut b = node("Phone").await;
-    a.k.connect_to(SocketAddr::new(LO, b.k.udp_port())).await.unwrap();
+    a.k.connect_to(SocketAddr::new(LO, b.k.udp_port()))
+        .await
+        .unwrap();
     wait(&mut a.ev, |e| matches!(e, Event::DeviceConnected { .. })).await;
     wait(&mut b.ev, |e| matches!(e, Event::DeviceConnected { .. })).await;
     let (aid, bid) = (a.k.device_id().to_string(), b.k.device_id().to_string());
@@ -89,8 +96,17 @@ async fn clipboard_syncs_both_ways_without_loops() {
     eventually(|| a.mock.clipboard.lock().unwrap().as_deref() == Some("from phone")).await;
     // Give watchers time to (wrongly) bounce content back.
     tokio::time::sleep(Duration::from_millis(1500)).await;
-    let sets = |m: &MockPlatform| m.calls().iter().filter(|c| c.starts_with("clipboard.set")).count();
-    assert_eq!(sets(&a.mock), 1, "desktop applied exactly one remote update");
+    let sets = |m: &MockPlatform| {
+        m.calls()
+            .iter()
+            .filter(|c| c.starts_with("clipboard.set"))
+            .count()
+    };
+    assert_eq!(
+        sets(&a.mock),
+        1,
+        "desktop applied exactly one remote update"
+    );
     assert_eq!(sets(&b.mock), 1, "phone applied exactly one remote update");
 }
 
@@ -103,14 +119,26 @@ async fn file_transfer_with_integrity_and_destination() {
     let data: Vec<u8> = (0..1_500_000u32).map(|i| (i * 7 % 256) as u8).collect();
     std::fs::write(&path, &data).unwrap();
     let dest = tempfile::tempdir().unwrap();
-    b.k.plugin_action(None, "share", "setConfig", json!({ "destination": dest.path() })).await.unwrap();
-    a.k.plugin_action(Some(&bid), "share", "sendFiles", json!({ "paths": [path] })).await.unwrap();
+    b.k.plugin_action(
+        None,
+        "share",
+        "setConfig",
+        json!({ "destination": dest.path() }),
+    )
+    .await
+    .unwrap();
+    a.k.plugin_action(Some(&bid), "share", "sendFiles", json!({ "paths": [path] }))
+        .await
+        .unwrap();
     wait(&mut b.ev, |e| matches!(e, Event::Plugin { plugin, data, .. } if plugin == "share" && data["state"] == "completed")).await;
     let got = std::fs::read(dest.path().join("report.bin")).unwrap();
     assert_eq!(Sha256::digest(&got), Sha256::digest(&data));
     // No leftover partial files.
     assert_eq!(std::fs::read_dir(dest.path()).unwrap().count(), 1);
-    let t = b.k.plugin_action(None, "share", "transfers", json!(null)).await.unwrap();
+    let t =
+        b.k.plugin_action(None, "share", "transfers", json!(null))
+            .await
+            .unwrap();
     assert_eq!(t[0]["direction"], "incoming");
 }
 
@@ -118,24 +146,48 @@ async fn file_transfer_with_integrity_and_destination() {
 async fn commands_need_permission_and_run_by_key() {
     let (a, b) = paired_pair().await;
     let (aid, bid) = (a.k.device_id().to_string(), b.k.device_id().to_string());
-    let r = a
-        .k
-        .plugin_action(None, "runcommand", "add", json!({ "name": "Lock", "actions": [{ "type": "shell", "command": "lock-now" }] }))
+    let r =
+        a.k.plugin_action(
+            None,
+            "runcommand",
+            "add",
+            json!({ "name": "Lock", "actions": [{ "type": "shell", "command": "lock-now" }] }),
+        )
         .await
         .unwrap();
     let key = r["id"].as_str().unwrap().to_owned();
     // Phone grants itself the right to send, desktop has not granted it yet.
-    b.k.set_permission(&aid, Permission::Commands, true).unwrap();
-    b.k.plugin_action(Some(&aid), "runcommand", "runRemote", json!({ "key": key })).await.unwrap();
+    b.k.set_permission(&aid, Permission::Commands, true)
+        .unwrap();
+    b.k.plugin_action(Some(&aid), "runcommand", "runRemote", json!({ "key": key }))
+        .await
+        .unwrap();
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert!(!a.mock.calls().iter().any(|c| c == "shell:lock-now"));
-    a.k.set_permission(&bid, Permission::Commands, true).unwrap();
-    b.k.plugin_action(Some(&aid), "runcommand", "runRemote", json!({ "key": key })).await.unwrap();
+    a.k.set_permission(&bid, Permission::Commands, true)
+        .unwrap();
+    b.k.plugin_action(Some(&aid), "runcommand", "runRemote", json!({ "key": key }))
+        .await
+        .unwrap();
     eventually(|| a.mock.calls().iter().any(|c| c == "shell:lock-now")).await;
     // Unknown keys never execute anything.
-    b.k.plugin_action(Some(&aid), "runcommand", "runRemote", json!({ "key": "rm -rf /" })).await.unwrap();
+    b.k.plugin_action(
+        Some(&aid),
+        "runcommand",
+        "runRemote",
+        json!({ "key": "rm -rf /" }),
+    )
+    .await
+    .unwrap();
     tokio::time::sleep(Duration::from_millis(300)).await;
-    assert_eq!(a.mock.calls().iter().filter(|c| c.starts_with("shell:")).count(), 1);
+    assert_eq!(
+        a.mock
+            .calls()
+            .iter()
+            .filter(|c| c.starts_with("shell:"))
+            .count(),
+        1
+    );
 }
 
 #[tokio::test]
@@ -144,9 +196,17 @@ async fn deck_press_from_phone_runs_macro() {
     let (aid, bid) = (a.k.device_id().to_string(), b.k.device_id().to_string());
     a.k.set_permission(&bid, Permission::Deck, true).unwrap();
     b.k.set_permission(&aid, Permission::Deck, true).unwrap();
-    let deck = a.k.plugin_action(None, "deck", "get", json!(null)).await.unwrap();
+    let deck =
+        a.k.plugin_action(None, "deck", "get", json!(null))
+            .await
+            .unwrap();
     let page = &deck["profiles"][0]["pages"][0];
-    let next = page["buttons"].as_array().unwrap().iter().find(|x| x["label"] == "Successivo").unwrap();
+    let next = page["buttons"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|x| x["label"] == "Successivo")
+        .unwrap();
     // The phone side has no Deck UI in tests: send the raw request packet.
     let h = b.k.device_handle(&aid).unwrap();
     h.send(Packet::new(
@@ -166,17 +226,35 @@ async fn screenshots_are_saved_deduplicated_and_copied() {
     a.k.plugin_action(None, "screenshot", "setConfig", json!({ "save": true, "folder": folder.path(), "copyToClipboard": true, "autoTransfer": true }))
         .await
         .unwrap();
-    let png: Vec<u8> = [&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A][..], &[42u8; 5000][..]].concat();
+    let png: Vec<u8> = [
+        &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A][..],
+        &[42u8; 5000][..],
+    ]
+    .concat();
     let hash = hex::encode(Sha256::digest(&png));
     let h = b.k.device_handle(&aid).unwrap();
     for _ in 0..2 {
-        let p = Packet::new(types::K_SCREENSHOT, json!({ "filename": "Screenshot_1.png", "sha256": hash }));
-        let t = h.send_with_payload(p, konnekta_core::payload::PayloadSource::Bytes(png.clone()), None).await.unwrap();
+        let p = Packet::new(
+            types::K_SCREENSHOT,
+            json!({ "filename": "Screenshot_1.png", "sha256": hash }),
+        );
+        let t = h
+            .send_with_payload(
+                p,
+                konnekta_core::payload::PayloadSource::Bytes(png.clone()),
+                None,
+            )
+            .await
+            .unwrap();
         let _ = tokio::time::timeout(Duration::from_secs(5), t).await;
     }
     wait(&mut a.ev, |e| matches!(e, Event::Plugin { plugin, kind, .. } if plugin == "screenshot" && kind == "received")).await;
     tokio::time::sleep(Duration::from_millis(300)).await;
-    assert_eq!(std::fs::read_dir(folder.path()).unwrap().count(), 1, "duplicate not saved twice");
+    assert_eq!(
+        std::fs::read_dir(folder.path()).unwrap().count(),
+        1,
+        "duplicate not saved twice"
+    );
     assert_eq!(a.mock.png.lock().unwrap().as_deref(), Some(&png[..]));
 }
 
@@ -184,14 +262,22 @@ async fn screenshots_are_saved_deduplicated_and_copied() {
 async fn notifications_are_shown_and_filtered() {
     let (a, b) = paired_pair().await;
     let aid = a.k.device_id().to_string();
-    a.k.plugin_action(None, "notifications", "setFilter", json!({ "blockedApps": ["Spam"], "showPopups": true }))
-        .await
-        .unwrap();
+    a.k.plugin_action(
+        None,
+        "notifications",
+        "setFilter",
+        json!({ "blockedApps": ["Spam"], "showPopups": true }),
+    )
+    .await
+    .unwrap();
     let h = b.k.device_handle(&aid).unwrap();
     for (app, title) in [("Spam", "buy"), ("Signal", "hello")] {
-        h.send(Packet::new(types::NOTIFICATION, json!({ "id": app, "appName": app, "title": title, "text": "x", "isClearable": true })))
-            .await
-            .unwrap();
+        h.send(Packet::new(
+            types::NOTIFICATION,
+            json!({ "id": app, "appName": app, "title": title, "text": "x", "isClearable": true }),
+        ))
+        .await
+        .unwrap();
     }
     eventually(|| a.mock.calls().iter().any(|c| c == "notify:hello:x")).await;
     assert!(!a.mock.calls().iter().any(|c| c.contains("buy")));
@@ -203,7 +289,15 @@ async fn desktop_interoperates_with_mobile_bridge() {
     use konnekta_plugins::bridge::{PendingPayloads, mobile};
     let mut desk = node("Desktop").await;
     let dir = tempfile::tempdir().unwrap();
-    let cfg = Config { device_name: "Phone".into(), device_type: konnekta_core::proto::DeviceType::Phone, bind_addr: LO, tcp_port: 0, udp_port: 0, announce: false, ..Config::default() };
+    let cfg = Config {
+        device_name: "Phone".into(),
+        device_type: konnekta_core::proto::DeviceType::Phone,
+        bind_addr: LO,
+        tcp_port: 0,
+        udp_port: 0,
+        announce: false,
+        ..Config::default()
+    };
     let phone = Konnekta::builder(cfg)
         .data_dir(dir.path())
         .plugins(mobile(Arc::new(PendingPayloads::default()), true))
@@ -211,7 +305,10 @@ async fn desktop_interoperates_with_mobile_bridge() {
         .unwrap();
     let mut pev = phone.subscribe();
     phone.start().await.unwrap();
-    phone.connect_to(SocketAddr::new(LO, desk.k.udp_port())).await.unwrap();
+    phone
+        .connect_to(SocketAddr::new(LO, desk.k.udp_port()))
+        .await
+        .unwrap();
     wait(&mut pev, |e| matches!(e, Event::DeviceConnected { .. })).await;
     let did = desk.k.device_id().to_string();
     let pid = phone.device_id().to_string();
@@ -224,18 +321,37 @@ async fn desktop_interoperates_with_mobile_bridge() {
     phone
         .device_handle(&did)
         .unwrap()
-        .send(Packet::new(types::NOTIFICATION, json!({ "id": "n1", "appName": "Telegram", "title": "Hi", "text": "there" })))
+        .send(Packet::new(
+            types::NOTIFICATION,
+            json!({ "id": "n1", "appName": "Telegram", "title": "Hi", "text": "there" }),
+        ))
         .await
         .unwrap();
     eventually(|| desk.mock.calls().iter().any(|c| c == "notify:Hi:there")).await;
 
     // Desktop -> phone ping arrives as a bridge event for the app.
-    desk.k.plugin_action(Some(&pid), "ping", "send", json!({ "message": "yo" })).await.unwrap();
-    let e = wait(&mut pev, |e| matches!(e, Event::Plugin { plugin, kind, .. } if plugin == "ping" && kind == "packet")).await;
-    let Event::Plugin { data, .. } = e else { unreachable!() };
+    desk.k
+        .plugin_action(Some(&pid), "ping", "send", json!({ "message": "yo" }))
+        .await
+        .unwrap();
+    let e = wait(
+        &mut pev,
+        |e| matches!(e, Event::Plugin { plugin, kind, .. } if plugin == "ping" && kind == "packet"),
+    )
+    .await;
+    let Event::Plugin { data, .. } = e else {
+        unreachable!()
+    };
     assert_eq!(data["body"]["message"], "yo");
 
     // The desktop can't remote-control the phone's input: the phone bridge
     // declares mousepad as outgoing only.
-    assert!(desk.k.device(&pid).unwrap().incoming_capabilities.iter().all(|c| c != types::MOUSEPAD_REQUEST));
+    assert!(
+        desk.k
+            .device(&pid)
+            .unwrap()
+            .incoming_capabilities
+            .iter()
+            .all(|c| c != types::MOUSEPAD_REQUEST)
+    );
 }

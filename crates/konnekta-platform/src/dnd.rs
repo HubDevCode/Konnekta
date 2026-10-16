@@ -19,7 +19,9 @@ pub trait DndBackend: Send + Sync {
 pub fn native() -> Arc<dyn DndBackend> {
     #[cfg(target_os = "linux")]
     if crate::cmd::exists("gsettings")
-        && std::env::var("XDG_CURRENT_DESKTOP").map(|d| d.contains("GNOME")).unwrap_or(false)
+        && std::env::var("XDG_CURRENT_DESKTOP")
+            .map(|d| d.contains("GNOME"))
+            .unwrap_or(false)
     {
         return Arc::new(Gnome);
     }
@@ -33,15 +35,22 @@ pub struct Gnome;
 #[async_trait]
 impl DndBackend for Gnome {
     async fn get(&self) -> Result<Option<bool>> {
-        let v = crate::cmd::output("gsettings", &["get", "org.gnome.desktop.notifications", "show-banners"]).await?;
+        let v = crate::cmd::output(
+            "gsettings",
+            &["get", "org.gnome.desktop.notifications", "show-banners"],
+        )
+        .await?;
         Ok(Some(v.trim() == "false"))
     }
 
     async fn set(&self, enabled: bool) -> Result<()> {
         let v = if enabled { "false" } else { "true" };
-        crate::cmd::output("gsettings", &["set", "org.gnome.desktop.notifications", "show-banners", v])
-            .await
-            .map(drop)
+        crate::cmd::output(
+            "gsettings",
+            &["set", "org.gnome.desktop.notifications", "show-banners", v],
+        )
+        .await
+        .map(drop)
     }
 
     fn supported(&self) -> bool {

@@ -18,12 +18,17 @@ impl<T: Serialize + DeserializeOwned + Default + Clone> Default for JsonStore<T>
 
 impl<T: Serialize + DeserializeOwned + Default + Clone> JsonStore<T> {
     pub fn new(initial: T) -> Self {
-        Self { path: OnceLock::new(), value: Mutex::new(initial) }
+        Self {
+            path: OnceLock::new(),
+            value: Mutex::new(initial),
+        }
     }
 
     /// Bind to `<data>/plugins/<plugin>/<file>` and load existing content.
     pub fn attach(&self, core: &CoreHandle, plugin: &str, file: &str) {
-        let Some(dir) = core.plugin_data_dir(plugin) else { return };
+        let Some(dir) = core.plugin_data_dir(plugin) else {
+            return;
+        };
         let path = dir.join(file);
         if let Ok(raw) = std::fs::read(&path) {
             match serde_json::from_slice::<T>(&raw) {

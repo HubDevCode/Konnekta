@@ -164,7 +164,9 @@ fn load_key(path: &Path, _device_id: &str) -> Result<Option<Vec<u8>>> {
                 use std::os::unix::fs::PermissionsExt;
                 let mode = std::fs::metadata(path)?.permissions().mode();
                 if mode & 0o077 != 0 {
-                    tracing::warn!("private key file is accessible by other users; fixing permissions");
+                    tracing::warn!(
+                        "private key file is accessible by other users; fixing permissions"
+                    );
                     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
                 }
             }

@@ -18,7 +18,9 @@ struct AppState {
 
 #[tauri::command]
 async fn api(state: State<'_, AppState>, method: String, params: Value) -> Result<Value, String> {
-    konnekta_core::api::call(&state.k, &method, params).await.map_err(|e| format!("{e:#}"))
+    konnekta_core::api::call(&state.k, &method, params)
+        .await
+        .map_err(|e| format!("{e:#}"))
 }
 
 #[tauri::command]
@@ -63,7 +65,8 @@ async fn start_core() -> anyhow::Result<Konnekta> {
     k.start().await?;
     let ipc_k = k.clone();
     tokio::spawn(async move {
-        if let Err(e) = konnekta_core::ipc::listen(konnekta_core::ipc::endpoint(&dir), ipc_k).await {
+        if let Err(e) = konnekta_core::ipc::listen(konnekta_core::ipc::endpoint(&dir), ipc_k).await
+        {
             tracing::warn!("control socket unavailable: {e:#}");
         }
     });
@@ -72,10 +75,14 @@ async fn start_core() -> anyhow::Result<Konnekta> {
 
 fn main() {
     tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+        )
         .init();
     tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _, _| show_main(app)))
+        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
+            show_main(app)
+        }))
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let k = tauri::async_runtime::block_on(start_core())?;
@@ -88,7 +95,11 @@ fn main() {
                     match rx.recv().await {
                         Ok(ev) => {
                             // Bring the window up for pairing requests and security alerts.
-                            if matches!(ev, konnekta_core::Event::PairRequested { .. } | konnekta_core::Event::SecurityWarning { .. }) {
+                            if matches!(
+                                ev,
+                                konnekta_core::Event::PairRequested { .. }
+                                    | konnekta_core::Event::SecurityWarning { .. }
+                            ) {
                                 show_main(&handle);
                             }
                             let _ = handle.emit("konnekta", &ev);
@@ -102,7 +113,9 @@ fn main() {
             let show = MenuItem::with_id(app, "show", "Apri Konnekta", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Esci", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show, &quit])?;
-            let mut tray = TrayIconBuilder::with_id("konnekta").menu(&menu).tooltip("Konnekta");
+            let mut tray = TrayIconBuilder::with_id("konnekta")
+                .menu(&menu)
+                .tooltip("Konnekta");
             if let Some(icon) = app.default_window_icon() {
                 tray = tray.icon(icon.clone());
             }

@@ -25,7 +25,10 @@ use std::sync::Arc;
 #[derive(Clone, PartialEq, Eq)]
 pub enum PeerExpectation {
     /// Paired device: certificate must match byte for byte.
-    Pinned { device_id: String, cert_der: Vec<u8> },
+    Pinned {
+        device_id: String,
+        cert_der: Vec<u8>,
+    },
     /// Not (yet) paired: any certificate whose CN is `device_id`.
     Unpaired { device_id: String },
 }
@@ -33,14 +36,18 @@ pub enum PeerExpectation {
 impl std::fmt::Debug for PeerExpectation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Pinned { device_id, cert_der } => f
+            Self::Pinned {
+                device_id,
+                cert_der,
+            } => f
                 .debug_struct("Pinned")
                 .field("device_id", device_id)
                 .field("fingerprint", &crate::cert_fingerprint(cert_der))
                 .finish(),
-            Self::Unpaired { device_id } => {
-                f.debug_struct("Unpaired").field("device_id", device_id).finish()
-            }
+            Self::Unpaired { device_id } => f
+                .debug_struct("Unpaired")
+                .field("device_id", device_id)
+                .finish(),
         }
     }
 }
@@ -63,7 +70,9 @@ impl PeerExpectation {
                         got = %crate::cert_fingerprint(presented),
                         "certificate pin mismatch: possible MITM or reinstalled device"
                     );
-                    Err(Error::InvalidCertificate(CertificateError::ApplicationVerificationFailure))
+                    Err(Error::InvalidCertificate(
+                        CertificateError::ApplicationVerificationFailure,
+                    ))
                 }
             }
             Self::Unpaired { device_id } => match cert_common_name(presented) {
@@ -192,7 +201,10 @@ pub fn client_config(local: &LocalIdentity, expect: PeerExpectation) -> Result<A
         .with_protocol_versions(VERSIONS)?
         .dangerous() // custom verifier: pinning instead of WebPKI, see module docs
         .with_custom_certificate_verifier(verifier)
-        .with_client_auth_cert(vec![CertificateDer::from(local.cert_der.clone())], key(local))?;
+        .with_client_auth_cert(
+            vec![CertificateDer::from(local.cert_der.clone())],
+            key(local),
+        )?;
     Ok(Arc::new(cfg))
 }
 
@@ -206,7 +218,10 @@ pub fn server_config(local: &LocalIdentity, expect: PeerExpectation) -> Result<A
     let cfg = ServerConfig::builder_with_provider(provider)
         .with_protocol_versions(VERSIONS)?
         .with_client_cert_verifier(verifier)
-        .with_single_cert(vec![CertificateDer::from(local.cert_der.clone())], key(local))?;
+        .with_single_cert(
+            vec![CertificateDer::from(local.cert_der.clone())],
+            key(local),
+        )?;
     Ok(Arc::new(cfg))
 }
 
@@ -251,11 +266,16 @@ mod tests {
     }
 
     fn pinned(id: &LocalIdentity) -> PeerExpectation {
-        PeerExpectation::Pinned { device_id: id.device_id.clone(), cert_der: id.cert_der.clone() }
+        PeerExpectation::Pinned {
+            device_id: id.device_id.clone(),
+            cert_der: id.cert_der.clone(),
+        }
     }
 
     fn unpaired(id: &LocalIdentity) -> PeerExpectation {
-        PeerExpectation::Unpaired { device_id: id.device_id.clone() }
+        PeerExpectation::Unpaired {
+            device_id: id.device_id.clone(),
+        }
     }
 
     #[tokio::test]

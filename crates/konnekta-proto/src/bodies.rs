@@ -43,27 +43,55 @@ pub struct ShareBody {
     pub text: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
-    #[serde(rename = "creationTime", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "creationTime",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub creation_time: Option<i64>,
-    #[serde(rename = "lastModified", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "lastModified",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub last_modified: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub open: Option<bool>,
-    #[serde(rename = "numberOfFiles", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "numberOfFiles",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub number_of_files: Option<u32>,
-    #[serde(rename = "totalPayloadSize", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "totalPayloadSize",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub total_payload_size: Option<i64>,
     /// Konnekta extension: resume offset (bytes already present at receiver).
-    #[serde(rename = "konnektaResumeFrom", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "konnektaResumeFrom",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub resume_from: Option<u64>,
     /// Konnekta extension: SHA-256 of the full file, for integrity / dedup.
-    #[serde(rename = "konnektaSha256", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "konnektaSha256",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub sha256: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct MprisBody {
-    #[serde(rename = "playerList", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "playerList",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub player_list: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub player: Option<String>,
@@ -87,7 +115,11 @@ pub struct MprisBody {
     pub can_play: Option<bool>,
     #[serde(rename = "canGoNext", default, skip_serializing_if = "Option::is_none")]
     pub can_go_next: Option<bool>,
-    #[serde(rename = "canGoPrevious", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "canGoPrevious",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub can_go_previous: Option<bool>,
 }
 
@@ -100,15 +132,31 @@ pub struct MprisRequestBody {
     pub action: Option<String>,
     #[serde(rename = "setVolume", default, skip_serializing_if = "Option::is_none")]
     pub set_volume: Option<i32>,
-    #[serde(rename = "requestPlayerList", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "requestPlayerList",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub request_player_list: Option<bool>,
-    #[serde(rename = "requestNowPlaying", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "requestNowPlaying",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub request_now_playing: Option<bool>,
-    #[serde(rename = "requestVolume", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "requestVolume",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub request_volume: Option<bool>,
     #[serde(rename = "Seek", default, skip_serializing_if = "Option::is_none")]
     pub seek: Option<i64>,
-    #[serde(rename = "SetPosition", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "SetPosition",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub set_position: Option<i64>,
 }
 
@@ -134,7 +182,11 @@ pub struct MousepadBody {
     pub scroll: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
-    #[serde(rename = "specialKey", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "specialKey",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub special_key: Option<u32>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub shift: bool,
@@ -144,13 +196,25 @@ pub struct MousepadBody {
     pub alt: bool,
     #[serde(rename = "super", default, skip_serializing_if = "std::ops::Not::not")]
     pub super_key: bool,
-    #[serde(rename = "sendAck", default, skip_serializing_if = "std::ops::Not::not")]
+    #[serde(
+        rename = "sendAck",
+        default,
+        skip_serializing_if = "std::ops::Not::not"
+    )]
     pub send_ack: bool,
     /// Konnekta extension: absolute pointer position normalised to 0..1
     /// (used by remote desktop where the phone shows the screen).
-    #[serde(rename = "konnektaAbsX", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "konnektaAbsX",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub abs_x: Option<f64>,
-    #[serde(rename = "konnektaAbsY", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "konnektaAbsY",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub abs_y: Option<f64>,
 }
 
@@ -198,7 +262,11 @@ impl RunCommandBody {
 pub struct RunCommandRequestBody {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
-    #[serde(rename = "requestCommandList", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "requestCommandList",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub request_command_list: Option<bool>,
 }
 
@@ -217,7 +285,11 @@ pub struct NotificationBody {
     pub is_clearable: bool,
     #[serde(rename = "isCancel", default)]
     pub is_cancel: bool,
-    #[serde(rename = "requestReplyId", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "requestReplyId",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub request_reply_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actions: Option<Vec<String>>,
@@ -231,9 +303,17 @@ pub struct NotificationBody {
 pub struct TelephonyBody {
     /// ringing, talking, missedCall, sms (deprecated)
     pub event: String,
-    #[serde(rename = "phoneNumber", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "phoneNumber",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub phone_number: Option<String>,
-    #[serde(rename = "contactName", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "contactName",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub contact_name: Option<String>,
     #[serde(rename = "isCancel", default)]
     pub is_cancel: bool,
@@ -340,7 +420,10 @@ mod tests {
         let mut m = BTreeMap::new();
         m.insert(
             "k1".to_string(),
-            RunCommandEntry { name: "Lock".into(), command: "loginctl lock-session".into() },
+            RunCommandEntry {
+                name: "Lock".into(),
+                command: "loginctl lock-session".into(),
+            },
         );
         let body = RunCommandBody::from_map(&m);
         let v = serde_json::to_value(&body).unwrap();
@@ -350,7 +433,10 @@ mod tests {
 
     #[test]
     fn mousepad_skips_false_flags() {
-        let b = MousepadBody { dx: Some(1.0), ..Default::default() };
+        let b = MousepadBody {
+            dx: Some(1.0),
+            ..Default::default()
+        };
         let s = serde_json::to_string(&b).unwrap();
         assert_eq!(s, r#"{"dx":1.0}"#);
     }

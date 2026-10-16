@@ -28,7 +28,10 @@ pub struct TelephonyConfig {
 
 impl Default for TelephonyConfig {
     fn default() -> Self {
-        Self { pause_media: true, show_number: true }
+        Self {
+            pause_media: true,
+            show_number: true,
+        }
     }
 }
 
@@ -63,10 +66,16 @@ impl TelephonyPlugin {
         if !self.config.with(|c| c.pause_media) {
             return;
         }
-        if let Ok(Some(s)) = self.platform.media.status(None).await {
-            if s.is_playing && self.platform.media.action(None, MediaAction::Pause).await.is_ok() {
-                *self.paused_by_us.lock().unwrap() = true;
-            }
+        if let Ok(Some(s)) = self.platform.media.status(None).await
+            && s.is_playing
+            && self
+                .platform
+                .media
+                .action(None, MediaAction::Pause)
+                .await
+                .is_ok()
+        {
+            *self.paused_by_us.lock().unwrap() = true;
         }
     }
 
@@ -121,11 +130,18 @@ impl Plugin for TelephonyPlugin {
             self.resume_media().await;
             return Ok(());
         }
-        let state = CallState { event: b.event.clone(), caller: caller.clone(), active: b.event != "missedCall" };
+        let state = CallState {
+            event: b.event.clone(),
+            caller: caller.clone(),
+            active: b.event != "missedCall",
+        };
         dev.emit("telephony", "call", serde_json::to_value(&state)?);
         match b.event.as_str() {
             "ringing" => {
-                self.calls.lock().unwrap().insert(dev.id().to_owned(), state);
+                self.calls
+                    .lock()
+                    .unwrap()
+                    .insert(dev.id().to_owned(), state);
                 self.pause_media().await;
                 let mut actions = vec![("mute".to_string(), "Mute".to_string())];
                 if dev.supports(types::K_CALL_ACTION) {
@@ -144,22 +160,36 @@ impl Plugin for TelephonyPlugin {
                         urgent: true,
                     },
                     Some(Box::new(move |a| {
-                        let (Some(core), Ok(rt)) = (core, tokio::runtime::Handle::try_current()) else { return };
+                        let (Some(core), Ok(rt)) = (core, tokio::runtime::Handle::try_current())
+                        else {
+                            return;
+                        };
                         rt.spawn(async move {
-                            let _ = core.plugin_action(Some(&dev_id), "telephony", &a, Value::Null).await;
+                            let _ = core
+                                .plugin_action(Some(&dev_id), "telephony", &a, Value::Null)
+                                .await;
                         });
                     })),
                 )?;
             }
             "talking" => {
-                self.calls.lock().unwrap().insert(dev.id().to_owned(), state);
+                self.calls
+                    .lock()
+                    .unwrap()
+                    .insert(dev.id().to_owned(), state);
                 self.platform.notifier.close(&key);
                 self.pause_media().await;
             }
             "missedCall" => {
                 self.calls.lock().unwrap().remove(dev.id());
                 self.platform.notifier.show(
-                    DesktopNotification { id: key, app_name: dev.name().into(), title: "Missed call".into(), body: caller, ..Default::default() },
+                    DesktopNotification {
+                        id: key,
+                        app_name: dev.name().into(),
+                        title: "Missed call".into(),
+                        body: caller,
+                        ..Default::default()
+                    },
                     None,
                 )?;
                 self.resume_media().await;
@@ -169,10 +199,19 @@ impl Plugin for TelephonyPlugin {
         Ok(())
     }
 
-    async fn handle_action(&self, dev: Option<&DeviceHandle>, action: &str, args: Value) -> Result<Value> {
+    async fn handle_action(
+        &self,
+        dev: Option<&DeviceHandle>,
+        action: &str,
+        args: Value,
+    ) -> Result<Value> {
         let call = |a| Packet::new(types::K_CALL_ACTION, CallActionBody { action: a });
         match action {
-            "mute" => crate::need_dev(dev)?.send(Packet::empty(types::TELEPHONY_REQUEST_MUTE)).await?,
+            "mute" => {
+                crate::need_dev(dev)?
+                    .send(Packet::empty(types::TELEPHONY_REQUEST_MUTE))
+                    .await?
+            }
             "accept" | "reject" | "hangup" => {
                 let d = crate::need_dev(dev)?;
                 if !d.supports(types::K_CALL_ACTION) {
@@ -187,7 +226,9 @@ impl Plugin for TelephonyPlugin {
             }
             "state" => {
                 let d = crate::need_dev(dev)?;
-                return Ok(serde_json::to_value(self.calls.lock().unwrap().get(d.id()))?);
+                return Ok(serde_json::to_value(
+                    self.calls.lock().unwrap().get(d.id()),
+                )?);
             }
             "getConfig" => return Ok(serde_json::to_value(self.config.get())?),
             "setConfig" => {

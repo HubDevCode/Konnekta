@@ -28,7 +28,11 @@ pub struct Packet {
     pub packet_type: String,
     #[serde(default)]
     pub body: Map<String, Value>,
-    #[serde(rename = "payloadSize", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "payloadSize",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub payload_size: Option<i64>,
     #[serde(
         rename = "payloadTransferInfo",
@@ -140,7 +144,10 @@ mod tests {
     #[test]
     fn rejects_oversized() {
         let big = vec![b' '; MAX_PACKET_LEN + 1];
-        assert!(matches!(Packet::from_line(&big), Err(PacketError::TooLarge)));
+        assert!(matches!(
+            Packet::from_line(&big),
+            Err(PacketError::TooLarge)
+        ));
     }
 
     #[test]

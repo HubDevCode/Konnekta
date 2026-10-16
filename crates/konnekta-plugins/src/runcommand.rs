@@ -54,7 +54,11 @@ impl CommandEntry {
         if !self.description.is_empty() {
             return self.description.clone();
         }
-        self.actions.iter().map(Action::describe).collect::<Vec<_>>().join(", ")
+        self.actions
+            .iter()
+            .map(Action::describe)
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 }
 
@@ -84,16 +88,22 @@ impl RunCommandPlugin {
     }
 
     pub fn command(&self, id: &str) -> Option<CommandEntry> {
-        self.config.with(|c| c.commands.iter().find(|e| e.id == id).cloned())
+        self.config
+            .with(|c| c.commands.iter().find(|e| e.id == id).cloned())
     }
 
     fn executor(&self) -> Result<Executor> {
-        let me = self.me.upgrade().ok_or_else(|| anyhow::anyhow!("plugin dropped"))?;
+        let me = self
+            .me
+            .upgrade()
+            .ok_or_else(|| anyhow::anyhow!("plugin dropped"))?;
         Ok(Executor::new(self.platform.clone(), me))
     }
 
     pub async fn run(&self, id: &str) -> Result<Vec<Value>> {
-        let cmd = self.command(id).ok_or_else(|| anyhow::anyhow!("unknown command {id}"))?;
+        let cmd = self
+            .command(id)
+            .ok_or_else(|| anyhow::anyhow!("unknown command {id}"))?;
         let out = self.executor()?.run(self.core.get(), &cmd.actions).await;
         if cmd.notify {
             let body = match &out {
@@ -101,7 +111,12 @@ impl RunCommandPlugin {
                 Err(e) => format!("Failed: {e}"),
             };
             let _ = self.platform.notifier.show(
-                DesktopNotification { id: format!("cmd-{id}"), title: cmd.name.clone(), body, ..Default::default() },
+                DesktopNotification {
+                    id: format!("cmd-{id}"),
+                    title: cmd.name.clone(),
+                    body,
+                    ..Default::default()
+                },
                 None,
             );
         }
@@ -112,7 +127,15 @@ impl RunCommandPlugin {
         let map: BTreeMap<String, RunCommandEntry> = self.config.with(|c| {
             c.commands
                 .iter()
-                .map(|e| (e.id.clone(), RunCommandEntry { name: e.name.clone(), command: e.summary() }))
+                .map(|e| {
+                    (
+                        e.id.clone(),
+                        RunCommandEntry {
+                            name: e.name.clone(),
+                            command: e.summary(),
+                        },
+                    )
+                })
                 .collect()
         });
         Packet::new(types::RUNCOMMAND, RunCommandBody::from_map(&map))
@@ -195,15 +218,27 @@ impl Plugin for RunCommandPlugin {
             types::RUNCOMMAND => {
                 let body: RunCommandBody = p.body_as()?;
                 let entries = body.entries();
-                dev.emit("runcommand", "remoteCommands", serde_json::to_value(&entries)?);
-                self.remote.lock().unwrap().insert(dev.id().to_owned(), entries);
+                dev.emit(
+                    "runcommand",
+                    "remoteCommands",
+                    serde_json::to_value(&entries)?,
+                );
+                self.remote
+                    .lock()
+                    .unwrap()
+                    .insert(dev.id().to_owned(), entries);
             }
             _ => {}
         }
         Ok(())
     }
 
-    async fn handle_action(&self, dev: Option<&DeviceHandle>, action: &str, args: Value) -> Result<Value> {
+    async fn handle_action(
+        &self,
+        dev: Option<&DeviceHandle>,
+        action: &str,
+        args: Value,
+    ) -> Result<Value> {
         match action {
             "list" => Ok(serde_json::to_value(self.config.get().commands)?),
             "add" | "update" => {
@@ -226,7 +261,11 @@ impl Plugin for RunCommandPlugin {
                 Ok(json!({ "id": id }))
             }
             "delete" => {
-                let id = args.get("id").and_then(Value::as_str).unwrap_or_default().to_owned();
+                let id = args
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned();
                 self.save(|v| {
                     v.retain(|x| x.id != id);
                     Ok(())
@@ -251,15 +290,30 @@ impl Plugin for RunCommandPlugin {
                 let d = crate::need_dev(dev)?;
                 d.send(Packet::new(
                     types::RUNCOMMAND_REQUEST,
-                    RunCommandRequestBody { key: None, request_command_list: Some(true) },
+                    RunCommandRequestBody {
+                        key: None,
+                        request_command_list: Some(true),
+                    },
                 ))
                 .await?;
-                Ok(serde_json::to_value(self.remote.lock().unwrap().get(d.id()))?)
+                Ok(serde_json::to_value(
+                    self.remote.lock().unwrap().get(d.id()),
+                )?)
             }
             "runRemote" => {
-                let key = args.get("key").and_then(Value::as_str).unwrap_or_default().to_owned();
+                let key = args
+                    .get("key")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned();
                 crate::need_dev(dev)?
-                    .send(Packet::new(types::RUNCOMMAND_REQUEST, RunCommandRequestBody { key: Some(key), request_command_list: None }))
+                    .send(Packet::new(
+                        types::RUNCOMMAND_REQUEST,
+                        RunCommandRequestBody {
+                            key: Some(key),
+                            request_command_list: None,
+                        },
+                    ))
                     .await?;
                 Ok(Value::Null)
             }
@@ -282,7 +336,11 @@ mod tests {
             .await
             .unwrap();
         let id = r["id"].as_str().unwrap().to_owned();
-        assert!(p.handle_action(None, "add", json!({"name": "", "actions": []})).await.is_err());
+        assert!(
+            p.handle_action(None, "add", json!({"name": "", "actions": []}))
+                .await
+                .is_err()
+        );
         p.run(&id).await.unwrap();
         assert_eq!(mock.calls(), vec!["shell:loginctl lock-session"]);
         // KDE list exposes names and descriptions only.
@@ -290,7 +348,9 @@ mod tests {
         let body: RunCommandBody = list.body_as().unwrap();
         assert_eq!(body.entries()[&id].name, "Lock");
         assert!(!body.command_list.contains("loginctl"));
-        p.handle_action(None, "delete", json!({"id": id})).await.unwrap();
+        p.handle_action(None, "delete", json!({"id": id}))
+            .await
+            .unwrap();
         assert!(p.run(&id).await.is_err());
     }
 }

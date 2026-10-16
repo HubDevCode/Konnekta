@@ -28,15 +28,29 @@ pub struct WlClipboard;
 #[async_trait]
 impl ClipboardBackend for WlClipboard {
     async fn get_text(&self) -> Result<Option<String>> {
-        let types = crate::cmd::output("wl-paste", &["--list-types"]).await.unwrap_or_default();
-        if !types.lines().any(|t| t.starts_with("text/") || t == "UTF8_STRING" || t == "STRING") {
+        let types = crate::cmd::output("wl-paste", &["--list-types"])
+            .await
+            .unwrap_or_default();
+        if !types
+            .lines()
+            .any(|t| t.starts_with("text/") || t == "UTF8_STRING" || t == "STRING")
+        {
             return Ok(None);
         }
-        Ok(crate::cmd::output("wl-paste", &["--no-newline", "--type", "text"]).await.ok())
+        Ok(
+            crate::cmd::output("wl-paste", &["--no-newline", "--type", "text"])
+                .await
+                .ok(),
+        )
     }
 
     async fn set_text(&self, text: &str) -> Result<()> {
-        crate::cmd::with_stdin("wl-copy", &["--type", "text/plain;charset=utf-8"], text.as_bytes()).await
+        crate::cmd::with_stdin(
+            "wl-copy",
+            &["--type", "text/plain;charset=utf-8"],
+            text.as_bytes(),
+        )
+        .await
     }
 
     async fn set_png(&self, png: &[u8]) -> Result<()> {
@@ -78,7 +92,9 @@ mod arboard_backend {
                             let err = || anyhow::anyhow!("clipboard unavailable");
                             match cmd {
                                 Cmd::Get(r) => drop(r.send(Err(err()))),
-                                Cmd::SetText(_, r) | Cmd::SetImage(_, _, _, r) => drop(r.send(Err(err()))),
+                                Cmd::SetText(_, r) | Cmd::SetImage(_, _, _, r) => {
+                                    drop(r.send(Err(err())))
+                                }
                             }
                             continue;
                         };
@@ -90,7 +106,11 @@ mod arboard_backend {
                                 let _ = r.send(c.set_text(t).map_err(Into::into));
                             }
                             Cmd::SetImage(bytes, w, h, r) => {
-                                let img = arboard::ImageData { width: w, height: h, bytes: bytes.into() };
+                                let img = arboard::ImageData {
+                                    width: w,
+                                    height: h,
+                                    bytes: bytes.into(),
+                                };
                                 let _ = r.send(c.set_image(img).map_err(Into::into));
                             }
                         }
@@ -102,7 +122,9 @@ mod arboard_backend {
 
         async fn call<T>(&self, f: impl FnOnce(oneshot::Sender<Result<T>>) -> Cmd) -> Result<T> {
             let (tx, rx) = oneshot::channel();
-            self.tx.send(f(tx)).map_err(|_| anyhow::anyhow!("clipboard thread stopped"))?;
+            self.tx
+                .send(f(tx))
+                .map_err(|_| anyhow::anyhow!("clipboard thread stopped"))?;
             rx.await.context("clipboard thread stopped")?
         }
     }

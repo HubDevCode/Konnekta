@@ -1,0 +1,183 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    outputs:
+      id: ${{ steps.release.outputs.id }}
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - id: tag
+        run: echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+      - id: release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          name: Konnekta ${{ github.ref_name }}
+          generate_release_notes: true
+
+  desktop:
+    needs: create-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            args: ""
+          - os: windows-latest
+            args: ""
+          - os: macos-latest
+            args: "--target aarch64-apple-darwin"
+          - os: macos-13
+            args: "--target x86_64-apple-darwin"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev patchelf
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install -g @tauri-apps/cli@2
+      # Produces AppImage/deb/rpm (Linux), MSI/NSIS (Windows), .app/.dmg (macOS).
+      # Code signing is enabled automatically when the secrets are set.
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        with:
+          projectPath: apps/desktop/src-tauri
+          tauriScript: tauri
+          releaseId: ${{ needs.create-release.outputs.id }}
+          args: ${{ matrix.args }}
+
+  cli:
+    needs: create-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            bin: konnekta
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bin: konnekta.exe
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            bin: konnekta
+          - os: macos-13
+            target: x86_64-apple-darwin
+            bin: konnekta
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release -p konnekta-cli --target ${{ matrix.target }}
+      - name: Package
+        shell: bash
+        run: |
+          name=konnekta-cli-${{ needs.create-release.outputs.tag }}-${{ matrix.target }}
+          mkdir "$name"
+          cp target/${{ matrix.target }}/release/${{ matrix.bin }} "$name/"
+          cp README.md LICENSE packaging/konnekta.service "$name/" 2>/dev/null || true
+          if [ "${{ runner.os }}" = "Windows" ]; then 7z a "$name.zip" "$name"; else tar czf "$name.tar.gz" "$name"; fi
+      - name: Upload
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ needs.create-release.outputs.tag }}" konnekta-cli-* --clobber
+
+  android:
+    needs: create-release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r26d
+      - name: Build Rust core
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+        run: apps/mobile/scripts/build_rust.sh android
+      - name: Prepare Flutter project
+        working-directory: apps/mobile
+        run: ./scripts/prepare.sh
+      - name: Build APK
+        working-directory: apps/mobile
+        run: flutter build apk --release --split-per-abi
+      - name: Upload
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd apps/mobile/build/app/outputs/flutter-apk
+          for f in app-*-release.apk; do mv "$f" "konnekta-${{ needs.create-release.outputs.tag }}-${f#app-}"; done
+          gh release upload "${{ needs.create-release.outputs.tag }}" konnekta-*.apk --clobber -R "$GITHUB_REPOSITORY"
+
+  ios:
+    needs: create-release
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+      - uses: Swatinem/rust-cache@v2
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: Prepare Flutter project
+        working-directory: apps/mobile
+        run: ./scripts/prepare.sh
+      - name: Build Rust core
+        run: apps/mobile/scripts/build_rust.sh ios
+      # Unsigned build; App Store / TestFlight signing needs an Apple
+      # developer account (see docs/RILASCIO.md).
+      - name: Build
+        working-directory: apps/mobile
+        run: |
+          flutter build ios --release --no-codesign
+          mkdir -p Payload && cp -r build/ios/iphoneos/Runner.app Payload/
+          zip -qr "konnekta-${{ needs.create-release.outputs.tag }}-unsigned.ipa" Payload
+      - name: Upload
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        working-directory: apps/mobile
+        run: gh release upload "${{ needs.create-release.outputs.tag }}" konnekta-*-unsigned.ipa --clobber -R "$GITHUB_REPOSITORY"

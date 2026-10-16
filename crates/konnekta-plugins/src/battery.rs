@@ -29,7 +29,10 @@ impl Plugin for BatteryPlugin {
     async fn handle_packet(&self, dev: &DeviceHandle, p: Packet) -> Result<()> {
         let mut b: BatteryBody = p.body_as()?;
         b.current_charge = b.current_charge.clamp(-1, 100);
-        self.levels.lock().unwrap().insert(dev.id().to_owned(), b.clone());
+        self.levels
+            .lock()
+            .unwrap()
+            .insert(dev.id().to_owned(), b.clone());
         dev.emit("battery", "status", serde_json::to_value(&b)?);
         Ok(())
     }
@@ -38,7 +41,12 @@ impl Plugin for BatteryPlugin {
         self.levels.lock().unwrap().remove(id);
     }
 
-    async fn handle_action(&self, dev: Option<&DeviceHandle>, action: &str, _: Value) -> Result<Value> {
+    async fn handle_action(
+        &self,
+        dev: Option<&DeviceHandle>,
+        action: &str,
+        _: Value,
+    ) -> Result<Value> {
         match action {
             "get" => {
                 let id = crate::need_dev(dev)?.id();

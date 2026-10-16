@@ -24,14 +24,20 @@ fn tune(tcp: &TcpStream) {
 
 impl DeviceHandle {
     fn expectation(&self) -> PeerExpectation {
-        PeerExpectation::Pinned { device_id: self.id().to_owned(), cert_der: (*self.peer_cert).clone() }
+        PeerExpectation::Pinned {
+            device_id: self.id().to_owned(),
+            cert_der: (*self.peer_cert).clone(),
+        }
     }
 
     /// Listen for one secure channel from this device. Returns the port to
     /// announce and a future resolving to the channel.
     pub async fn listen_channel(
         &self,
-    ) -> Result<(u16, impl std::future::Future<Output = Result<SecureChannel>> + Send + 'static)> {
+    ) -> Result<(
+        u16,
+        impl std::future::Future<Output = Result<SecureChannel>> + Send + 'static,
+    )> {
         let core = self.inner.upgrade().context("core stopped")?;
         if !self.is_paired() {
             bail!("device not paired");
@@ -52,9 +58,10 @@ impl DeviceHandle {
                     continue;
                 }
                 tune(&tcp);
-                let tls = tokio::time::timeout(crate::link::HANDSHAKE_TIMEOUT, acceptor.accept(tcp))
-                    .await
-                    .context("stream tls timeout")??;
+                let tls =
+                    tokio::time::timeout(crate::link::HANDSHAKE_TIMEOUT, acceptor.accept(tcp))
+                        .await
+                        .context("stream tls timeout")??;
                 return Ok(Box::new(tls) as SecureChannel);
             }
         };

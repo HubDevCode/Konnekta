@@ -146,17 +146,41 @@ fn keys(k: &str) -> Vec<Action> {
 }
 
 pub fn default_profiles() -> DeckConfig {
-    let mut play = btn(0, "Play/Pausa", "play_pause", "#2e7d32", "Media", media("PlayPause"));
+    let mut play = btn(
+        0,
+        "Play/Pausa",
+        "play_pause",
+        "#2e7d32",
+        "Media",
+        media("PlayPause"),
+    );
     play.state = Some(StateSource::MediaPlaying);
     play.active_color = Some("#43a047".into());
-    let mut vol = btn(3, "Volume", "volume", "#37474f", "Media", vec![Action::Volume { set: None, delta: Some(5) }]);
+    let mut vol = btn(
+        3,
+        "Volume",
+        "volume",
+        "#37474f",
+        "Media",
+        vec![Action::Volume {
+            set: None,
+            delta: Some(5),
+        }],
+    );
     vol.state = Some(StateSource::Volume);
-    let mut dnd = btn(4, "Non disturbare", "dnd", "#4a148c", "Sistema", vec![Action::Plugin {
-        plugin: "dnd".into(),
-        action: "toggle".into(),
-        args: Value::Null,
-        device: None,
-    }]);
+    let mut dnd = btn(
+        4,
+        "Non disturbare",
+        "dnd",
+        "#4a148c",
+        "Sistema",
+        vec![Action::Plugin {
+            plugin: "dnd".into(),
+            action: "toggle".into(),
+            args: Value::Null,
+            device: None,
+        }],
+    );
     dnd.state = Some(StateSource::DoNotDisturb);
     dnd.active_color = Some("#8e24aa".into());
     let work = Profile {
@@ -170,15 +194,60 @@ pub fn default_profiles() -> DeckConfig {
             name: "Principale".into(),
             buttons: vec![
                 play,
-                btn(1, "Precedente", "skip_previous", "#37474f", "Media", media("Previous")),
-                btn(2, "Successivo", "skip_next", "#37474f", "Media", media("Next")),
+                btn(
+                    1,
+                    "Precedente",
+                    "skip_previous",
+                    "#37474f",
+                    "Media",
+                    media("Previous"),
+                ),
+                btn(
+                    2,
+                    "Successivo",
+                    "skip_next",
+                    "#37474f",
+                    "Media",
+                    media("Next"),
+                ),
                 vol,
                 dnd,
-                btn(5, "Copia", "content_copy", "#1565c0", "Modifica", keys("ctrl+c")),
-                btn(6, "Incolla", "content_paste", "#1565c0", "Modifica", keys("ctrl+v")),
+                btn(
+                    5,
+                    "Copia",
+                    "content_copy",
+                    "#1565c0",
+                    "Modifica",
+                    keys("ctrl+c"),
+                ),
+                btn(
+                    6,
+                    "Incolla",
+                    "content_paste",
+                    "#1565c0",
+                    "Modifica",
+                    keys("ctrl+v"),
+                ),
                 btn(7, "Cerca", "search", "#1565c0", "Modifica", keys("ctrl+f")),
-                btn(8, "Mute volume", "volume_off", "#b71c1c", "Media", vec![Action::Volume { set: Some(0), delta: None }]),
-                btn(9, "Cambia finestra", "tab", "#455a64", "Sistema", keys("alt+tab")),
+                btn(
+                    8,
+                    "Mute volume",
+                    "volume_off",
+                    "#b71c1c",
+                    "Media",
+                    vec![Action::Volume {
+                        set: Some(0),
+                        delta: None,
+                    }],
+                ),
+                btn(
+                    9,
+                    "Cambia finestra",
+                    "tab",
+                    "#455a64",
+                    "Sistema",
+                    keys("alt+tab"),
+                ),
             ],
         }],
     };
@@ -192,12 +261,54 @@ pub fn default_profiles() -> DeckConfig {
             id: "obs".into(),
             name: "OBS".into(),
             buttons: vec![
-                btn(0, "Scena 1", "looks_one", "#6a1b9a", "Scene", keys("ctrl+shift+F1")),
-                btn(1, "Scena 2", "looks_two", "#6a1b9a", "Scene", keys("ctrl+shift+F2")),
-                btn(2, "Scena 3", "looks_3", "#6a1b9a", "Scene", keys("ctrl+shift+F3")),
-                btn(3, "Live", "sensors", "#c62828", "Stream", keys("ctrl+shift+F9")),
-                btn(4, "Registra", "fiber_manual_record", "#c62828", "Stream", keys("ctrl+shift+F10")),
-                btn(5, "Mute mic", "mic_off", "#ef6c00", "Audio", keys("ctrl+shift+m")),
+                btn(
+                    0,
+                    "Scena 1",
+                    "looks_one",
+                    "#6a1b9a",
+                    "Scene",
+                    keys("ctrl+shift+F1"),
+                ),
+                btn(
+                    1,
+                    "Scena 2",
+                    "looks_two",
+                    "#6a1b9a",
+                    "Scene",
+                    keys("ctrl+shift+F2"),
+                ),
+                btn(
+                    2,
+                    "Scena 3",
+                    "looks_3",
+                    "#6a1b9a",
+                    "Scene",
+                    keys("ctrl+shift+F3"),
+                ),
+                btn(
+                    3,
+                    "Live",
+                    "sensors",
+                    "#c62828",
+                    "Stream",
+                    keys("ctrl+shift+F9"),
+                ),
+                btn(
+                    4,
+                    "Registra",
+                    "fiber_manual_record",
+                    "#c62828",
+                    "Stream",
+                    keys("ctrl+shift+F10"),
+                ),
+                btn(
+                    5,
+                    "Mute mic",
+                    "mic_off",
+                    "#ef6c00",
+                    "Audio",
+                    keys("ctrl+shift+m"),
+                ),
             ],
         }],
     };
@@ -211,10 +322,31 @@ pub fn default_profiles() -> DeckConfig {
             id: "slides".into(),
             name: "Slide".into(),
             buttons: vec![
-                btn(0, "Indietro", "arrow_back", "#0277bd", "Slide", keys("PageUp")),
+                btn(
+                    0,
+                    "Indietro",
+                    "arrow_back",
+                    "#0277bd",
+                    "Slide",
+                    keys("PageUp"),
+                ),
                 btn(1, "Avvia", "play_arrow", "#2e7d32", "Slide", keys("F5")),
-                btn(2, "Avanti", "arrow_forward", "#0277bd", "Slide", keys("PageDown")),
-                btn(3, "Schermo nero", "dark_mode", "#212121", "Slide", keys("b")),
+                btn(
+                    2,
+                    "Avanti",
+                    "arrow_forward",
+                    "#0277bd",
+                    "Slide",
+                    keys("PageDown"),
+                ),
+                btn(
+                    3,
+                    "Schermo nero",
+                    "dark_mode",
+                    "#212121",
+                    "Slide",
+                    keys("b"),
+                ),
                 btn(4, "Esci", "stop", "#c62828", "Slide", keys("Escape")),
             ],
         }],
@@ -229,13 +361,37 @@ pub fn default_profiles() -> DeckConfig {
             id: "game".into(),
             name: "Gioco".into(),
             buttons: vec![
-                btn(0, "Screenshot", "screenshot", "#00695c", "Cattura", keys("F12")),
-                btn(1, "Mute Discord", "headset_off", "#5865f2", "Voce", keys("ctrl+shift+m")),
-                btn(2, "Push to talk", "record_voice_over", "#5865f2", "Voce", keys("ctrl+`")),
+                btn(
+                    0,
+                    "Screenshot",
+                    "screenshot",
+                    "#00695c",
+                    "Cattura",
+                    keys("F12"),
+                ),
+                btn(
+                    1,
+                    "Mute Discord",
+                    "headset_off",
+                    "#5865f2",
+                    "Voce",
+                    keys("ctrl+shift+m"),
+                ),
+                btn(
+                    2,
+                    "Push to talk",
+                    "record_voice_over",
+                    "#5865f2",
+                    "Voce",
+                    keys("ctrl+`"),
+                ),
             ],
         }],
     };
-    DeckConfig { active_profile: "work".into(), profiles: vec![work, streaming, presentation, gaming] }
+    DeckConfig {
+        active_profile: "work".into(),
+        profiles: vec![work, streaming, presentation, gaming],
+    }
 }
 
 impl DeckConfig {
@@ -259,7 +415,11 @@ impl DeckConfig {
                         bail!("button '{}' is outside the grid", b.label);
                     }
                     if !pos.insert(b.position) {
-                        bail!("two buttons share position {} on page {}", b.position, page.name);
+                        bail!(
+                            "two buttons share position {} on page {}",
+                            b.position,
+                            page.name
+                        );
                     }
                     validate_all(&b.actions)?;
                     validate_all(&b.active_actions)?;
@@ -338,7 +498,9 @@ impl DeckPlugin {
         let layout = self.config.with(DeckConfig::public_layout);
         for d in core.devices() {
             if d.has_permission(Permission::Deck) {
-                let _ = d.send_if_supported(Packet::new(types::K_DECK, layout.clone())).await;
+                let _ = d
+                    .send_if_supported(Packet::new(types::K_DECK, layout.clone()))
+                    .await;
             }
         }
     }
@@ -355,12 +517,23 @@ impl DeckPlugin {
             },
             StateSource::Volume => {
                 let v = self.platform.media.volume().await.ok().flatten();
-                ButtonState { active: v.is_some_and(|v| v > 0), label: v.map(|v| format!("{v}%")) }
+                ButtonState {
+                    active: v.is_some_and(|v| v > 0),
+                    label: v.map(|v| format!("{v}%")),
+                }
             }
-            StateSource::Shell { command, interval_secs } => {
-                let fresh = self.shell_cache.lock().unwrap().get(command).and_then(|(t, v)| {
-                    (t.elapsed() < Duration::from_secs((*interval_secs).max(1))).then_some(*v)
-                });
+            StateSource::Shell {
+                command,
+                interval_secs,
+            } => {
+                let fresh = self
+                    .shell_cache
+                    .lock()
+                    .unwrap()
+                    .get(command)
+                    .and_then(|(t, v)| {
+                        (t.elapsed() < Duration::from_secs((*interval_secs).max(1))).then_some(*v)
+                    });
                 let active = match fresh {
                     Some(v) => v,
                     None => {
@@ -371,11 +544,17 @@ impl DeckPlugin {
                             .await
                             .map(|o| o.code == Some(0))
                             .unwrap_or(false);
-                        self.shell_cache.lock().unwrap().insert(command.clone(), (std::time::Instant::now(), ok));
+                        self.shell_cache
+                            .lock()
+                            .unwrap()
+                            .insert(command.clone(), (std::time::Instant::now(), ok));
                         ok
                     }
                 };
-                ButtonState { active, label: None }
+                ButtonState {
+                    active,
+                    label: None,
+                }
             }
         }
     }
@@ -408,8 +587,18 @@ impl DeckPlugin {
             .config
             .with(|c| c.find_button(profile, page, button).cloned())
             .context("unknown deck button")?;
-        let active = self.states.lock().unwrap().get(&b.id).map(|s| s.active).unwrap_or(false);
-        let actions = if active && !b.active_actions.is_empty() { &b.active_actions } else { &b.actions };
+        let active = self
+            .states
+            .lock()
+            .unwrap()
+            .get(&b.id)
+            .map(|s| s.active)
+            .unwrap_or(false);
+        let actions = if active && !b.active_actions.is_empty() {
+            &b.active_actions
+        } else {
+            &b.actions
+        };
         self.executor.run(self.core.get(), actions).await
     }
 }
@@ -457,10 +646,17 @@ impl Plugin for DeckPlugin {
 
     async fn on_connected(&self, dev: &DeviceHandle) {
         let layout = self.config.with(DeckConfig::public_layout);
-        let _ = dev.send_if_supported(Packet::new(types::K_DECK, layout)).await;
+        let _ = dev
+            .send_if_supported(Packet::new(types::K_DECK, layout))
+            .await;
         let states = self.states.lock().unwrap().clone();
         if !states.is_empty() {
-            let _ = dev.send_if_supported(Packet::new(types::K_DECK, json!({ "type": "state", "states": states }))).await;
+            let _ = dev
+                .send_if_supported(Packet::new(
+                    types::K_DECK,
+                    json!({ "type": "state", "states": states }),
+                ))
+                .await;
         }
     }
 
@@ -470,7 +666,11 @@ impl Plugin for DeckPlugin {
                 let layout = self.config.with(DeckConfig::public_layout);
                 dev.send(Packet::new(types::K_DECK, layout)).await?;
                 let states = self.states.lock().unwrap().clone();
-                dev.send(Packet::new(types::K_DECK, json!({ "type": "state", "states": states }))).await?;
+                dev.send(Packet::new(
+                    types::K_DECK,
+                    json!({ "type": "state", "states": states }),
+                ))
+                .await?;
             }
             "press" => {
                 let (profile, page, button) = (
@@ -483,7 +683,11 @@ impl Plugin for DeckPlugin {
                 // Reflect toggles immediately.
                 let changed = self.refresh_states().await;
                 if !changed.is_empty() {
-                    dev.send(Packet::new(types::K_DECK, json!({ "type": "state", "states": changed }))).await?;
+                    dev.send(Packet::new(
+                        types::K_DECK,
+                        json!({ "type": "state", "states": changed }),
+                    ))
+                    .await?;
                 }
                 r?;
             }
@@ -501,7 +705,12 @@ impl Plugin for DeckPlugin {
         Ok(())
     }
 
-    async fn handle_action(&self, _: Option<&DeviceHandle>, action: &str, args: Value) -> Result<Value> {
+    async fn handle_action(
+        &self,
+        _: Option<&DeviceHandle>,
+        action: &str,
+        args: Value,
+    ) -> Result<Value> {
         match action {
             "get" => Ok(serde_json::to_value(self.config.get())?),
             "save" => {
@@ -513,9 +722,18 @@ impl Plugin for DeckPlugin {
                 Ok(Value::Null)
             }
             "duplicateProfile" => {
-                let src = args.get("id").and_then(Value::as_str).unwrap_or_default().to_owned();
+                let src = args
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned();
                 let new_id = self.config.update(|c| -> Result<String> {
-                    let mut p = c.profiles.iter().find(|p| p.id == src).cloned().context("unknown profile")?;
+                    let mut p = c
+                        .profiles
+                        .iter()
+                        .find(|p| p.id == src)
+                        .cloned()
+                        .context("unknown profile")?;
                     p.id = id();
                     p.name = format!("{} (copia)", p.name);
                     for pg in &mut p.pages {
@@ -531,7 +749,11 @@ impl Plugin for DeckPlugin {
                 Ok(json!({ "id": new_id }))
             }
             "deleteProfile" => {
-                let target = args.get("id").and_then(Value::as_str).unwrap_or_default().to_owned();
+                let target = args
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned();
                 self.config.update(|c| -> Result<()> {
                     if c.profiles.len() <= 1 {
                         bail!("cannot delete the last profile");
@@ -546,8 +768,15 @@ impl Plugin for DeckPlugin {
                 Ok(Value::Null)
             }
             "setActiveProfile" => {
-                let target = args.get("id").and_then(Value::as_str).unwrap_or_default().to_owned();
-                if !self.config.with(|c| c.profiles.iter().any(|p| p.id == target)) {
+                let target = args
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned();
+                if !self
+                    .config
+                    .with(|c| c.profiles.iter().any(|p| p.id == target))
+                {
                     bail!("unknown profile");
                 }
                 self.config.update(|c| c.active_profile = target);
@@ -556,8 +785,15 @@ impl Plugin for DeckPlugin {
                 Ok(Value::Null)
             }
             "press" => {
-                let s = |k: &str| args.get(k).and_then(Value::as_str).unwrap_or_default().to_owned();
-                Ok(Value::Array(self.press(&s("profile"), &s("page"), &s("button")).await?))
+                let s = |k: &str| {
+                    args.get(k)
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned()
+                };
+                Ok(Value::Array(
+                    self.press(&s("profile"), &s("page"), &s("button")).await?,
+                ))
             }
             "reset" => {
                 self.config.update(|c| *c = default_profiles());
@@ -609,14 +845,25 @@ mod tests {
         let d = plugin(&mock);
         let c = d.config.get();
         let page = &c.profiles[0].pages[0];
-        let next = page.buttons.iter().find(|b| b.label == "Successivo").unwrap();
+        let next = page
+            .buttons
+            .iter()
+            .find(|b| b.label == "Successivo")
+            .unwrap();
         d.press("work", &page.id, &next.id).await.unwrap();
         assert_eq!(mock.calls(), vec!["media:Next"]);
         // Mock media reports playing; volume 0 -> inactive with label.
         let changed = d.refresh_states().await;
-        let play = page.buttons.iter().find(|b| b.state == Some(StateSource::MediaPlaying)).unwrap();
+        let play = page
+            .buttons
+            .iter()
+            .find(|b| b.state == Some(StateSource::MediaPlaying))
+            .unwrap();
         assert!(changed[&play.id].active);
-        assert!(d.refresh_states().await.is_empty(), "unchanged states are not resent");
+        assert!(
+            d.refresh_states().await.is_empty(),
+            "unchanged states are not resent"
+        );
         assert!(d.press("work", &page.id, "nope").await.is_err());
     }
 }

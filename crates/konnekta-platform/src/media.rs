@@ -80,7 +80,10 @@ pub struct MediaKeys {
 
 impl MediaKeys {
     fn key(&self, k: SpecialKey) -> Result<()> {
-        self.input.send(InputEvent::Key { key: Key::Special(k), modifiers: Modifiers::default() })
+        self.input.send(InputEvent::Key {
+            key: Key::Special(k),
+            modifiers: Modifiers::default(),
+        })
     }
 }
 
@@ -94,7 +97,9 @@ impl MediaBackend for MediaKeys {
     }
     async fn action(&self, _: Option<&str>, a: MediaAction) -> Result<()> {
         self.key(match a {
-            MediaAction::Play | MediaAction::Pause | MediaAction::PlayPause => SpecialKey::MediaPlayPause,
+            MediaAction::Play | MediaAction::Pause | MediaAction::PlayPause => {
+                SpecialKey::MediaPlayPause
+            }
             MediaAction::Stop => SpecialKey::MediaStop,
             MediaAction::Next => SpecialKey::MediaNext,
             MediaAction::Previous => SpecialKey::MediaPrevious,
@@ -145,12 +150,19 @@ mod linux {
     #[async_trait]
     impl MediaBackend for Playerctl {
         async fn players(&self) -> Result<Vec<String>> {
-            Ok(output("playerctl", &["-l"]).await.unwrap_or_default().lines().map(str::to_owned).collect())
+            Ok(output("playerctl", &["-l"])
+                .await
+                .unwrap_or_default()
+                .lines()
+                .map(str::to_owned)
+                .collect())
         }
 
         async fn status(&self, player: Option<&str>) -> Result<Option<MediaStatus>> {
             let fmt = "{{playerName}}\t{{title}}\t{{artist}}\t{{album}}\t{{status}}\t{{position}}\t{{mpris:length}}";
-            let Ok(line) = pc(player, &["metadata", "--format", fmt]).await else { return Ok(None) };
+            let Ok(line) = pc(player, &["metadata", "--format", fmt]).await else {
+                return Ok(None);
+            };
             let f: Vec<&str> = line.split('\t').collect();
             if f.len() < 7 {
                 return Ok(None);
@@ -178,41 +190,65 @@ mod linux {
             };
             if pc(player, &[cmd]).await.is_err() {
                 // No MPRIS player: fall back to global media keys.
-                return MediaKeys { input: self.input.clone() }.action(None, a).await;
+                return MediaKeys {
+                    input: self.input.clone(),
+                }
+                .action(None, a)
+                .await;
             }
             Ok(())
         }
 
         async fn seek(&self, player: Option<&str>, offset_us: i64) -> Result<()> {
             let secs = offset_us as f64 / 1_000_000.0;
-            let arg = if secs >= 0.0 { format!("{secs}+") } else { format!("{}-", -secs) };
+            let arg = if secs >= 0.0 {
+                format!("{secs}+")
+            } else {
+                format!("{}-", -secs)
+            };
             pc(player, &["position", &arg]).await.map(drop)
         }
 
         async fn volume(&self) -> Result<Option<u8>> {
             if let Ok(out) = output("wpctl", &["get-volume", "@DEFAULT_AUDIO_SINK@"]).await {
                 // "Volume: 0.45" or "Volume: 0.45 [MUTED]"
-                if let Some(v) = out.split_whitespace().nth(1).and_then(|v| v.parse::<f64>().ok()) {
+                if let Some(v) = out
+                    .split_whitespace()
+                    .nth(1)
+                    .and_then(|v| v.parse::<f64>().ok())
+                {
                     return Ok(Some((v * 100.0).round().clamp(0.0, 100.0) as u8));
                 }
             }
-            if let Ok(out) = output("pactl", &["get-sink-volume", "@DEFAULT_SINK@"]).await {
-                if let Some(p) = out.split('/').nth(1) {
-                    return Ok(p.trim().trim_end_matches('%').trim().parse().ok());
-                }
+            if let Ok(out) = output("pactl", &["get-sink-volume", "@DEFAULT_SINK@"]).await
+                && let Some(p) = out.split('/').nth(1)
+            {
+                return Ok(p.trim().trim_end_matches('%').trim().parse().ok());
             }
             Ok(None)
         }
 
         async fn set_volume(&self, v: u8) -> Result<()> {
             let v = v.min(100);
-            if output("wpctl", &["set-volume", "@DEFAULT_AUDIO_SINK@", &format!("{}", f64::from(v) / 100.0)])
-                .await
-                .is_ok()
+            if output(
+                "wpctl",
+                &[
+                    "set-volume",
+                    "@DEFAULT_AUDIO_SINK@",
+                    &format!("{}", f64::from(v) / 100.0),
+                ],
+            )
+            .await
+            .is_ok()
             {
                 return Ok(());
             }
-            output("pactl", &["set-sink-volume", "@DEFAULT_SINK@", &format!("{v}%")]).await.map(drop)
+            output(
+                "pactl",
+                &["set-sink-volume", "@DEFAULT_SINK@", &format!("{v}%")],
+            )
+            .await
+            .map(drop)
         }
     }
 }
@@ -233,7 +269,10 @@ mod macos {
     }
 
     async fn running(app: &str) -> bool {
-        osa(&format!("application \"{app}\" is running")).await.map(|s| s == "true").unwrap_or(false)
+        osa(&format!("application \"{app}\" is running"))
+            .await
+            .map(|s| s == "true")
+            .unwrap_or(false)
     }
 
     async fn pick(player: Option<&str>) -> Option<String> {
@@ -261,18 +300,26 @@ mod macos {
         }
 
         async fn status(&self, player: Option<&str>) -> Result<Option<MediaStatus>> {
-            let Some(app) = pick(player).await else { return Ok(None) };
+            let Some(app) = pick(player).await else {
+                return Ok(None);
+            };
             let script = format!(
                 "tell application \"{app}\" to return (name of current track) & \"\\t\" & (artist of current track) & \"\\t\" & (album of current track) & \"\\t\" & (player state as string) & \"\\t\" & (player position as string) & \"\\t\" & (duration of current track as string)"
             );
-            let Ok(out) = osa(&script).await else { return Ok(None) };
+            let Ok(out) = osa(&script).await else {
+                return Ok(None);
+            };
             let f: Vec<&str> = out.split('\t').collect();
             if f.len() < 6 {
                 return Ok(None);
             }
             let dur: f64 = f[5].replace(',', ".").parse().unwrap_or(0.0);
             // Spotify reports ms, Music reports seconds.
-            let length_ms = if app == "Spotify" { dur as i64 } else { (dur * 1000.0) as i64 };
+            let length_ms = if app == "Spotify" {
+                dur as i64
+            } else {
+                (dur * 1000.0) as i64
+            };
             Ok(Some(MediaStatus {
                 player: app,
                 title: f[0].into(),
@@ -287,7 +334,11 @@ mod macos {
 
         async fn action(&self, player: Option<&str>, a: MediaAction) -> Result<()> {
             let Some(app) = pick(player).await else {
-                return MediaKeys { input: self.input.clone() }.action(None, a).await;
+                return MediaKeys {
+                    input: self.input.clone(),
+                }
+                .action(None, a)
+                .await;
             };
             let verb = match a {
                 MediaAction::Play => "play",
@@ -297,23 +348,34 @@ mod macos {
                 MediaAction::Next => "next track",
                 MediaAction::Previous => "previous track",
             };
-            osa(&format!("tell application \"{app}\" to {verb}")).await.map(drop)
-        }
-
-        async fn seek(&self, player: Option<&str>, offset_us: i64) -> Result<()> {
-            let Some(app) = pick(player).await else { anyhow::bail!("no player") };
-            let s = offset_us as f64 / 1_000_000.0;
-            osa(&format!("tell application \"{app}\" to set player position to (player position + ({s}))"))
+            osa(&format!("tell application \"{app}\" to {verb}"))
                 .await
                 .map(drop)
         }
 
+        async fn seek(&self, player: Option<&str>, offset_us: i64) -> Result<()> {
+            let Some(app) = pick(player).await else {
+                anyhow::bail!("no player")
+            };
+            let s = offset_us as f64 / 1_000_000.0;
+            osa(&format!(
+                "tell application \"{app}\" to set player position to (player position + ({s}))"
+            ))
+            .await
+            .map(drop)
+        }
+
         async fn volume(&self) -> Result<Option<u8>> {
-            Ok(osa("output volume of (get volume settings)").await?.parse().ok())
+            Ok(osa("output volume of (get volume settings)")
+                .await?
+                .parse()
+                .ok())
         }
 
         async fn set_volume(&self, v: u8) -> Result<()> {
-            osa(&format!("set volume output volume {}", v.min(100))).await.map(drop)
+            osa(&format!("set volume output volume {}", v.min(100)))
+                .await
+                .map(drop)
         }
     }
 }

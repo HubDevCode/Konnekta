@@ -1,11 +1,11 @@
 //! Test doubles and "unsupported" backends.
 
+use crate::Platform;
 use crate::clipboard::ClipboardBackend;
 use crate::input::{InputBackend, InputEvent};
 use crate::launcher::{CommandOutput, LauncherBackend};
 use crate::media::{MediaAction, MediaBackend, MediaStatus};
 use crate::notify::{ActionCallback, DesktopNotification, NotifierBackend};
-use crate::Platform;
 use anyhow::{Result, bail};
 use async_trait::async_trait;
 use std::sync::{Arc, Mutex};
@@ -181,7 +181,12 @@ impl crate::dnd::DndBackend for MockPlatform {
 impl LauncherBackend for MockPlatform {
     async fn run_shell(&self, c: &str, _: Duration) -> Result<CommandOutput> {
         self.push(format!("shell:{c}"));
-        Ok(CommandOutput { code: Some(0), stdout: String::new(), stderr: String::new(), timed_out: false })
+        Ok(CommandOutput {
+            code: Some(0),
+            stdout: String::new(),
+            stderr: String::new(),
+            timed_out: false,
+        })
     }
     async fn open(&self, t: &str) -> Result<()> {
         self.push(format!("open:{t}"));

@@ -25,10 +25,17 @@ impl Plugin for FindMyPhonePlugin {
         Ok(())
     }
 
-    async fn handle_action(&self, dev: Option<&DeviceHandle>, action: &str, _: Value) -> Result<Value> {
+    async fn handle_action(
+        &self,
+        dev: Option<&DeviceHandle>,
+        action: &str,
+        _: Value,
+    ) -> Result<Value> {
         match action {
             "ring" => {
-                crate::need_dev(dev)?.send(Packet::empty(types::FINDMYPHONE_REQUEST)).await?;
+                crate::need_dev(dev)?
+                    .send(Packet::empty(types::FINDMYPHONE_REQUEST))
+                    .await?;
                 Ok(Value::Null)
             }
             _ => anyhow::bail!("unknown action {action}"),

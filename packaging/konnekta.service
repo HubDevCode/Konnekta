@@ -1,0 +1,15 @@
+# systemd user unit for the headless daemon:
+#   cp packaging/konnekta.service ~/.config/systemd/user/
+#   systemctl --user enable --now konnekta
+[Unit]
+Description=Konnekta daemon
+After=network-online.target graphical-session.target
+
+[Service]
+ExecStart=%h/.local/bin/konnekta daemon
+Restart=on-failure
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target
