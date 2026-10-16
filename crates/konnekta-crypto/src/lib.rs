@@ -1,7 +1,6 @@
 //! Cryptographic building blocks for Konnekta.
 //!
-//! * every device owns a self-signed certificate whose CN is its device id
-//!   (KDE Connect compatible);
+//! * every device owns a self-signed certificate whose CN is its device id;
 //! * connections use mutual TLS (1.2/1.3, AEAD + forward secrecy only);
 //! * paired devices are verified by **certificate pinning** (exact DER match),
 //!   unpaired devices are only allowed to exchange pairing packets and must be
@@ -15,8 +14,8 @@ pub mod store;
 pub mod tls;
 
 pub use cert::{
-    LocalIdentity, cert_common_name, cert_fingerprint, generate_device_id, public_key_der,
-    verification_key,
+    LocalIdentity, cert_common_name, cert_fingerprint, format_key, generate_device_id,
+    public_key_der, verification_key,
 };
 pub use store::{FileKeyStore, KeyStore, write_private_file};
 pub use tls::{PeerExpectation, client_config, server_config};

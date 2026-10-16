@@ -31,6 +31,12 @@ pub enum PeerExpectation {
     },
     /// Not (yet) paired: any certificate whose CN is `device_id`.
     Unpaired { device_id: String },
+    /// Peer not known before the handshake (native TLS-first protocol, the
+    /// identity only travels inside TLS). Any certificate is accepted *by
+    /// the handshake* — possession of its key is still proven — and the
+    /// caller **must** check the presented certificate against the trust
+    /// store and the announced device id before using the link.
+    Deferred,
 }
 
 impl std::fmt::Debug for PeerExpectation {
@@ -48,6 +54,7 @@ impl std::fmt::Debug for PeerExpectation {
                 .debug_struct("Unpaired")
                 .field("device_id", device_id)
                 .finish(),
+            Self::Deferred => f.write_str("Deferred"),
         }
     }
 }
@@ -56,6 +63,7 @@ impl PeerExpectation {
     pub fn device_id(&self) -> &str {
         match self {
             Self::Pinned { device_id, .. } | Self::Unpaired { device_id } => device_id,
+            Self::Deferred => "",
         }
     }
 
@@ -78,6 +86,10 @@ impl PeerExpectation {
             Self::Unpaired { device_id } => match cert_common_name(presented) {
                 Ok(cn) if cn == *device_id => Ok(()),
                 _ => Err(Error::InvalidCertificate(CertificateError::NotValidForName)),
+            },
+            Self::Deferred => match cert_common_name(presented) {
+                Ok(cn) if !cn.is_empty() => Ok(()),
+                _ => Err(Error::InvalidCertificate(CertificateError::BadEncoding)),
             },
         }
     }

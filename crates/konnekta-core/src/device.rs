@@ -3,7 +3,7 @@ use crate::event::Event;
 use crate::payload::{self, PayloadSource, Progress};
 use crate::permissions::Permission;
 use anyhow::{Context, Result, bail};
-use konnekta_proto::{DeviceType, IdentityBody, Packet, types};
+use konnekta_proto::{DeviceType, IdentityBody, Packet, Protocol, types};
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeSet;
@@ -28,6 +28,14 @@ pub struct DeviceInfo {
     pub disabled_plugins: BTreeSet<String>,
     pub incoming_capabilities: Vec<String>,
     pub outgoing_capabilities: Vec<String>,
+    /// Protocol of the current link (or of the pairing when offline).
+    pub protocol: Protocol,
+    /// Key of the open pairing, to show while it waits for the user.
+    pub pair_key: Option<String>,
+    /// Extra addresses dialed when the device is not on the local network.
+    pub extra_addresses: Vec<String>,
+    /// Program and version reported by the device.
+    pub app: Option<String>,
 }
 
 /// Handle to a connected device, given to plugins.
@@ -38,7 +46,10 @@ pub struct DeviceHandle {
     pub(crate) tx: mpsc::Sender<Packet>,
     pub identity: Arc<IdentityBody>,
     pub addr: SocketAddr,
+    pub protocol: Protocol,
     pub(crate) peer_cert: Arc<Vec<u8>>,
+    /// True if we dialed the device.
+    pub(crate) outgoing: bool,
 }
 
 impl std::fmt::Debug for DeviceHandle {
@@ -94,6 +105,13 @@ impl DeviceHandle {
             if !self.supports(&packet.packet_type) {
                 bail!("{} does not support {}", self.name(), packet.packet_type);
             }
+            if crate::link::to_wire(packet.clone(), self.protocol).is_none() {
+                bail!(
+                    "{} is not available over {}",
+                    packet.packet_type,
+                    self.protocol.label()
+                );
+            }
             if let Some(p) = core.permission_for_outgoing(&packet.packet_type)
                 && !core.has_permission(self.id(), p)
             {
@@ -133,6 +151,7 @@ impl DeviceHandle {
             self.id().to_owned(),
             self.addr.ip(),
             bind,
+            self.protocol.payload_ports(),
             source,
             self.resume_supported(),
             progress,

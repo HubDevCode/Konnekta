@@ -1,10 +1,11 @@
 # Konnekta
 
 Collega smartphone e computer in modo **sicuro**, **modulare** e **multipiattaforma**.
-Konnekta è compatibile con il protocollo **KDE Connect** (v8) per le funzioni standard e
-aggiunge estensioni proprie: Mobile Deck in stile Stream Deck, microfono e webcam
-wireless, desktop remoto, audio del computer sul telefono, sincronizzazione di
-Non disturbare e screenshot automatici.
+Konnekta è un sistema **autonomo, con protocollo e porte propri**: un daemon Rust sul computer e
+app native sul telefono. Funziona sulla rete locale e da fuori casa (Tailscale/VPN), anche con un
+firewall che blocca le connessioni in ingresso, perché è il computer ad aprirle.
+Per chi lo desidera c'è una **modalità di compatibilità KDE Connect** (spenta di default) che
+permette di usare l'app KDE Connect sul telefono per le funzioni standard.
 
 | | Windows | macOS | Linux | Android | iOS |
 |---|:-:|:-:|:-:|:-:|:-:|
@@ -38,8 +39,8 @@ Non disturbare e screenshot automatici.
   in **TLS 1.3/1.2** con sole suite AEAD e forward secrecy, anche sulla rete di casa;
 - **autenticazione reciproca** con certificati per dispositivo e **certificate pinning** dopo
   l'associazione: un certificato diverso viene rifiutato (anti man-in-the-middle);
-- associazione esplicita su entrambi i dispositivi con **codice di verifica** derivato dalle chiavi
-  di entrambi (lo stesso di KDE Connect);
+- associazione esplicita con **codice di 16 caratteri** derivato dalle chiavi di entrambi e
+  **conferma anche sul computer**;
 - **nessuna fiducia nella rete locale**: un dispositivo non associato può solo chiedere di associarsi;
 - **permessi granulari per dispositivo**, quelli sensibili disattivati di default;
 - i comandi remoti si richiamano **per identificativo**: il telefono non può inviare comandi arbitrari.
@@ -50,7 +51,7 @@ Dettagli in [docs/SICUREZZA.md](docs/SICUREZZA.md).
 
 ```
 crates/
-  konnekta-proto     protocollo: pacchetti KDE Connect v8 + estensioni konnekta.*
+  konnekta-proto     protocollo Konnekta + traduzione per la compatibilità KDE Connect
   konnekta-crypto    certificati, TLS reciproco con pinning, chiave di verifica, keystore
   konnekta-core      discovery, link, pairing, permessi, plugin, payload, canali stream, API JSON, IPC
   konnekta-platform  integrazioni OS: appunti, input, media, notifiche, DND, avvio app
@@ -87,8 +88,11 @@ flutter run
 
 ```bash
 konnekta daemon                     # avvia il servizio (o apri l'app desktop)
+konnekta daemon --kde-compat        # accetta anche l'app KDE Connect
 konnekta devices                    # dispositivi trovati
-konnekta pair Pixel                 # mostra il codice da confrontare sul telefono
+konnekta discover                   # dispositivi trovati in rete
+konnekta pair Pixel                 # mostra il codice e chiede conferma
+konnekta addresses Pixel pixel.tail1234.ts.net   # raggiungibile anche fuori casa
 konnekta perms Pixel                # permessi
 konnekta grant Pixel remoteInput    # concede un permesso sensibile
 konnekta send Pixel foto.jpg        # invia file

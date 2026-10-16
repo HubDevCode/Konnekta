@@ -1,8 +1,45 @@
-use konnekta_proto::DeviceType;
+use konnekta_proto::{DeviceType, Protocol};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr};
 use std::path::{Path, PathBuf};
+
+/// Anti-abuse limits for devices that are not paired.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Limits {
+    /// Links of unpaired devices in total; a new one closes the oldest.
+    pub unpaired_links: usize,
+    pub unpaired_links_per_addr: usize,
+    /// Unpaired link closed after this time without a pair request.
+    pub unpaired_idle_secs: u64,
+    /// Connections in handshake (before the link exists).
+    pub pending_connections: usize,
+    pub pending_connections_per_addr: usize,
+    /// Open incoming pair requests.
+    pub open_pair_requests: usize,
+    pub open_pair_requests_per_addr: usize,
+    /// After a request ends without pairing, ignore the device this long.
+    pub pair_cooldown_secs: u64,
+    /// Devices from discovery remembered while not paired.
+    pub discovered_devices: usize,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            unpaired_links: 8,
+            unpaired_links_per_addr: 2,
+            unpaired_idle_secs: 120,
+            pending_connections: 32,
+            pending_connections_per_addr: 4,
+            open_pair_requests: 4,
+            open_pair_requests_per_addr: 2,
+            pair_cooldown_secs: 30,
+            discovered_devices: 64,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -11,22 +48,30 @@ pub struct Config {
     pub device_type: DeviceType,
     /// Where received files go.
     pub download_dir: PathBuf,
-    /// Announce ourselves with UDP broadcasts. Disable on untrusted networks
-    /// to avoid exposing the device name (manual connect still works).
+    /// Announce ourselves (UDP broadcast and mDNS). Disable on untrusted
+    /// networks: paired devices are still dialed directly.
     pub announce: bool,
+    /// Advertise and browse `_konnekta._tcp` with mDNS.
+    pub mdns: bool,
     /// Listen for UDP announcements of other devices.
     pub listen_udp: bool,
     pub bind_addr: IpAddr,
+    /// Native protocol ports (0 = ephemeral, used by tests).
     pub udp_port: u16,
     pub tcp_port: u16,
-    /// Extra unicast/broadcast targets for announcements.
-    pub broadcast_targets: Vec<SocketAddr>,
+    /// KDE Connect compatibility mode (off by default).
+    pub kde_compat: bool,
+    pub kde_udp_port: u16,
+    pub kde_tcp_port: u16,
+    /// Broadcast / unicast targets for announcements (port added per protocol).
+    pub broadcast_targets: Vec<IpAddr>,
     /// Re-announce interval in seconds (0 = only at start / on demand).
     pub announce_interval_secs: u64,
+    /// How often paired devices that are offline are dialed.
+    pub reconnect_interval_secs: u64,
     /// Globally disabled plugins (by id).
     pub disabled_plugins: BTreeSet<String>,
-    /// Maximum simultaneous connections from devices that are not paired.
-    pub max_unpaired_links: usize,
+    pub limits: Limits,
 }
 
 impl Default for Config {
@@ -40,17 +85,19 @@ impl Default for Config {
             device_type: DeviceType::Desktop,
             download_dir,
             announce: true,
+            mdns: true,
             listen_udp: true,
             bind_addr: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
-            udp_port: konnekta_proto::DEFAULT_PORT,
-            tcp_port: konnekta_proto::DEFAULT_PORT,
-            broadcast_targets: vec![SocketAddr::new(
-                IpAddr::V4(Ipv4Addr::BROADCAST),
-                konnekta_proto::DEFAULT_PORT,
-            )],
+            udp_port: Protocol::Konnekta.udp_port(),
+            tcp_port: *Protocol::Konnekta.tcp_ports().start(),
+            kde_compat: false,
+            kde_udp_port: Protocol::KdeConnect.udp_port(),
+            kde_tcp_port: *Protocol::KdeConnect.tcp_ports().start(),
+            broadcast_targets: vec![IpAddr::V4(Ipv4Addr::BROADCAST)],
             announce_interval_secs: 60,
+            reconnect_interval_secs: 10,
             disabled_plugins: BTreeSet::new(),
-            max_unpaired_links: 8,
+            limits: Limits::default(),
         }
     }
 }

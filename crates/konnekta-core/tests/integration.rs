@@ -1,8 +1,9 @@
-//! End-to-end tests: two real Konnekta instances over loopback TCP + TLS.
+//! End-to-end tests: real Konnekta instances over loopback TCP + TLS, for
+//! the native protocol and the KDE Connect compatibility mode.
 
 use anyhow::Result;
 use async_trait::async_trait;
-use konnekta_core::proto::{Packet, types};
+use konnekta_core::proto::{Packet, Protocol, types};
 use konnekta_core::{
     Config, DeviceHandle, Event, Konnekta, Permission, Plugin, PluginInfo, PluginOrigin,
 };
@@ -29,8 +30,8 @@ impl Plugin for Recorder {
             description: "test",
             origin: PluginOrigin::KdeConnect,
             permission: Permission::Ping,
-            incoming: &[types::PING],
-            outgoing: &[types::PING],
+            incoming: &[types::PING, types::K_DECK],
+            outgoing: &[types::PING, types::K_DECK],
         }
     }
     async fn handle_packet(&self, _dev: &DeviceHandle, p: Packet) -> Result<()> {
@@ -81,8 +82,12 @@ fn config(name: &str) -> Config {
         bind_addr: LO,
         tcp_port: 0,
         udp_port: 0,
+        kde_tcp_port: 0,
+        kde_udp_port: 0,
         announce: false,
+        mdns: false,
         listen_udp: true,
+        reconnect_interval_secs: 1,
         ..Config::default()
     }
 }
@@ -94,14 +99,16 @@ struct Node {
     events: broadcast::Receiver<Event>,
 }
 
-async fn node(name: &str) -> Node {
+async fn node_with(cfg: Config, dir: Option<&std::path::Path>) -> Node {
     let rec = Arc::new(Recorder::default());
     let danger = Arc::new(Danger::default());
-    let k = Konnekta::builder(config(name))
+    let mut b = Konnekta::builder(cfg)
         .plugin(rec.clone())
-        .plugin(danger.clone())
-        .build()
-        .unwrap();
+        .plugin(danger.clone());
+    if let Some(d) = dir {
+        b = b.data_dir(d);
+    }
+    let k = b.build().unwrap();
     let events = k.subscribe();
     k.start().await.unwrap();
     Node {
@@ -112,15 +119,20 @@ async fn node(name: &str) -> Node {
     }
 }
 
+async fn node(name: &str) -> Node {
+    node_with(config(name), None).await
+}
+
 async fn wait_for<F: FnMut(&Event) -> bool>(
     rx: &mut broadcast::Receiver<Event>,
     mut f: F,
 ) -> Event {
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
-            let e = rx.recv().await.unwrap();
-            if f(&e) {
-                return e;
+            match rx.recv().await {
+                Ok(e) if f(&e) => return e,
+                Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => {}
+                Err(e) => panic!("{e}"),
             }
         }
     })
@@ -129,7 +141,7 @@ async fn wait_for<F: FnMut(&Event) -> bool>(
 }
 
 async fn eventually<F: FnMut() -> bool>(mut f: F) {
-    for _ in 0..200 {
+    for _ in 0..300 {
         if f() {
             return;
         }
@@ -138,8 +150,9 @@ async fn eventually<F: FnMut() -> bool>(mut f: F) {
     panic!("condition not met");
 }
 
+/// B announces itself to A; A dials B (computer-initiated connection).
 async fn connect(a: &mut Node, b: &mut Node) {
-    a.k.connect_to(SocketAddr::new(LO, b.k.udp_port()))
+    b.k.announce_to(SocketAddr::new(LO, a.k.udp_port()), Protocol::Konnekta)
         .await
         .unwrap();
     wait_for(&mut a.events, |e| {
@@ -152,10 +165,12 @@ async fn connect(a: &mut Node, b: &mut Node) {
     .await;
 }
 
+/// A asks, B accepts, A confirms the key.
 async fn pair(a: &mut Node, b: &mut Node) {
     let b_id = b.k.device_id().to_string();
     let a_id = a.k.device_id().to_string();
     let key_a = a.k.request_pair(&b_id).await.unwrap();
+    assert_eq!(key_a.len(), 16, "native keys have 64 bits");
     let Event::PairRequested {
         verification_key,
         device_id,
@@ -169,12 +184,25 @@ async fn pair(a: &mut Node, b: &mut Node) {
         verification_key, key_a,
         "both sides must show the same code"
     );
-    b.k.accept_pair(&a_id).await.unwrap();
+    b.k.accept_pair(&a_id, Some(&verification_key))
+        .await
+        .unwrap();
+    let Event::PairConfirm {
+        verification_key: k2,
+        ..
+    } = wait_for(&mut a.events, |e| matches!(e, Event::PairConfirm { .. })).await
+    else {
+        unreachable!()
+    };
+    assert_eq!(k2, key_a);
+    // Not trusted until the computer confirms.
+    assert!(a.k.device_handle(&b_id).is_none());
+    a.k.accept_pair(&b_id, Some(&k2)).await.unwrap();
     wait_for(&mut a.events, |e| matches!(e, Event::Paired { .. })).await;
 }
 
 #[tokio::test]
-async fn discover_pair_and_exchange() {
+async fn native_discover_pair_and_exchange() {
     let mut a = node("Alpha").await;
     let mut b = node("Beta").await;
     connect(&mut a, &mut b).await;
@@ -184,15 +212,15 @@ async fn discover_pair_and_exchange() {
     let infos = a.k.devices();
     assert_eq!(infos.len(), 1);
     assert_eq!(infos[0].name, "Beta");
+    assert_eq!(infos[0].protocol, Protocol::Konnekta);
+    assert_eq!(infos[0].app.as_deref(), Some("Konnekta"));
     assert!(!infos[0].paired);
-    // Unpaired: no handle available to plugins.
     assert!(a.k.device_handle(&b_id).is_none());
 
     pair(&mut a, &mut b).await;
     assert!(a.k.device(&b_id).unwrap().paired);
     assert!(b.k.device(&a_id).unwrap().paired);
 
-    // Ping is a default permission.
     let h = a.k.device_handle(&b_id).unwrap();
     h.send(Packet::new(types::PING, json!({"message": "ciao"})))
         .await
@@ -205,6 +233,32 @@ async fn discover_pair_and_exchange() {
 }
 
 #[tokio::test]
+async fn confirm_rejects_wrong_key_and_reject_cools_down() {
+    let mut a = node("Alpha").await;
+    let mut b = node("Beta").await;
+    connect(&mut a, &mut b).await;
+    let (a_id, b_id) = (a.k.device_id().to_string(), b.k.device_id().to_string());
+
+    a.k.request_pair(&b_id).await.unwrap();
+    wait_for(&mut b.events, |e| matches!(e, Event::PairRequested { .. })).await;
+    assert!(
+        b.k.accept_pair(&a_id, Some("0000 0000 0000 0000"))
+            .await
+            .is_err(),
+        "wrong key refused"
+    );
+    b.k.reject_pair(&a_id, None).await.unwrap();
+    wait_for(&mut a.events, |e| matches!(e, Event::PairRejected { .. })).await;
+    assert!(!a.k.device(&b_id).unwrap().paired);
+
+    // A asks again at once: B is cooling down and refuses automatically.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    a.k.request_pair(&b_id).await.unwrap();
+    wait_for(&mut b.events, |e| matches!(e, Event::PairRefused { .. })).await;
+    wait_for(&mut a.events, |e| matches!(e, Event::PairRejected { .. })).await;
+}
+
+#[tokio::test]
 async fn sensitive_permissions_are_enforced() {
     let mut a = node("Alpha").await;
     let mut b = node("Beta").await;
@@ -213,14 +267,11 @@ async fn sensitive_permissions_are_enforced() {
     let b_id = b.k.device_id().to_string();
     let a_id = a.k.device_id().to_string();
 
-    // A refuses to *send* commands to B: not granted locally.
     assert!(
         a.k.plugin_action(Some(&b_id), "runcommand", "run", Value::Null)
             .await
             .is_err()
     );
-
-    // A grants itself the right, but B still has not granted Commands to A.
     a.k.set_permission(&b_id, Permission::Commands, true)
         .unwrap();
     a.k.plugin_action(Some(&b_id), "runcommand", "run", Value::Null)
@@ -232,7 +283,6 @@ async fn sensitive_permissions_are_enforced() {
     .await;
     assert_eq!(*b.danger.ran.lock().unwrap(), 0);
 
-    // Once B grants it, the command is delivered.
     b.k.set_permission(&a_id, Permission::Commands, true)
         .unwrap();
     a.k.plugin_action(Some(&b_id), "runcommand", "run", Value::Null)
@@ -240,7 +290,6 @@ async fn sensitive_permissions_are_enforced() {
         .unwrap();
     eventually(|| *b.danger.ran.lock().unwrap() == 1).await;
 
-    // Revoking stops it again.
     b.k.set_permission(&a_id, Permission::Commands, false)
         .unwrap();
     a.k.plugin_action(Some(&b_id), "runcommand", "run", Value::Null)
@@ -251,81 +300,50 @@ async fn sensitive_permissions_are_enforced() {
 }
 
 #[tokio::test]
-async fn rejected_pairing_and_unpair() {
+async fn unpair_closes_the_link() {
     let mut a = node("Alpha").await;
     let mut b = node("Beta").await;
     connect(&mut a, &mut b).await;
-    let b_id = b.k.device_id().to_string();
-    let a_id = a.k.device_id().to_string();
-
-    a.k.request_pair(&b_id).await.unwrap();
-    wait_for(&mut b.events, |e| matches!(e, Event::PairRequested { .. })).await;
-    b.k.reject_pair(&a_id).await.unwrap();
-    wait_for(&mut a.events, |e| matches!(e, Event::PairRejected { .. })).await;
-    assert!(!a.k.device(&b_id).unwrap().paired);
-
     pair(&mut a, &mut b).await;
+    let (a_id, b_id) = (a.k.device_id().to_string(), b.k.device_id().to_string());
     b.k.unpair(&a_id).await.unwrap();
     wait_for(&mut a.events, |e| matches!(e, Event::Unpaired { .. })).await;
+    wait_for(&mut a.events, |e| {
+        matches!(e, Event::DeviceDisconnected { .. })
+    })
+    .await;
     assert!(a.k.device_handle(&b_id).is_none());
-    assert!(!a.k.device(&b_id).unwrap().paired);
+    assert!(a.k.device(&b_id).is_none());
 }
 
 #[tokio::test]
-async fn paired_device_reconnects_with_pinned_certificate() {
+async fn paired_device_reconnects_with_pin_and_extra_address() {
     let dir_a = tempfile::tempdir().unwrap();
     let dir_b = tempfile::tempdir().unwrap();
-    let mk = |name: &str, dir: &std::path::Path| {
-        Konnekta::builder(config(name))
-            .data_dir(dir)
-            .plugin(Arc::new(Recorder::default()))
-            .build()
-            .unwrap()
-    };
-    let (ka, kb) = (mk("Alpha", dir_a.path()), mk("Beta", dir_b.path()));
-    let mut a = Node {
-        events: ka.subscribe(),
-        k: ka,
-        rec: Default::default(),
-        danger: Default::default(),
-    };
-    let mut b = Node {
-        events: kb.subscribe(),
-        k: kb,
-        rec: Default::default(),
-        danger: Default::default(),
-    };
-    a.k.start().await.unwrap();
-    b.k.start().await.unwrap();
+    let mut a = node_with(config("Alpha"), Some(dir_a.path())).await;
+    let mut b = node_with(config("Beta"), Some(dir_b.path())).await;
     connect(&mut a, &mut b).await;
     pair(&mut a, &mut b).await;
     let b_id = b.k.device_id().to_string();
-    a.k.shutdown();
     b.k.shutdown();
-    drop(a);
+    wait_for(&mut a.events, |e| {
+        matches!(e, Event::DeviceDisconnected { .. })
+    })
+    .await;
 
-    // Restart A from disk: same identity, B still trusted.
-    let ka = mk("Alpha", dir_a.path());
-    let mut a2 = Node {
-        events: ka.subscribe(),
-        k: ka,
-        rec: Default::default(),
-        danger: Default::default(),
-    };
-    a2.k.start().await.unwrap();
-    let kb = mk("Beta", dir_b.path());
-    let mut b2 = Node {
-        events: kb.subscribe(),
-        k: kb,
-        rec: Default::default(),
-        danger: Default::default(),
-    };
-    b2.k.start().await.unwrap();
+    // B comes back on another port; A only knows it through an extra
+    // address (like a Tailscale name) and dials it by itself.
+    let mut b2 = node_with(config("Beta"), Some(dir_b.path())).await;
     assert_eq!(b2.k.device_id(), b_id);
-    connect(&mut a2, &mut b2).await;
-    eventually(|| a2.k.device_handle(&b_id).is_some()).await;
+    a.k.set_extra_addresses(&b_id, vec![format!("127.0.0.1:{}", b2.k.tcp_port())])
+        .unwrap();
+    wait_for(&mut b2.events, |e| {
+        matches!(e, Event::DeviceConnected { .. })
+    })
+    .await;
+    eventually(|| a.k.device_handle(&b_id).is_some()).await;
 
-    // An impostor reusing B's device id but with a different key is refused.
+    // An impostor with B's id but another key is refused by the pin.
     let evil_id = konnekta_crypto::LocalIdentity::generate(&b_id).unwrap();
     let evil = Konnekta::builder(config("Beta"))
         .identity(evil_id)
@@ -334,18 +352,129 @@ async fn paired_device_reconnects_with_pinned_certificate() {
         .unwrap();
     evil.start().await.unwrap();
     b2.k.shutdown();
-    wait_for(&mut a2.events, |e| {
+    wait_for(&mut a.events, |e| {
         matches!(e, Event::DeviceDisconnected { .. })
     })
     .await;
-    evil.connect_to(SocketAddr::new(LO, a2.k.udp_port()))
-        .await
+    a.k.set_extra_addresses(&b_id, vec![format!("127.0.0.1:{}", evil.tcp_port())])
         .unwrap();
-    wait_for(&mut a2.events, |e| {
+    wait_for(&mut a.events, |e| {
         matches!(e, Event::SecurityWarning { .. })
     })
     .await;
-    assert!(a2.k.device_handle(&b_id).is_none());
+    assert!(a.k.device_handle(&b_id).is_none());
+}
+
+#[tokio::test]
+async fn simultaneous_connections_converge_to_one_link() {
+    let mut a = node("Alpha").await;
+    let mut b = node("Beta").await;
+    // Both learn about each other at the same moment and dial.
+    let (ra, rb) = tokio::join!(
+        a.k.announce_to(SocketAddr::new(LO, b.k.udp_port()), Protocol::Konnekta),
+        b.k.announce_to(SocketAddr::new(LO, a.k.udp_port()), Protocol::Konnekta),
+    );
+    ra.unwrap();
+    rb.unwrap();
+    wait_for(&mut a.events, |e| {
+        matches!(e, Event::DeviceConnected { .. })
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(a.k.devices().len(), 1);
+    assert_eq!(b.k.devices().len(), 1);
+    pair(&mut a, &mut b).await;
+    let h = a.k.device_handle(b.k.device_id()).unwrap();
+    h.send(Packet::new(types::PING, json!({}))).await.unwrap();
+    eventually(|| b.rec.got.lock().unwrap().len() == 1).await;
+}
+
+#[tokio::test]
+async fn manual_connect_by_address() {
+    let mut a = node("Alpha").await;
+    let mut b = node("Beta").await;
+    a.k.connect_to(&format!("127.0.0.1:{}", b.k.tcp_port()))
+        .await
+        .unwrap();
+    wait_for(&mut a.events, |e| {
+        matches!(e, Event::DeviceConnected { .. })
+    })
+    .await;
+    wait_for(&mut b.events, |e| {
+        matches!(e, Event::DeviceConnected { .. })
+    })
+    .await;
+    assert_eq!(a.k.devices()[0].id, b.k.device_id());
+}
+
+#[tokio::test]
+async fn kde_compatibility_mode() {
+    let kde_cfg = |n: &str| Config {
+        kde_compat: true,
+        ..config(n)
+    };
+    let mut a = node_with(kde_cfg("Alpha"), None).await;
+    let mut b = node_with(kde_cfg("Beta"), None).await;
+    let (_, b_kde_udp) = b.k.kde_ports();
+    a.k.announce_to(SocketAddr::new(LO, b_kde_udp), Protocol::KdeConnect)
+        .await
+        .unwrap();
+    wait_for(&mut a.events, |e| {
+        matches!(e, Event::DeviceConnected { .. })
+    })
+    .await;
+    wait_for(&mut b.events, |e| {
+        matches!(e, Event::DeviceConnected { .. })
+    })
+    .await;
+    let b_id = b.k.device_id().to_string();
+    let a_id = a.k.device_id().to_string();
+    assert_eq!(a.k.device(&b_id).unwrap().protocol, Protocol::KdeConnect);
+    // Canonical capability names after translation; extensions filtered.
+    let caps = a.k.device(&b_id).unwrap().incoming_capabilities;
+    assert!(caps.contains(&types::PING.to_string()));
+    assert!(!caps.contains(&types::K_DECK.to_string()));
+
+    let key = a.k.request_pair(&b_id).await.unwrap();
+    assert_eq!(key.len(), 8, "KDE Connect clients show 8 characters");
+    wait_for(&mut b.events, |e| matches!(e, Event::PairRequested { .. })).await;
+    b.k.accept_pair(&a_id, Some(&key)).await.unwrap();
+    wait_for(&mut a.events, |e| matches!(e, Event::PairConfirm { .. })).await;
+    a.k.accept_pair(&b_id, Some(&key)).await.unwrap();
+
+    let h = a.k.device_handle(&b_id).unwrap();
+    h.send(Packet::new(types::PING, json!({"message": "kde"})))
+        .await
+        .unwrap();
+    eventually(|| b.rec.got.lock().unwrap().len() == 1).await;
+    // Native-only packets cannot travel over KDE Connect.
+    assert!(h.send(Packet::empty(types::K_DECK)).await.is_err());
+}
+
+#[tokio::test]
+async fn kde_compat_is_off_by_default() {
+    let a = node_with(
+        Config {
+            kde_compat: true,
+            ..config("Alpha")
+        },
+        None,
+    )
+    .await;
+    let b = node("Beta").await;
+    assert!(!Config::default().kde_compat);
+    assert_eq!(
+        b.k.kde_ports(),
+        (0, 0),
+        "no KDE Connect sockets when disabled"
+    );
+    // A KDE identity sent to the native port is not a valid announcement.
+    a.k.announce_to(SocketAddr::new(LO, b.k.udp_port()), Protocol::KdeConnect)
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(b.k.devices().is_empty());
+    assert!(a.k.devices().is_empty());
 }
 
 #[tokio::test]

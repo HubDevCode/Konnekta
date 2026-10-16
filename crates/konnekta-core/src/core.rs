@@ -1,23 +1,24 @@
-//! The orchestrator: owns identity, trust store, links and plugins.
+//! The orchestrator: owns identity, trust store, links and plugins, and runs
+//! the network side of both protocols.
 
 use crate::config::Config;
 use crate::device::{DeviceHandle, DeviceInfo};
+use crate::discovery::{self, Announcement};
 use crate::event::Event;
 use crate::link::{self, SecureStream};
-use crate::pairing::{self, PairState};
+use crate::pairing::{self, Admission, PairState, RequestGuard};
 use crate::permissions::Permission;
 use crate::plugin::{CoreHandle, Plugin, PluginInfo};
 use crate::trust::{TrustStore, TrustedDevice};
-use crate::{discovery, payload};
 use anyhow::{Context, Result, bail};
 use konnekta_crypto::{FileKeyStore, KeyStore, LocalIdentity, PeerExpectation, verification_key};
 use konnekta_proto::bodies::PairBody;
-use konnekta_proto::{IdentityBody, PROTOCOL_VERSION, Packet, types};
+use konnekta_proto::{IdentityBody, Packet, Protocol, kde, types};
 use serde_json::Value;
 use std::collections::{BTreeSet, HashMap, HashSet};
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncWriteExt, BufReader};
@@ -25,14 +26,26 @@ use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tokio::sync::{broadcast, mpsc};
 use tokio::task::AbortHandle;
 
-const OUTGOING_RETRY: Duration = Duration::from_secs(5);
+const DIAL_INTERVAL: Duration = Duration::from_secs(5);
 const SEND_QUEUE: usize = 512;
+const JANITOR_INTERVAL: Duration = Duration::from_secs(2);
 
 pub(crate) struct LinkEntry {
     handle: DeviceHandle,
     pair: PairState,
     tasks: Vec<AbortHandle>,
     denied: HashSet<Permission>,
+    created: Instant,
+    /// A pair request was seen on this link (it is not idle).
+    pair_requested: bool,
+}
+
+#[derive(Default, Clone, Copy)]
+struct Ports {
+    tcp: u16,
+    udp: u16,
+    kde_tcp: u16,
+    kde_udp: u16,
 }
 
 pub(crate) struct Inner {
@@ -43,12 +56,16 @@ pub(crate) struct Inner {
     links: Mutex<HashMap<String, LinkEntry>>,
     plugins: Vec<Arc<dyn Plugin>>,
     pub(crate) events: broadcast::Sender<Event>,
-    tcp_port: AtomicU16,
-    udp_port: AtomicU16,
+    ports: Mutex<Ports>,
     next_link_id: AtomicU64,
     udp: Mutex<Option<Arc<UdpSocket>>>,
-    connecting: Mutex<HashMap<String, Instant>>,
+    kde_udp: Mutex<Option<Arc<UdpSocket>>>,
+    dialing: Mutex<HashMap<String, Instant>>,
+    pending: Mutex<HashMap<IpAddr, usize>>,
+    discovered: Mutex<HashMap<String, (Announcement, Instant)>>,
+    guard: Mutex<RequestGuard>,
     background: Mutex<Vec<AbortHandle>>,
+    mdns: Mutex<Option<discovery::mdns::Mdns>>,
 }
 
 /// Builder for [`Konnekta`].
@@ -117,12 +134,16 @@ impl KonnektaBuilder {
             links: Mutex::new(HashMap::new()),
             plugins: self.plugins,
             events,
-            tcp_port: AtomicU16::new(0),
-            udp_port: AtomicU16::new(0),
+            ports: Mutex::default(),
             next_link_id: AtomicU64::new(1),
             udp: Mutex::new(None),
-            connecting: Mutex::new(HashMap::new()),
-            background: Mutex::new(Vec::new()),
+            kde_udp: Mutex::new(None),
+            dialing: Mutex::default(),
+            pending: Mutex::default(),
+            discovered: Mutex::default(),
+            guard: Mutex::default(),
+            background: Mutex::default(),
+            mdns: Mutex::new(None),
         });
         Ok(Konnekta { inner })
     }
@@ -132,6 +153,54 @@ impl KonnektaBuilder {
 #[derive(Clone)]
 pub struct Konnekta {
     inner: Arc<Inner>,
+}
+
+/// Counts a connection in handshake; released on drop.
+struct PendingGuard {
+    inner: Arc<Inner>,
+    ip: IpAddr,
+}
+
+impl Drop for PendingGuard {
+    fn drop(&mut self) {
+        let mut p = self.inner.pending.lock().unwrap();
+        if let Some(n) = p.get_mut(&self.ip) {
+            *n -= 1;
+            if *n == 0 {
+                p.remove(&self.ip);
+            }
+        }
+    }
+}
+
+async fn bind_tcp(bind: IpAddr, first: u16, last: u16) -> Result<TcpListener> {
+    if first == 0 {
+        return Ok(TcpListener::bind(SocketAddr::new(bind, 0)).await?);
+    }
+    for port in first..=last.max(first) {
+        if let Ok(l) = TcpListener::bind(SocketAddr::new(bind, port)).await {
+            return Ok(l);
+        }
+    }
+    bail!("no free TCP port in {first}-{last}")
+}
+
+/// Parse `host`, `host:port`, `[v6]:port`.
+pub fn parse_host_port(s: &str, default_port: u16) -> (String, u16) {
+    let s = s.trim();
+    if let Ok(sa) = s.parse::<SocketAddr>() {
+        return (sa.ip().to_string(), sa.port());
+    }
+    if let Ok(ip) = s.parse::<IpAddr>() {
+        return (ip.to_string(), default_port);
+    }
+    match s.rsplit_once(':') {
+        Some((h, p)) if !h.contains(':') => match p.parse() {
+            Ok(port) => (h.to_owned(), port),
+            Err(_) => (s.to_owned(), default_port),
+        },
+        _ => (s.to_owned(), default_port),
+    }
 }
 
 impl Konnekta {
@@ -153,20 +222,27 @@ impl Konnekta {
         self.inner.identity.fingerprint()
     }
 
+    /// Native TCP port.
     pub fn tcp_port(&self) -> u16 {
-        self.inner.tcp_port.load(Ordering::Relaxed)
+        self.inner.ports.lock().unwrap().tcp
     }
 
+    /// Native UDP port.
     pub fn udp_port(&self) -> u16 {
-        self.inner.udp_port.load(Ordering::Relaxed)
+        self.inner.ports.lock().unwrap().udp
+    }
+
+    /// KDE Connect compatibility ports (tcp, udp); 0 when disabled.
+    pub fn kde_ports(&self) -> (u16, u16) {
+        let p = *self.inner.ports.lock().unwrap();
+        (p.kde_tcp, p.kde_udp)
     }
 
     pub fn config(&self) -> Config {
         self.inner.config.read().unwrap().clone()
     }
 
-    /// Update configuration (device name, download dir...). Network settings
-    /// take effect on restart.
+    /// Update configuration. Network settings take effect on restart.
     pub fn update_config(&self, f: impl FnOnce(&mut Config)) -> Result<()> {
         let cfg = {
             let mut c = self.inner.config.write().unwrap();
@@ -196,91 +272,154 @@ impl Konnekta {
             .collect()
     }
 
-    /// Start listening and discovery.
+    fn spawn_bg<F>(&self, fut: F)
+    where
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
+        let t = tokio::spawn(fut);
+        self.inner.background.lock().unwrap().push(t.abort_handle());
+    }
+
+    /// Start listening, discovery and the reconnect loop.
     pub async fn start(&self) -> Result<()> {
         let inner = &self.inner;
         let cfg = self.config();
 
-        // TCP listener: first free port in 1716..=1764 (or ephemeral if 0).
-        let listener = if cfg.tcp_port == 0 {
-            TcpListener::bind(SocketAddr::new(cfg.bind_addr, 0)).await?
-        } else {
-            let mut l = None;
-            for port in cfg.tcp_port..=konnekta_proto::MAX_PORT.max(cfg.tcp_port) {
-                if let Ok(s) = TcpListener::bind(SocketAddr::new(cfg.bind_addr, port)).await {
-                    l = Some(s);
-                    break;
+        // Native protocol.
+        let native_range = Protocol::Konnekta.tcp_ports();
+        let listener = bind_tcp(cfg.bind_addr, cfg.tcp_port, *native_range.end()).await?;
+        inner.ports.lock().unwrap().tcp = listener.local_addr()?.port();
+        self.spawn_bg(accept_loop(
+            Arc::downgrade(inner),
+            listener,
+            Protocol::Konnekta,
+        ));
+
+        // KDE Connect compatibility (opt-in).
+        if cfg.kde_compat {
+            let kde_range = Protocol::KdeConnect.tcp_ports();
+            match bind_tcp(cfg.bind_addr, cfg.kde_tcp_port, *kde_range.end()).await {
+                Ok(l) => {
+                    inner.ports.lock().unwrap().kde_tcp = l.local_addr()?.port();
+                    self.spawn_bg(accept_loop(Arc::downgrade(inner), l, Protocol::KdeConnect));
+                }
+                Err(e) => tracing::warn!("KDE Connect compatibility unavailable: {e:#}"),
+            }
+        }
+        tracing::info!(port = self.tcp_port(), kde = cfg.kde_compat, device_id = %self.device_id(), "listening");
+
+        // UDP discovery per protocol.
+        let mut protos = vec![(Protocol::Konnekta, cfg.udp_port)];
+        if cfg.kde_compat {
+            protos.push((Protocol::KdeConnect, cfg.kde_udp_port));
+        }
+        for (proto, port) in protos {
+            let addr = SocketAddr::new(cfg.bind_addr, if cfg.listen_udp { port } else { 0 });
+            match discovery::bind_udp(addr) {
+                Ok(sock) => {
+                    let sock = Arc::new(sock);
+                    let local = sock.local_addr()?.port();
+                    {
+                        let mut p = inner.ports.lock().unwrap();
+                        match proto {
+                            Protocol::Konnekta => p.udp = local,
+                            Protocol::KdeConnect => p.kde_udp = local,
+                        }
+                    }
+                    match proto {
+                        Protocol::Konnekta => *inner.udp.lock().unwrap() = Some(sock.clone()),
+                        Protocol::KdeConnect => *inner.kde_udp.lock().unwrap() = Some(sock.clone()),
+                    }
+                    if cfg.listen_udp {
+                        let weak = Arc::downgrade(inner);
+                        self.spawn_bg(async move {
+                            let mut buf = vec![0u8; 16 * 1024];
+                            loop {
+                                let Ok((n, from)) = sock.recv_from(&mut buf).await else {
+                                    continue;
+                                };
+                                let Some(inner) = weak.upgrade() else { break };
+                                if let Some(a) = discovery::parse_announcement(&buf[..n], from) {
+                                    inner.on_announcement(a);
+                                }
+                            }
+                        });
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("{} UDP discovery unavailable on {addr}: {e}", proto.label())
                 }
             }
-            l.context("no free TCP port in 1716-1764")?
-        };
-        inner
-            .tcp_port
-            .store(listener.local_addr()?.port(), Ordering::Relaxed);
-        tracing::info!(port = self.tcp_port(), device_id = %self.device_id(), "listening");
-
-        let weak = Arc::downgrade(inner);
-        let accept = tokio::spawn(async move {
-            loop {
-                let Ok((tcp, from)) = listener.accept().await else {
-                    continue;
-                };
-                let Some(inner) = weak.upgrade() else { break };
-                tokio::spawn(async move {
-                    if let Err(e) = inner.clone().handle_incoming(tcp).await {
-                        tracing::debug!(%from, "incoming connection failed: {e:#}");
+        }
+        if cfg.announce {
+            let weak = Arc::downgrade(inner);
+            let interval = cfg.announce_interval_secs;
+            self.spawn_bg(async move {
+                loop {
+                    let Some(inner) = weak.upgrade() else { break };
+                    inner.announce().await;
+                    drop(inner);
+                    if interval == 0 {
+                        break;
                     }
-                });
+                    tokio::time::sleep(Duration::from_secs(interval)).await;
+                }
+            });
+        }
+
+        // mDNS.
+        if cfg.mdns {
+            match discovery::mdns::Mdns::start() {
+                Ok(mut m) => {
+                    if cfg.announce
+                        && let Err(e) = m.advertise(
+                            self.device_id(),
+                            &cfg.device_name,
+                            cfg.device_type,
+                            self.tcp_port(),
+                        )
+                    {
+                        tracing::warn!("mDNS advertisement failed: {e:#}");
+                    }
+                    let (tx, mut rx) = mpsc::unbounded_channel();
+                    if let Err(e) = m.browse(tx) {
+                        tracing::warn!("mDNS browse failed: {e:#}");
+                    }
+                    *inner.mdns.lock().unwrap() = Some(m);
+                    let weak = Arc::downgrade(inner);
+                    self.spawn_bg(async move {
+                        while let Some(a) = rx.recv().await {
+                            let Some(inner) = weak.upgrade() else { break };
+                            inner.on_announcement(a);
+                        }
+                    });
+                }
+                Err(e) => tracing::warn!("mDNS unavailable: {e:#}"),
+            }
+        }
+
+        // Reconnect to paired devices (outgoing only: works behind a firewall
+        // that blocks inbound connections, and through Tailscale).
+        let weak = Arc::downgrade(inner);
+        let every = Duration::from_secs(cfg.reconnect_interval_secs.max(1));
+        self.spawn_bg(async move {
+            loop {
+                let Some(inner) = weak.upgrade() else { break };
+                inner.clone().dial_paired().await;
+                drop(inner);
+                tokio::time::sleep(every).await;
             }
         });
-        inner.background.lock().unwrap().push(accept.abort_handle());
 
-        // UDP discovery.
-        let udp_addr =
-            SocketAddr::new(cfg.bind_addr, if cfg.listen_udp { cfg.udp_port } else { 0 });
-        match discovery::bind_udp(udp_addr) {
-            Ok(sock) => {
-                let sock = Arc::new(sock);
-                inner
-                    .udp_port
-                    .store(sock.local_addr()?.port(), Ordering::Relaxed);
-                *inner.udp.lock().unwrap() = Some(sock.clone());
-                if cfg.listen_udp {
-                    let weak = Arc::downgrade(inner);
-                    let s = sock.clone();
-                    let t = tokio::spawn(async move {
-                        let mut buf = vec![0u8; 16 * 1024];
-                        loop {
-                            let Ok((n, from)) = s.recv_from(&mut buf).await else {
-                                continue;
-                            };
-                            let Some(inner) = weak.upgrade() else { break };
-                            if let Some(id) = discovery::parse_announcement(&buf[..n]) {
-                                inner.on_announcement(id, from);
-                            }
-                        }
-                    });
-                    inner.background.lock().unwrap().push(t.abort_handle());
-                }
-                if cfg.announce {
-                    let weak = Arc::downgrade(inner);
-                    let interval = cfg.announce_interval_secs;
-                    let t = tokio::spawn(async move {
-                        loop {
-                            let Some(inner) = weak.upgrade() else { break };
-                            inner.announce().await;
-                            drop(inner);
-                            if interval == 0 {
-                                break;
-                            }
-                            tokio::time::sleep(Duration::from_secs(interval)).await;
-                        }
-                    });
-                    inner.background.lock().unwrap().push(t.abort_handle());
-                }
+        // Pairing timeouts and idle unpaired links.
+        let weak = Arc::downgrade(inner);
+        self.spawn_bg(async move {
+            loop {
+                tokio::time::sleep(JANITOR_INTERVAL).await;
+                let Some(inner) = weak.upgrade() else { break };
+                inner.janitor().await;
             }
-            Err(e) => tracing::warn!("UDP discovery unavailable on {udp_addr}: {e}"),
-        }
+        });
 
         for p in &inner.plugins {
             p.clone().start(self.handle()).await;
@@ -293,6 +432,7 @@ impl Konnekta {
         for t in self.inner.background.lock().unwrap().drain(..) {
             t.abort();
         }
+        *self.inner.mdns.lock().unwrap() = None;
         let links: Vec<_> = self.inner.links.lock().unwrap().drain().collect();
         for (_, l) in links {
             for t in l.tasks {
@@ -301,22 +441,58 @@ impl Konnekta {
         }
     }
 
-    /// Broadcast our identity now.
+    /// Announce ourselves now and dial paired devices.
     pub async fn refresh(&self) {
         self.inner.announce().await;
+        self.inner.dialing.lock().unwrap().clear();
+        self.inner.clone().dial_paired().await;
     }
 
-    /// Ask a device at a known address to connect to us (like KDE Connect's
-    /// "add device by IP"): sends our identity to `addr` (UDP port).
-    pub async fn connect_to(&self, addr: SocketAddr) -> Result<()> {
-        let sock = self
-            .inner
-            .udp
-            .lock()
-            .unwrap()
-            .clone()
-            .context("UDP socket not bound")?;
-        sock.send_to(&self.inner.identity_packet().to_line(), addr)
+    /// Connect to a device at a known address (`ip`, `ip:port`, host name).
+    /// Native: dial it directly. With KDE compatibility on, also ask a KDE
+    /// Connect device at that address to connect back.
+    pub async fn connect_to(&self, address: &str) -> Result<()> {
+        let (host, port) = parse_host_port(address, *Protocol::Konnekta.tcp_ports().start());
+        let addrs: Vec<SocketAddr> = tokio::net::lookup_host((host.as_str(), port))
+            .await
+            .with_context(|| format!("cannot resolve {host}"))?
+            .collect();
+        let addr = *addrs.first().context("no address")?;
+        if self.config().kde_compat {
+            let sock = self.inner.kde_udp.lock().unwrap().clone();
+            if let Some(sock) = sock {
+                let _ = sock
+                    .send_to(
+                        &self.inner.identity_packet(Protocol::KdeConnect).to_line(),
+                        SocketAddr::new(addr.ip(), Protocol::KdeConnect.udp_port()),
+                    )
+                    .await;
+            }
+        }
+        let inner = self.inner.clone();
+        tokio::spawn(async move {
+            if let Err(e) = inner.clone().dial(Protocol::Konnekta, None, addr).await {
+                tracing::info!(%addr, "manual connection failed: {e:#}");
+            }
+        });
+        Ok(())
+    }
+
+    /// Send our announcement to one UDP address (tests, networks without
+    /// broadcast). `protocol` selects which identity is sent.
+    pub async fn announce_to(&self, addr: SocketAddr, protocol: Protocol) -> Result<()> {
+        let (sock, packet) = match protocol {
+            Protocol::Konnekta => (
+                self.inner.udp.lock().unwrap().clone(),
+                self.inner.native_announcement(),
+            ),
+            Protocol::KdeConnect => (
+                self.inner.kde_udp.lock().unwrap().clone(),
+                self.inner.identity_packet(Protocol::KdeConnect),
+            ),
+        };
+        sock.context("UDP socket not bound")?
+            .send_to(&packet.to_line(), addr)
             .await?;
         Ok(())
     }
@@ -329,6 +505,24 @@ impl Konnekta {
         self.devices().into_iter().find(|d| d.id == id)
     }
 
+    /// Devices seen on the network that are not connected.
+    pub fn discovered(&self) -> Vec<Value> {
+        let links = self.inner.links.lock().unwrap();
+        self.inner
+            .discovered
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|(a, _)| !links.contains_key(&a.device_id))
+            .map(|(a, t)| {
+                serde_json::json!({
+                    "id": a.device_id, "name": a.device_name, "deviceType": a.device_type,
+                    "protocol": a.protocol, "address": a.addr.to_string(), "secondsAgo": t.elapsed().as_secs(),
+                })
+            })
+            .collect()
+    }
+
     pub fn device_handle(&self, id: &str) -> Option<DeviceHandle> {
         self.inner.paired_handle(id)
     }
@@ -337,12 +531,14 @@ impl Konnekta {
         self.inner.clone().request_pair(id).await
     }
 
-    pub async fn accept_pair(&self, id: &str) -> Result<()> {
-        self.inner.clone().accept_pair(id).await
+    /// Accept an incoming request, or confirm a request the device accepted.
+    /// `key`, when given, must match the key of the open pairing.
+    pub async fn accept_pair(&self, id: &str, key: Option<&str>) -> Result<()> {
+        self.inner.clone().accept_pair(id, key).await
     }
 
-    pub async fn reject_pair(&self, id: &str) -> Result<()> {
-        self.inner.clone().reject_pair(id).await
+    pub async fn reject_pair(&self, id: &str, key: Option<&str>) -> Result<()> {
+        self.inner.clone().reject_pair(id, key).await
     }
 
     pub async fn unpair(&self, id: &str) -> Result<()> {
@@ -382,6 +578,31 @@ impl Konnekta {
         Ok(())
     }
 
+    /// Addresses dialed when the device is away (Tailscale, VPN, ...).
+    pub fn set_extra_addresses(&self, id: &str, addresses: Vec<String>) -> Result<()> {
+        let clean: Vec<String> = addresses
+            .into_iter()
+            .map(|a| a.trim().to_owned())
+            .filter(|a| {
+                !a.is_empty()
+                    && a.len() <= 255
+                    && !a.chars().any(|c| c.is_whitespace() || c.is_control())
+            })
+            .take(8)
+            .collect();
+        if !self
+            .inner
+            .trust
+            .lock()
+            .unwrap()
+            .update(id, |d| d.extra_addresses = clean)
+        {
+            bail!("device not paired");
+        }
+        self.inner.emit_updated(id);
+        Ok(())
+    }
+
     pub fn set_plugin_enabled(&self, plugin: &str, enabled: bool) -> Result<()> {
         if !self.inner.plugins.iter().any(|p| p.info().id == plugin) {
             bail!("unknown plugin {plugin}");
@@ -406,6 +627,29 @@ impl Konnekta {
         self.inner
             .plugin_action(device_id, plugin, action, args)
             .await
+    }
+}
+
+async fn accept_loop(weak: std::sync::Weak<Inner>, listener: TcpListener, proto: Protocol) {
+    loop {
+        let Ok((tcp, from)) = listener.accept().await else {
+            continue;
+        };
+        let Some(inner) = weak.upgrade() else { break };
+        let Some(guard) = inner.clone().admit_pending(from.ip()) else {
+            tracing::debug!(%from, "too many connections in handshake, dropping");
+            continue;
+        };
+        tokio::spawn(async move {
+            let r = match proto {
+                Protocol::Konnekta => inner.clone().handle_incoming_native(tcp, from).await,
+                Protocol::KdeConnect => inner.clone().handle_incoming_kde(tcp, from).await,
+            };
+            drop(guard);
+            if let Err(e) = r {
+                tracing::debug!(%from, "incoming {} connection failed: {e:#}", proto.label());
+            }
+        });
     }
 }
 
@@ -442,6 +686,20 @@ impl Inner {
         p.handle_action(dev.as_ref(), action, args).await
     }
 
+    fn admit_pending(self: Arc<Self>, ip: IpAddr) -> Option<PendingGuard> {
+        let limits = self.config.read().unwrap().limits.clone();
+        {
+            let mut p = self.pending.lock().unwrap();
+            let total: usize = p.values().sum();
+            let here = p.get(&ip).copied().unwrap_or(0);
+            if total >= limits.pending_connections || here >= limits.pending_connections_per_addr {
+                return None;
+            }
+            *p.entry(ip).or_default() += 1;
+        }
+        Some(PendingGuard { inner: self, ip })
+    }
+
     fn capabilities(&self) -> (Vec<String>, Vec<String>) {
         let disabled = self.config.read().unwrap().disabled_plugins.clone();
         let mut inc = BTreeSet::new();
@@ -454,32 +712,74 @@ impl Inner {
             inc.extend(i.incoming.iter().map(|s| s.to_string()));
             out.extend(i.outgoing.iter().map(|s| s.to_string()));
         }
-        inc.insert(payload::RESUME_CAPABILITY.to_string());
+        inc.insert(crate::payload::RESUME_CAPABILITY.to_string());
         (inc.into_iter().collect(), out.into_iter().collect())
     }
 
-    pub(crate) fn identity_packet(&self) -> Packet {
+    /// Full identity, sent inside TLS (and in clear for KDE Connect).
+    pub(crate) fn identity_packet(&self, proto: Protocol) -> Packet {
         let cfg = self.config.read().unwrap();
         let (incoming, outgoing) = self.capabilities();
+        let ports = *self.ports.lock().unwrap();
+        let (incoming, outgoing, port) = match proto {
+            Protocol::Konnekta => (incoming, outgoing, ports.tcp),
+            Protocol::KdeConnect => (
+                kde::caps_to_kde(&incoming),
+                kde::caps_to_kde(&outgoing),
+                ports.kde_tcp,
+            ),
+        };
         Packet::new(
-            types::IDENTITY,
+            proto.identity_type(),
             IdentityBody {
                 device_id: self.identity.device_id.clone(),
                 device_name: cfg.device_name.clone(),
                 device_type: cfg.device_type,
-                protocol_version: PROTOCOL_VERSION,
+                protocol_version: proto.version(),
                 incoming_capabilities: incoming,
                 outgoing_capabilities: outgoing,
-                tcp_port: Some(self.tcp_port.load(Ordering::Relaxed)),
+                tcp_port: Some(port),
+                app: (proto == Protocol::Konnekta).then(|| "Konnekta".into()),
+                app_version: (proto == Protocol::Konnekta)
+                    .then(|| env!("CARGO_PKG_VERSION").into()),
             },
         )
     }
 
+    fn native_announcement(&self) -> Packet {
+        let cfg = self.config.read().unwrap();
+        discovery::native_announcement(
+            &self.identity.device_id,
+            &cfg.device_name,
+            cfg.device_type,
+            self.ports.lock().unwrap().tcp,
+        )
+    }
+
     async fn announce(&self) {
-        let sock = self.udp.lock().unwrap().clone();
-        if let Some(sock) = sock {
-            let targets = self.config.read().unwrap().broadcast_targets.clone();
-            discovery::announce(&sock, &self.identity_packet(), &targets).await;
+        let (targets, kde) = {
+            let c = self.config.read().unwrap();
+            (c.broadcast_targets.clone(), c.kde_compat)
+        };
+        let udp = self.udp.lock().unwrap().clone();
+        if let Some(sock) = udp {
+            let port = Protocol::Konnekta.udp_port();
+            let t: Vec<SocketAddr> = targets
+                .iter()
+                .map(|ip| SocketAddr::new(*ip, port))
+                .collect();
+            discovery::announce(&sock, &self.native_announcement(), &t).await;
+        }
+        if kde {
+            let udp = self.kde_udp.lock().unwrap().clone();
+            if let Some(sock) = udp {
+                let port = Protocol::KdeConnect.udp_port();
+                let t: Vec<SocketAddr> = targets
+                    .iter()
+                    .map(|ip| SocketAddr::new(*ip, port))
+                    .collect();
+                discovery::announce(&sock, &self.identity_packet(Protocol::KdeConnect), &t).await;
+            }
         }
     }
 
@@ -495,69 +795,173 @@ impl Inner {
         }
     }
 
-    fn unpaired_link_count(&self) -> usize {
-        self.links
-            .lock()
-            .unwrap()
-            .values()
-            .filter(|l| !l.pair.is_paired())
-            .count()
+    fn should_dial(&self, key: &str) -> bool {
+        let mut d = self.dialing.lock().unwrap();
+        if d.get(key).is_some_and(|t| t.elapsed() < DIAL_INTERVAL) {
+            return false;
+        }
+        d.insert(key.to_owned(), Instant::now());
+        true
     }
 
-    fn admit_unpaired(&self, device_id: &str) -> bool {
-        self.trust.lock().unwrap().is_trusted(device_id)
-            || self.unpaired_link_count() < self.config.read().unwrap().max_unpaired_links
-    }
-
-    fn on_announcement(self: &Arc<Self>, id: IdentityBody, from: SocketAddr) {
-        if id.device_id == self.identity.device_id {
+    fn on_announcement(self: &Arc<Self>, a: Announcement) {
+        if a.device_id == self.identity.device_id {
             return;
         }
-        if self.links.lock().unwrap().contains_key(&id.device_id) {
+        if a.protocol == Protocol::KdeConnect && !self.config.read().unwrap().kde_compat {
             return;
         }
         {
-            let mut c = self.connecting.lock().unwrap();
-            if let Some(t) = c.get(&id.device_id)
-                && t.elapsed() < OUTGOING_RETRY
+            let max = self.config.read().unwrap().limits.discovered_devices;
+            let mut d = self.discovered.lock().unwrap();
+            if !d.contains_key(&a.device_id)
+                && d.len() >= max
+                && let Some(oldest) = d
+                    .iter()
+                    .min_by_key(|(_, (_, t))| *t)
+                    .map(|(k, _)| k.clone())
             {
-                return;
+                d.remove(&oldest);
             }
-            c.insert(id.device_id.clone(), Instant::now());
+            d.insert(a.device_id.clone(), (a.clone(), Instant::now()));
         }
-        if !self.admit_unpaired(&id.device_id) {
-            tracing::debug!("too many unpaired links, ignoring {}", id.device_id);
+        if self.links.lock().unwrap().contains_key(&a.device_id) {
             return;
         }
-        let Some(port) = id.tcp_port else { return };
-        let addr = SocketAddr::new(from.ip(), port);
+        // The dial still has to pass the certificate pin, so discovery can
+        // never redirect a paired device to an impostor.
+        if !self.should_dial(&a.device_id) {
+            return;
+        }
         let this = self.clone();
         tokio::spawn(async move {
-            let expect = this.expectation_for(&id.device_id);
-            let me = this.identity_packet();
-            match link::connect_outgoing(&this.identity, &me, addr, expect).await {
-                Ok(tls) => {
-                    if let Err(e) = this.clone().establish(tls, id, addr).await {
-                        tracing::debug!(%addr, "link setup failed: {e:#}");
-                    }
-                }
-                Err(e) => this.report_tls_failure(&id.device_id, &e),
+            if let Err(e) = this
+                .dial(a.protocol, Some(a.device_id.clone()), a.addr)
+                .await
+            {
+                tracing::debug!(addr = %a.addr, "dial failed: {e:#}");
             }
         });
     }
 
-    async fn handle_incoming(self: Arc<Self>, mut tcp: TcpStream) -> Result<()> {
-        let addr = tcp.peer_addr()?;
+    /// Dial `addr`. `expected` is the device id when known.
+    async fn dial(
+        self: Arc<Self>,
+        proto: Protocol,
+        expected: Option<String>,
+        addr: SocketAddr,
+    ) -> Result<()> {
+        let expect = match &expected {
+            Some(id) => self.expectation_for(id),
+            None => PeerExpectation::Deferred,
+        };
+        let tls = match proto {
+            Protocol::Konnekta => link::dial_native(&self.identity, addr, expect).await,
+            Protocol::KdeConnect => {
+                let me = self.identity_packet(Protocol::KdeConnect);
+                link::dial_kde(&self.identity, &me, addr, expect).await
+            }
+        };
+        match tls {
+            Ok(tls) => self.establish(tls, proto, expected, addr, true).await,
+            Err(e) => {
+                if let Some(id) = &expected {
+                    self.report_tls_failure(id, &e);
+                }
+                Err(e)
+            }
+        }
+    }
+
+    async fn dial_paired(self: Arc<Self>) {
+        let kde_compat = self.config.read().unwrap().kde_compat;
+        let native_port = *Protocol::Konnekta.tcp_ports().start();
+        let trusted: Vec<TrustedDevice> = self.trust.lock().unwrap().all().cloned().collect();
+        for d in trusted {
+            if self.links.lock().unwrap().contains_key(&d.device_id) {
+                continue;
+            }
+            match d.protocol {
+                Protocol::Konnekta => {
+                    if !self.should_dial(&format!("paired:{}", d.device_id)) {
+                        continue;
+                    }
+                    let mut candidates: Vec<(String, u16)> = Vec::new();
+                    if let (Some(ip), Some(port)) = (d.last_address, d.last_port) {
+                        candidates.push((ip.to_string(), port));
+                    }
+                    for a in &d.extra_addresses {
+                        candidates.push(parse_host_port(a, d.last_port.unwrap_or(native_port)));
+                    }
+                    let this = self.clone();
+                    tokio::spawn(async move {
+                        for (host, port) in candidates {
+                            let Ok(addrs) = tokio::net::lookup_host((host.as_str(), port)).await
+                            else {
+                                continue;
+                            };
+                            for addr in addrs.take(2) {
+                                if this.links.lock().unwrap().contains_key(&d.device_id) {
+                                    return;
+                                }
+                                match this
+                                    .clone()
+                                    .dial(Protocol::Konnekta, Some(d.device_id.clone()), addr)
+                                    .await
+                                {
+                                    Ok(()) => return,
+                                    Err(e) => {
+                                        tracing::debug!(device = %d.name, %addr, "reconnect failed: {e:#}")
+                                    }
+                                }
+                            }
+                        }
+                    });
+                }
+                Protocol::KdeConnect if kde_compat => {
+                    // KDE Connect devices dial back after our identity.
+                    if let Some(ip) = d.last_address {
+                        let sock = self.kde_udp.lock().unwrap().clone();
+                        if let Some(sock) = sock {
+                            let _ = sock
+                                .send_to(
+                                    &self.identity_packet(Protocol::KdeConnect).to_line(),
+                                    SocketAddr::new(ip, Protocol::KdeConnect.udp_port()),
+                                )
+                                .await;
+                        }
+                    }
+                }
+                Protocol::KdeConnect => {}
+            }
+        }
+    }
+
+    async fn handle_incoming_native(
+        self: Arc<Self>,
+        tcp: TcpStream,
+        from: SocketAddr,
+    ) -> Result<()> {
+        let tls = link::accept_native(&self.identity, tcp).await?;
+        self.establish(tls, Protocol::Konnekta, None, from, false)
+            .await
+    }
+
+    async fn handle_incoming_kde(
+        self: Arc<Self>,
+        mut tcp: TcpStream,
+        from: SocketAddr,
+    ) -> Result<()> {
         let id = link::read_plain_identity(&mut tcp).await?;
         if id.device_id == self.identity.device_id {
             bail!("connection from ourselves");
         }
-        if !self.admit_unpaired(&id.device_id) {
-            bail!("too many unpaired links");
-        }
         let expect = self.expectation_for(&id.device_id);
-        match link::accept_incoming(&self.identity, tcp, expect).await {
-            Ok(tls) => self.establish(tls, id, addr).await,
+        match link::accept_kde(&self.identity, tcp, expect).await {
+            Ok(tls) => {
+                self.establish(tls, Protocol::KdeConnect, Some(id.device_id), from, false)
+                    .await
+            }
             Err(e) => {
                 self.report_tls_failure(&id.device_id, &e);
                 Err(e)
@@ -568,34 +972,64 @@ impl Inner {
     fn report_tls_failure(&self, device_id: &str, e: &anyhow::Error) {
         let msg = format!("{e:#}");
         if self.trust.lock().unwrap().is_trusted(device_id)
-            && (msg.contains("certificate") || msg.contains("Certificate"))
+            && msg.to_lowercase().contains("certificate")
         {
-            let _ = self.events.send(Event::SecurityWarning {
-                device_id: Some(device_id.to_owned()),
-                message: "A device claiming to be this paired device presented a different \
-                          certificate. The connection was refused. If the device was \
-                          reinstalled, unpair and pair it again."
-                    .into(),
-            });
+            self.security_warning(Some(device_id), PIN_MISMATCH);
         }
         tracing::debug!(device_id, "tls failed: {msg}");
     }
 
+    fn security_warning(&self, device_id: Option<&str>, message: &str) {
+        tracing::warn!(device = ?device_id, "{message}");
+        let _ = self.events.send(Event::SecurityWarning {
+            device_id: device_id.map(str::to_owned),
+            message: message.to_owned(),
+        });
+    }
+
+    /// Finish a link after TLS: identity exchange and all trust checks, then
+    /// start the reader and writer tasks.
     async fn establish(
         self: Arc<Self>,
         tls: SecureStream,
-        plain: IdentityBody,
+        proto: Protocol,
+        expected: Option<String>,
         addr: SocketAddr,
+        outgoing: bool,
     ) -> Result<()> {
         let peer_cert = link::peer_certificate(&tls).context("peer sent no certificate")?;
         let mut stream = BufReader::new(tls);
-        let me = self.identity_packet();
-        let identity = link::exchange_identity(&mut stream, &me).await?;
-        if identity.device_id != plain.device_id {
-            bail!("identity changed during handshake");
+        let me = self.identity_packet(proto);
+        let identity = link::exchange_identity(&mut stream, &me, proto).await?;
+        let device_id = identity.device_id.clone();
+        if expected.as_ref().is_some_and(|e| *e != device_id) {
+            bail!("device answered with another identity");
         }
-        // The certificate CN was already checked against plain.device_id by
-        // the TLS verifier, so the inner identity is bound to the certificate.
+        if device_id == self.identity.device_id {
+            bail!("connection to ourselves");
+        }
+        // The certificate must belong to the identity (TLS-first links could
+        // not check this during the handshake).
+        if konnekta_crypto::cert_common_name(&peer_cert)
+            .ok()
+            .as_deref()
+            != Some(device_id.as_str())
+        {
+            bail!("certificate does not match the device identity");
+        }
+        let pinned = self
+            .trust
+            .lock()
+            .unwrap()
+            .get(&device_id)
+            .map(TrustedDevice::cert_der);
+        if let Some(pin) = &pinned
+            && *pin != peer_cert
+        {
+            self.security_warning(Some(&device_id), PIN_MISMATCH);
+            bail!("certificate pin mismatch");
+        }
+        let trusted = pinned.is_some();
 
         let (rd, mut wr) = tokio::io::split(stream);
         let (tx, mut rx) = mpsc::channel::<Packet>(SEND_QUEUE);
@@ -606,12 +1040,66 @@ impl Inner {
             tx,
             identity: Arc::new(identity.clone()),
             addr,
-            peer_cert: Arc::new(peer_cert),
+            protocol: proto,
+            peer_cert: Arc::new(peer_cert.clone()),
+            outgoing,
         };
-        let device_id = identity.device_id.clone();
+
+        // Decide whether this link may replace an existing one.
+        let mut evicted = Vec::new();
+        {
+            let links = self.links.lock().unwrap();
+            if let Some(old) = links.get(&device_id) {
+                if old.pair.is_open() && *old.handle.peer_cert != peer_cert {
+                    bail!("a pairing with another certificate is in progress for this device");
+                }
+                let dialer = |out: bool| {
+                    if out {
+                        self.identity.device_id.as_str()
+                    } else {
+                        device_id.as_str()
+                    }
+                };
+                let (old_dialer, new_dialer) = (dialer(old.handle.outgoing), dialer(outgoing));
+                // Simultaneous connections: both sides keep the one opened by
+                // the smaller device id. Same dialer: the newer one wins.
+                if old_dialer != new_dialer && old_dialer < new_dialer {
+                    tracing::debug!(device = %identity.device_name, "keeping existing link");
+                    return Ok(());
+                }
+            }
+            if !trusted {
+                let limits = self.config.read().unwrap().limits.clone();
+                let unpaired: Vec<(String, IpAddr, Instant)> = links
+                    .iter()
+                    .filter(|(id, l)| **id != device_id && !l.pair.is_paired())
+                    .map(|(id, l)| (id.clone(), l.handle.addr.ip(), l.created))
+                    .collect();
+                let same_addr: Vec<_> = unpaired
+                    .iter()
+                    .filter(|(_, ip, _)| *ip == addr.ip())
+                    .collect();
+                if same_addr.len() >= limits.unpaired_links_per_addr {
+                    if let Some(o) = same_addr.iter().min_by_key(|(_, _, t)| *t) {
+                        evicted.push(o.0.clone());
+                    }
+                } else if unpaired.len() >= limits.unpaired_links
+                    && let Some(o) = unpaired.iter().min_by_key(|(_, _, t)| *t)
+                {
+                    evicted.push(o.0.clone());
+                }
+            }
+        }
+        for id in evicted {
+            tracing::info!(device = %id, "closing the oldest unpaired link (limit reached)");
+            self.close_link(&id).await;
+        }
 
         let writer = tokio::spawn(async move {
             while let Some(p) = rx.recv().await {
+                let Some(p) = link::to_wire(p, proto) else {
+                    continue;
+                };
                 if wr.write_all(&p.to_line()).await.is_err() || wr.flush().await.is_err() {
                     break;
                 }
@@ -624,8 +1112,14 @@ impl Inner {
         let reader = tokio::spawn(async move {
             let mut rd = BufReader::new(rd);
             loop {
-                match link::read_packet(&mut rd).await {
-                    Ok(Some(p)) => this.dispatch(&rid, link_id, p).await,
+                let max = if this.is_paired(&rid) {
+                    link::MAX_PAIRED_LINE
+                } else {
+                    link::MAX_UNPAIRED_LINE
+                };
+                match link::read_packet(&mut rd, proto, max).await {
+                    Ok(Some(Some(p))) => this.dispatch(&rid, link_id, p).await,
+                    Ok(Some(None)) => {}
                     Ok(None) => break,
                     Err(e) => {
                         tracing::debug!(device = %rid, "link read error: {e:#}");
@@ -636,7 +1130,6 @@ impl Inner {
             this.on_link_closed(&rid, link_id).await;
         });
 
-        let trusted = self.trust.lock().unwrap().is_trusted(&device_id);
         let entry = LinkEntry {
             handle: handle.clone(),
             pair: if trusted {
@@ -646,6 +1139,8 @@ impl Inner {
             },
             tasks: vec![reader.abort_handle(), writer.abort_handle()],
             denied: HashSet::new(),
+            created: Instant::now(),
+            pair_requested: false,
         };
         let old = self.links.lock().unwrap().insert(device_id.clone(), entry);
         if let Some(old) = old {
@@ -658,9 +1153,12 @@ impl Inner {
                 d.name = identity.device_name.clone();
                 d.device_type = identity.device_type;
                 d.last_address = Some(addr.ip());
+                if proto == Protocol::Konnekta {
+                    d.last_port = identity.tcp_port.or(d.last_port);
+                }
             });
         }
-        tracing::info!(device = %identity.device_name, %addr, paired = trusted, "device connected");
+        tracing::info!(device = %identity.device_name, %addr, protocol = proto.label(), paired = trusted, "device connected");
         if let Some(info) = self.device_info(&device_id) {
             let _ = self.events.send(Event::DeviceConnected { device: info });
         }
@@ -668,6 +1166,23 @@ impl Inner {
             self.notify_plugins_connected(&handle).await;
         }
         Ok(())
+    }
+
+    async fn close_link(&self, device_id: &str) {
+        let removed = self.links.lock().unwrap().remove(device_id);
+        if let Some(entry) = removed {
+            for t in &entry.tasks {
+                t.abort();
+            }
+            let _ = self.events.send(Event::DeviceDisconnected {
+                device_id: device_id.to_owned(),
+            });
+            if entry.pair.is_paired() {
+                for p in &self.plugins {
+                    p.on_disconnected(device_id).await;
+                }
+            }
+        }
     }
 
     async fn on_link_closed(&self, device_id: &str, link_id: u64) {
@@ -683,6 +1198,15 @@ impl Inner {
                 t.abort();
             }
             tracing::info!(device = %device_id, "device disconnected");
+            if entry.pair.is_open() {
+                let _ = self.events.send(Event::PairRejected {
+                    device_id: device_id.to_owned(),
+                    reason: "the connection closed during pairing".into(),
+                });
+                if matches!(entry.pair, PairState::RequestedByPeer { .. }) {
+                    self.cool_down(device_id);
+                }
+            }
             let _ = self.events.send(Event::DeviceDisconnected {
                 device_id: device_id.to_owned(),
             });
@@ -762,6 +1286,17 @@ impl Inner {
         self.device_infos().into_iter().find(|d| d.id == id)
     }
 
+    fn link_key(&self, l: &LinkEntry) -> Option<String> {
+        let ts = l.pair.timestamp()?;
+        verification_key(
+            &self.identity.cert_der,
+            &l.handle.peer_cert,
+            ts,
+            l.handle.protocol.key_len(),
+        )
+        .ok()
+    }
+
     fn device_infos(&self) -> Vec<DeviceInfo> {
         let links = self.links.lock().unwrap();
         let trust = self.trust.lock().unwrap();
@@ -785,6 +1320,10 @@ impl Inner {
                 outgoing_capabilities: link
                     .map(|l| l.handle.identity.outgoing_capabilities.clone())
                     .unwrap_or_default(),
+                protocol: link.map(|l| l.handle.protocol).unwrap_or(t.protocol),
+                pair_key: None,
+                extra_addresses: t.extra_addresses.clone(),
+                app: link.and_then(|l| l.handle.identity.app.clone()),
             });
         }
         for (id, l) in links.iter() {
@@ -804,6 +1343,10 @@ impl Inner {
                 disabled_plugins: BTreeSet::new(),
                 incoming_capabilities: l.handle.identity.incoming_capabilities.clone(),
                 outgoing_capabilities: l.handle.identity.outgoing_capabilities.clone(),
+                protocol: l.handle.protocol,
+                pair_key: self.link_key(l),
+                extra_addresses: Vec::new(),
+                app: l.handle.identity.app.clone(),
             });
         }
         out
@@ -823,9 +1366,14 @@ impl Inner {
             .map(|l| (l.handle.clone(), l.pair))
     }
 
-    fn set_pair_state(&self, id: &str, state: PairState) {
-        if let Some(l) = self.links.lock().unwrap().get_mut(id) {
-            l.pair = state;
+    /// Change the pair state only if the link is still `link_id`.
+    fn set_pair_state(&self, id: &str, link_id: u64, state: PairState) -> bool {
+        match self.links.lock().unwrap().get_mut(id) {
+            Some(l) if l.handle.link_id == link_id => {
+                l.pair = state;
+                true
+            }
+            _ => false,
         }
     }
 
@@ -835,7 +1383,7 @@ impl Inner {
         let Some((handle, state)) = self.link_handle(device_id) else {
             return;
         };
-        if handle.link_id != link_id || packet.packet_type.is_empty() {
+        if handle.link_id != link_id {
             return;
         }
         match packet.packet_type.as_str() {
@@ -847,18 +1395,20 @@ impl Inner {
             _ => {}
         }
         if !state.is_paired() || !self.trust.lock().unwrap().is_trusted(device_id) {
-            tracing::warn!(device = %device_id, packet = %packet.packet_type, "dropping packet from unpaired device");
-            // Tell the peer we consider it unpaired so its state resyncs.
-            let _ = handle
-                .tx
-                .send(Packet::new(
-                    types::PAIR,
-                    PairBody {
-                        pair: false,
-                        timestamp: None,
-                    },
-                ))
-                .await;
+            tracing::debug!(device = %device_id, packet = %packet.packet_type, "dropping packet from unpaired device");
+            if !state.is_open() {
+                // Tell the peer we consider it unpaired so its state resyncs.
+                let _ = handle
+                    .tx
+                    .send(Packet::new(
+                        types::PAIR,
+                        PairBody {
+                            pair: false,
+                            timestamp: None,
+                        },
+                    ))
+                    .await;
+            }
             return;
         }
         let disabled_global = self.config.read().unwrap().disabled_plugins.clone();
@@ -870,15 +1420,12 @@ impl Inner {
                 d.map(|d| d.disabled_plugins.clone()).unwrap_or_default(),
             )
         };
-        let mut handled = false;
         for p in &self.plugins {
             let info = p.info();
             if !info.incoming.contains(&packet.packet_type.as_str()) {
                 continue;
             }
-            handled = true;
             if disabled_global.contains(info.id) || disabled_dev.contains(info.id) {
-                tracing::debug!(plugin = info.id, "plugin disabled, dropping packet");
                 continue;
             }
             if !perms.contains(&info.permission) {
@@ -888,9 +1435,6 @@ impl Inner {
             if let Err(e) = p.handle_packet(&handle, packet.clone()).await {
                 tracing::warn!(plugin = info.id, "packet handling failed: {e:#}");
             }
-        }
-        if !handled {
-            tracing::debug!(packet = %packet.packet_type, "no plugin for packet type");
         }
     }
 
@@ -915,14 +1459,20 @@ impl Inner {
         }
     }
 
-    // --- pairing -----------------------------------------------------------------
+    // --- pairing ---------------------------------------------------------------
 
-    fn vkey(&self, handle: &DeviceHandle, ts: u64) -> String {
-        verification_key(&self.identity.cert_der, &handle.peer_cert, ts).unwrap_or_default()
+    fn key(&self, handle: &DeviceHandle, ts: u64) -> String {
+        verification_key(
+            &self.identity.cert_der,
+            &handle.peer_cert,
+            ts,
+            handle.protocol.key_len(),
+        )
+        .unwrap_or_default()
     }
 
-    async fn send_pair(&self, handle: &DeviceHandle, pair: bool, ts: Option<u64>) {
-        let _ = handle
+    async fn send_pair(&self, handle: &DeviceHandle, pair: bool, ts: Option<u64>) -> bool {
+        handle
             .tx
             .send(Packet::new(
                 types::PAIR,
@@ -931,7 +1481,23 @@ impl Inner {
                     timestamp: ts,
                 },
             ))
-            .await;
+            .await
+            .is_ok()
+    }
+
+    fn open_incoming_requests(&self) -> Vec<(String, IpAddr)> {
+        self.links
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, l)| matches!(l.pair, PairState::RequestedByPeer { .. }))
+            .map(|(id, l)| (id.clone(), l.handle.addr.ip()))
+            .collect()
+    }
+
+    fn cool_down(&self, id: &str) {
+        let cd = Duration::from_secs(self.config.read().unwrap().limits.pair_cooldown_secs);
+        self.guard.lock().unwrap().cool_down(id, cd);
     }
 
     async fn handle_pair(self: Arc<Self>, handle: DeviceHandle, state: PairState, packet: Packet) {
@@ -939,15 +1505,45 @@ impl Inner {
             return;
         };
         let id = handle.id().to_owned();
+        let lid = handle.link_id;
+        if let Some(l) = self.links.lock().unwrap().get_mut(&id) {
+            l.pair_requested = true;
+        }
         if body.pair {
             match state {
-                PairState::RequestedByUs { .. } => self.complete_pairing(&handle).await,
-                PairState::Paired => self.send_pair(&handle, true, None).await,
+                PairState::RequestedByUs { timestamp, .. } => {
+                    // The device accepted: the local user must now confirm.
+                    self.set_pair_state(
+                        &id,
+                        lid,
+                        PairState::Confirm {
+                            timestamp,
+                            since: Instant::now(),
+                        },
+                    );
+                    let _ = self.events.send(Event::PairConfirm {
+                        device_id: id.clone(),
+                        device_name: handle.name().to_owned(),
+                        verification_key: self.key(&handle, timestamp),
+                    });
+                    self.emit_updated(&id);
+                }
+                PairState::Confirm { .. } => {}
+                PairState::Paired => {
+                    // Only a new request (with timestamp) gets an answer: the
+                    // peer lost its pin. Answers are never answered (no loop).
+                    if body.timestamp.is_some() {
+                        self.send_pair(&handle, true, None).await;
+                    }
+                }
                 PairState::NotPaired | PairState::RequestedByPeer { .. } => {
                     let Some(ts) = body.timestamp else {
                         self.send_pair(&handle, false, None).await;
                         return;
                     };
+                    if state.timestamp() == Some(ts) {
+                        return; // duplicate
+                    }
                     if !pairing::timestamp_is_fresh(ts, pairing::now_secs()) {
                         self.send_pair(&handle, false, None).await;
                         let _ = self.events.send(Event::PairRejected {
@@ -956,8 +1552,36 @@ impl Inner {
                         });
                         return;
                     }
+                    let limits = self.config.read().unwrap().limits.clone();
+                    let open = self.open_incoming_requests();
+                    let admission = self.guard.lock().unwrap().admit(
+                        &id,
+                        handle.addr.ip(),
+                        &open,
+                        limits.open_pair_requests,
+                        limits.open_pair_requests_per_addr,
+                    );
+                    let reason = match admission {
+                        Admission::Ok => None,
+                        Admission::TooFrequent => return,
+                        Admission::CoolingDown => {
+                            Some("the device asked again too soon after a refused request")
+                        }
+                        Admission::TooMany => Some("too many pairing requests are open"),
+                    };
+                    if let Some(reason) = reason {
+                        self.send_pair(&handle, false, None).await;
+                        let _ = self.events.send(Event::PairRefused {
+                            device_id: id,
+                            device_name: handle.name().to_owned(),
+                            address: handle.addr.ip().to_string(),
+                            reason: reason.into(),
+                        });
+                        return;
+                    }
                     self.set_pair_state(
                         &id,
+                        lid,
                         PairState::RequestedByPeer {
                             timestamp: ts,
                             since: Instant::now(),
@@ -966,26 +1590,29 @@ impl Inner {
                     let _ = self.events.send(Event::PairRequested {
                         device_id: id.clone(),
                         device_name: handle.name().to_owned(),
-                        verification_key: self.vkey(&handle, ts),
+                        verification_key: self.key(&handle, ts),
                     });
-                    self.spawn_pair_timeout(id, ts);
+                    self.emit_updated(&id);
                 }
             }
         } else {
             match state {
-                PairState::RequestedByUs { .. } => {
-                    self.set_pair_state(&id, PairState::NotPaired);
+                PairState::RequestedByUs { .. } | PairState::Confirm { .. } => {
+                    self.set_pair_state(&id, lid, PairState::NotPaired);
                     let _ = self.events.send(Event::PairRejected {
-                        device_id: id,
+                        device_id: id.clone(),
                         reason: "rejected by the other device".into(),
                     });
+                    self.emit_updated(&id);
                 }
                 PairState::RequestedByPeer { .. } => {
-                    self.set_pair_state(&id, PairState::NotPaired);
+                    self.set_pair_state(&id, lid, PairState::NotPaired);
+                    self.cool_down(&id);
                     let _ = self.events.send(Event::PairRejected {
-                        device_id: id,
-                        reason: "cancelled by the other device".into(),
+                        device_id: id.clone(),
+                        reason: "withdrawn by the other device".into(),
                     });
+                    self.emit_updated(&id);
                 }
                 PairState::Paired | PairState::NotPaired => {
                     if self.trust.lock().unwrap().is_trusted(&id) {
@@ -996,29 +1623,41 @@ impl Inner {
         }
     }
 
-    fn spawn_pair_timeout(self: &Arc<Self>, id: String, ts: u64) {
-        let weak = Arc::downgrade(self);
-        tokio::spawn(async move {
-            tokio::time::sleep(pairing::PAIR_TIMEOUT).await;
-            let Some(this) = weak.upgrade() else { return };
-            let expired = matches!(
-                this.link_handle(&id).map(|(_, s)| s),
-                Some(PairState::RequestedByUs { timestamp, .. } | PairState::RequestedByPeer { timestamp, .. }) if timestamp == ts
-            );
-            if expired {
-                this.set_pair_state(&id, PairState::NotPaired);
-                let _ = this.events.send(Event::PairRejected {
-                    device_id: id,
-                    reason: "pairing request timed out".into(),
-                });
+    async fn request_pair(self: Arc<Self>, id: &str) -> Result<String> {
+        let (handle, state) = self.link_handle(id).context("device not connected")?;
+        match state {
+            PairState::Paired => bail!("already paired"),
+            PairState::RequestedByPeer { .. } => {
+                bail!("the device is asking to pair: accept or reject its request")
             }
+            PairState::Confirm { .. } => bail!("confirm or reject the open pairing first"),
+            _ => {}
+        }
+        let ts = pairing::now_secs();
+        self.set_pair_state(
+            id,
+            handle.link_id,
+            PairState::RequestedByUs {
+                timestamp: ts,
+                since: Instant::now(),
+            },
+        );
+        if let Some(l) = self.links.lock().unwrap().get_mut(id) {
+            l.pair_requested = true;
+        }
+        self.send_pair(&handle, true, Some(ts)).await;
+        let key = self.key(&handle, ts);
+        let _ = self.events.send(Event::PairOutgoing {
+            device_id: id.to_owned(),
+            verification_key: key.clone(),
         });
+        self.emit_updated(id);
+        Ok(key)
     }
 
-    async fn complete_pairing(self: &Arc<Self>, handle: &DeviceHandle) {
-        let id = handle.id().to_owned();
+    fn pin(&self, handle: &DeviceHandle) {
         self.trust.lock().unwrap().insert(TrustedDevice {
-            device_id: id.clone(),
+            device_id: handle.id().to_owned(),
             name: handle.name().to_owned(),
             device_type: handle.identity.device_type,
             certificate: TrustedDevice::encode_cert(&handle.peer_cert),
@@ -1026,62 +1665,70 @@ impl Inner {
             disabled_plugins: BTreeSet::new(),
             paired_at: konnekta_proto::packet::now_millis(),
             last_address: Some(handle.addr.ip()),
-        });
-        self.set_pair_state(&id, PairState::Paired);
-        tracing::info!(device = %handle.name(), "paired");
-        let _ = self.events.send(Event::Paired {
-            device_id: id.clone(),
-        });
-        self.emit_updated(&id);
-        self.notify_plugins_connected(handle).await;
-    }
-
-    async fn request_pair(self: Arc<Self>, id: &str) -> Result<String> {
-        let (handle, state) = self.link_handle(id).context("device not connected")?;
-        match state {
-            PairState::Paired => bail!("already paired"),
-            PairState::RequestedByPeer { .. } => {
-                self.accept_pair(id).await?;
-                return Ok(String::new());
-            }
-            _ => {}
-        }
-        let ts = pairing::now_secs();
-        self.set_pair_state(
-            id,
-            PairState::RequestedByUs {
-                timestamp: ts,
-                since: Instant::now(),
+            last_port: if handle.protocol == Protocol::Konnekta {
+                handle.identity.tcp_port
+            } else {
+                None
             },
-        );
-        self.send_pair(&handle, true, Some(ts)).await;
-        let key = self.vkey(&handle, ts);
-        let _ = self.events.send(Event::PairOutgoing {
-            device_id: id.to_owned(),
-            verification_key: key.clone(),
+            protocol: handle.protocol,
+            extra_addresses: Vec::new(),
         });
-        self.spawn_pair_timeout(id.to_owned(), ts);
-        Ok(key)
     }
 
-    async fn accept_pair(self: Arc<Self>, id: &str) -> Result<()> {
+    async fn accept_pair(self: Arc<Self>, id: &str, key: Option<&str>) -> Result<()> {
         let (handle, state) = self.link_handle(id).context("device not connected")?;
-        let PairState::RequestedByPeer { .. } = state else {
-            bail!("no pending pairing request from this device");
+        let ts = match state {
+            PairState::RequestedByPeer { timestamp, .. } | PairState::Confirm { timestamp, .. } => {
+                timestamp
+            }
+            _ => bail!("no open pairing with this device"),
         };
         if state.expired() {
-            self.set_pair_state(id, PairState::NotPaired);
-            bail!("pairing request expired");
+            bail!("the pairing request expired");
         }
-        self.send_pair(&handle, true, None).await;
-        self.complete_pairing(&handle).await;
+        if let Some(k) = key
+            && !pairing::key_matches(k, &self.key(&handle, ts))
+        {
+            bail!("the key does not match the open pairing");
+        }
+        // Pin before answering; undo if the answer cannot go out.
+        self.pin(&handle);
+        if matches!(state, PairState::RequestedByPeer { .. })
+            && !self.send_pair(&handle, true, None).await
+        {
+            self.trust.lock().unwrap().remove(id);
+            bail!("connection lost while answering");
+        }
+        if !self.set_pair_state(id, handle.link_id, PairState::Paired) {
+            self.trust.lock().unwrap().remove(id);
+            bail!("connection changed during pairing");
+        }
+        self.guard.lock().unwrap().clear(id);
+        tracing::info!(device = %handle.name(), "paired");
+        let _ = self.events.send(Event::Paired {
+            device_id: id.to_owned(),
+        });
+        self.emit_updated(id);
+        self.notify_plugins_connected(&handle).await;
         Ok(())
     }
 
-    async fn reject_pair(self: Arc<Self>, id: &str) -> Result<()> {
-        let (handle, _) = self.link_handle(id).context("device not connected")?;
+    async fn reject_pair(self: Arc<Self>, id: &str, key: Option<&str>) -> Result<()> {
+        let (handle, state) = self.link_handle(id).context("device not connected")?;
+        if !state.is_open() {
+            bail!("no open pairing with this device");
+        }
+        if let (Some(k), Some(ts)) = (key, state.timestamp())
+            && !pairing::key_matches(k, &self.key(&handle, ts))
+        {
+            bail!("the key does not match the open pairing");
+        }
         self.send_pair(&handle, false, None).await;
-        self.set_pair_state(id, PairState::NotPaired);
+        self.set_pair_state(id, handle.link_id, PairState::NotPaired);
+        if matches!(state, PairState::RequestedByPeer { .. }) {
+            self.cool_down(id);
+        }
+        self.emit_updated(id);
         Ok(())
     }
 
@@ -1091,7 +1738,23 @@ impl Inner {
             if notify_peer {
                 self.send_pair(&handle, false, None).await;
             }
-            self.set_pair_state(id, PairState::NotPaired);
+            self.set_pair_state(id, handle.link_id, PairState::NotPaired);
+            // Close the link once `pair:false` is flushed.
+            let this = self.clone();
+            let id2 = id.to_owned();
+            let lid = handle.link_id;
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                let still = this
+                    .links
+                    .lock()
+                    .unwrap()
+                    .get(&id2)
+                    .is_some_and(|l| l.handle.link_id == lid);
+                if still {
+                    this.close_link(&id2).await;
+                }
+            });
         }
         if removed {
             tracing::info!(device = %id, "unpaired");
@@ -1103,5 +1766,75 @@ impl Inner {
             });
         }
         Ok(())
+    }
+
+    /// Expire pairings and close idle incoming links of unpaired devices.
+    async fn janitor(self: &Arc<Self>) {
+        let idle = Duration::from_secs(self.config.read().unwrap().limits.unpaired_idle_secs);
+        let mut expired = Vec::new();
+        let mut idle_links = Vec::new();
+        {
+            let links = self.links.lock().unwrap();
+            for (id, l) in links.iter() {
+                if l.pair.is_open() && l.pair.expired() {
+                    expired.push((l.handle.clone(), l.pair));
+                } else if !l.pair.is_paired()
+                    && !l.pair.is_open()
+                    && !l.handle.outgoing
+                    && !l.pair_requested
+                    && l.created.elapsed() > idle
+                {
+                    idle_links.push(id.clone());
+                }
+            }
+        }
+        for (handle, state) in expired {
+            let id = handle.id().to_owned();
+            if self.set_pair_state(&id, handle.link_id, PairState::NotPaired) {
+                self.send_pair(&handle, false, None).await;
+                if matches!(state, PairState::RequestedByPeer { .. }) {
+                    self.cool_down(&id);
+                }
+                let _ = self.events.send(Event::PairRejected {
+                    device_id: id.clone(),
+                    reason: "pairing timed out".into(),
+                });
+                self.emit_updated(&id);
+            }
+        }
+        for id in idle_links {
+            tracing::debug!(device = %id, "closing idle unpaired link");
+            self.close_link(&id).await;
+        }
+    }
+}
+
+const PIN_MISMATCH: &str = "A device claiming to be this paired device presented a different certificate. \
+     The connection was refused. If the device was reinstalled, unpair and pair it again.";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn host_port_parsing() {
+        assert_eq!(
+            parse_host_port("100.64.1.2", 17160),
+            ("100.64.1.2".into(), 17160)
+        );
+        assert_eq!(
+            parse_host_port("100.64.1.2:17161", 17160),
+            ("100.64.1.2".into(), 17161)
+        );
+        assert_eq!(
+            parse_host_port("pixel.tail1234.ts.net", 17160),
+            ("pixel.tail1234.ts.net".into(), 17160)
+        );
+        assert_eq!(parse_host_port("pixel:9000", 17160), ("pixel".into(), 9000));
+        assert_eq!(
+            parse_host_port("[fd7a::1]:17162", 17160),
+            ("fd7a::1".into(), 17162)
+        );
+        assert_eq!(parse_host_port("fd7a::1", 17160), ("fd7a::1".into(), 17160));
     }
 }

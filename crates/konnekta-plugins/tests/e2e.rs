@@ -1,7 +1,7 @@
 //! End-to-end plugin tests: two full Konnekta nodes (all plugins) with mock
 //! platforms, talking over real TLS on loopback.
 
-use konnekta_core::proto::{Packet, types};
+use konnekta_core::proto::{Packet, Protocol, types};
 use konnekta_core::{Config, Event, Konnekta, Permission};
 use konnekta_platform::mock::MockPlatform;
 use serde_json::json;
@@ -29,6 +29,7 @@ async fn node(name: &str) -> Node {
         tcp_port: 0,
         udp_port: 0,
         announce: false,
+        mdns: false,
         download_dir: dir.path().join("downloads"),
         ..Config::default()
     };
@@ -74,15 +75,18 @@ async fn eventually<F: FnMut() -> bool>(mut f: F) {
 async fn paired_pair() -> (Node, Node) {
     let mut a = node("Desktop").await;
     let mut b = node("Phone").await;
-    a.k.connect_to(SocketAddr::new(LO, b.k.udp_port()))
+    // The phone announces itself; the computer dials it.
+    b.k.announce_to(SocketAddr::new(LO, a.k.udp_port()), Protocol::Konnekta)
         .await
         .unwrap();
     wait(&mut a.ev, |e| matches!(e, Event::DeviceConnected { .. })).await;
     wait(&mut b.ev, |e| matches!(e, Event::DeviceConnected { .. })).await;
     let (aid, bid) = (a.k.device_id().to_string(), b.k.device_id().to_string());
-    a.k.request_pair(&bid).await.unwrap();
+    let key = a.k.request_pair(&bid).await.unwrap();
     wait(&mut b.ev, |e| matches!(e, Event::PairRequested { .. })).await;
-    b.k.accept_pair(&aid).await.unwrap();
+    b.k.accept_pair(&aid, Some(&key)).await.unwrap();
+    wait(&mut a.ev, |e| matches!(e, Event::PairConfirm { .. })).await;
+    a.k.accept_pair(&bid, Some(&key)).await.unwrap();
     wait(&mut a.ev, |e| matches!(e, Event::Paired { .. })).await;
     (a, b)
 }
@@ -296,6 +300,7 @@ async fn desktop_interoperates_with_mobile_bridge() {
         tcp_port: 0,
         udp_port: 0,
         announce: false,
+        mdns: false,
         ..Config::default()
     };
     let phone = Konnekta::builder(cfg)
@@ -306,15 +311,18 @@ async fn desktop_interoperates_with_mobile_bridge() {
     let mut pev = phone.subscribe();
     phone.start().await.unwrap();
     phone
-        .connect_to(SocketAddr::new(LO, desk.k.udp_port()))
+        .announce_to(SocketAddr::new(LO, desk.k.udp_port()), Protocol::Konnekta)
         .await
         .unwrap();
     wait(&mut pev, |e| matches!(e, Event::DeviceConnected { .. })).await;
     let did = desk.k.device_id().to_string();
     let pid = phone.device_id().to_string();
-    phone.request_pair(&did).await.unwrap();
+    // The phone starts the pairing: the computer accepts (pins at once).
+    let key = phone.request_pair(&did).await.unwrap();
     wait(&mut desk.ev, |e| matches!(e, Event::PairRequested { .. })).await;
-    desk.k.accept_pair(&pid).await.unwrap();
+    desk.k.accept_pair(&pid, Some(&key)).await.unwrap();
+    wait(&mut pev, |e| matches!(e, Event::PairConfirm { .. })).await;
+    phone.accept_pair(&did, Some(&key)).await.unwrap();
     wait(&mut pev, |e| matches!(e, Event::Paired { .. })).await;
 
     // Phone -> desktop notification through the bridge.

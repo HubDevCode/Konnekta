@@ -31,6 +31,22 @@ pub enum Event {
         device_id: String,
         verification_key: String,
     },
+    /// The device accepted our request: the local user must confirm that
+    /// the device shows `verification_key` before we trust it.
+    #[serde(rename_all = "camelCase")]
+    PairConfirm {
+        device_id: String,
+        device_name: String,
+        verification_key: String,
+    },
+    /// A pair request was refused by the anti-abuse limits.
+    #[serde(rename_all = "camelCase")]
+    PairRefused {
+        device_id: String,
+        device_name: String,
+        address: String,
+        reason: String,
+    },
     #[serde(rename_all = "camelCase")]
     Paired {
         device_id: String,

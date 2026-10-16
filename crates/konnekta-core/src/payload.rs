@@ -9,9 +9,9 @@
 
 use anyhow::{Context, Result, bail};
 use konnekta_crypto::{LocalIdentity, PeerExpectation, client_config, server_config};
-use konnekta_proto::{PAYLOAD_PORT_MAX, PAYLOAD_PORT_MIN};
 use rustls_pki_types::ServerName;
 use std::net::{IpAddr, SocketAddr};
+use std::ops::RangeInclusive;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -53,8 +53,10 @@ impl PayloadSource {
     }
 }
 
-async fn bind_payload_port(bind: IpAddr) -> Result<TcpListener> {
-    for port in PAYLOAD_PORT_MIN..=PAYLOAD_PORT_MAX {
+/// Bind a listener in the protocol's payload range (firewall friendly), or an
+/// ephemeral port if the whole range is busy.
+pub async fn bind_payload_port(bind: IpAddr, ports: RangeInclusive<u16>) -> Result<TcpListener> {
+    for port in ports {
         if let Ok(l) = TcpListener::bind(SocketAddr::new(bind, port)).await {
             return Ok(l);
         }
@@ -102,11 +104,12 @@ pub async fn serve(
     peer_id: String,
     peer_ip: IpAddr,
     bind: IpAddr,
+    ports: RangeInclusive<u16>,
     source: PayloadSource,
     resume: bool,
     progress: Option<Progress>,
 ) -> Result<(u16, tokio::task::JoinHandle<Result<()>>)> {
-    let listener = bind_payload_port(bind).await?;
+    let listener = bind_payload_port(bind, ports).await?;
     let port = listener.local_addr()?.port();
     let acceptor = TlsAcceptor::from(server_config(
         local,
@@ -219,6 +222,7 @@ mod tests {
             b.device_id.clone(),
             lo,
             lo,
+            konnekta_proto::Protocol::Konnekta.payload_ports(),
             PayloadSource::Bytes(data.clone()),
             false,
             None,
@@ -248,6 +252,7 @@ mod tests {
             b.device_id.clone(),
             lo,
             lo,
+            konnekta_proto::Protocol::Konnekta.payload_ports(),
             PayloadSource::Bytes(data.clone()),
             true,
             None,
@@ -284,6 +289,7 @@ mod tests {
             b.device_id.clone(),
             lo,
             lo,
+            konnekta_proto::Protocol::Konnekta.payload_ports(),
             PayloadSource::Bytes(vec![1; 1000]),
             false,
             None,

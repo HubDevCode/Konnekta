@@ -35,9 +35,7 @@ impl LocalIdentity {
         let mut params = CertificateParams::new(Vec::<String>::new())?;
         let mut dn = DistinguishedName::new();
         dn.push(DnType::CommonName, device_id);
-        // Organisation fields match KDE Connect so its clients accept us.
-        dn.push(DnType::OrganizationName, "KDE");
-        dn.push(DnType::OrganizationalUnitName, "Kde connect");
+        dn.push(DnType::OrganizationName, "Konnekta");
         params.distinguished_name = dn;
         let now = ::time::OffsetDateTime::now_utc();
         params.not_before = now - ::time::Duration::days(365);
@@ -75,7 +73,16 @@ impl LocalIdentity {
     }
 }
 
-/// SHA-256 fingerprint, colon separated upper hex (as shown by KDE Connect).
+/// Group a key for display: `5EE6 825F 974E D59A`.
+pub fn format_key(key: &str) -> String {
+    key.as_bytes()
+        .chunks(4)
+        .map(|c| String::from_utf8_lossy(c).into_owned())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// SHA-256 fingerprint, colon separated upper hex.
 pub fn cert_fingerprint(cert_der: &[u8]) -> String {
     let digest = Sha256::digest(cert_der);
     digest
@@ -110,12 +117,20 @@ pub fn public_key_der(cert_der: &[u8]) -> Result<Vec<u8>> {
     Ok(parse(cert_der)?.tbs_certificate.subject_pki.raw.to_vec())
 }
 
-/// Short code both users compare during pairing (KDE Connect v8 algorithm):
-/// `upper(hex(sha256(max(pkA,pkB) || min(pkA,pkB) || timestamp)))[..8]`.
+/// Code both users compare during pairing:
+/// `upper(hex(sha256(max(pkA,pkB) || min(pkA,pkB) || timestamp)))[..len]`.
+/// The native protocol uses 16 hex characters (64 bits); KDE Connect clients
+/// show the first 8.
 ///
 /// Because it commits to *both* public keys, a man in the middle presenting
-/// its own certificate to either side produces a different code.
-pub fn verification_key(local_cert: &[u8], remote_cert: &[u8], timestamp: u64) -> Result<String> {
+/// its own certificate to either side produces a different code, and with 64
+/// bits it cannot search for a colliding certificate while a request is open.
+pub fn verification_key(
+    local_cert: &[u8],
+    remote_cert: &[u8],
+    timestamp: u64,
+    len: usize,
+) -> Result<String> {
     let mut a = public_key_der(local_cert)?;
     let mut b = public_key_der(remote_cert)?;
     if a < b {
@@ -125,7 +140,7 @@ pub fn verification_key(local_cert: &[u8], remote_cert: &[u8], timestamp: u64) -
     h.update(&a);
     h.update(&b);
     h.update(timestamp.to_string().as_bytes());
-    Ok(hex::encode_upper(h.finalize())[..8].to_owned())
+    Ok(hex::encode_upper(h.finalize())[..len.clamp(8, 64)].to_owned())
 }
 
 #[cfg(test)]
@@ -151,17 +166,23 @@ mod tests {
         let a = LocalIdentity::generate(&generate_device_id()).unwrap();
         let b = LocalIdentity::generate(&generate_device_id()).unwrap();
         let m = LocalIdentity::generate(&generate_device_id()).unwrap();
-        let ab = verification_key(&a.cert_der, &b.cert_der, 1234).unwrap();
-        let ba = verification_key(&b.cert_der, &a.cert_der, 1234).unwrap();
+        let ab = verification_key(&a.cert_der, &b.cert_der, 1234, 16).unwrap();
+        let ba = verification_key(&b.cert_der, &a.cert_der, 1234, 16).unwrap();
         assert_eq!(ab, ba);
-        assert_eq!(ab.len(), 8);
+        assert_eq!(ab.len(), 16);
+        // KDE Connect shows the prefix of the same hash.
+        assert_eq!(
+            verification_key(&a.cert_der, &b.cert_der, 1234, 8).unwrap(),
+            ab[..8]
+        );
+        assert_eq!(format_key(&ab).len(), 19);
         // A MITM (m) talking to both sides yields different codes.
         assert_ne!(
-            verification_key(&a.cert_der, &m.cert_der, 1234).unwrap(),
+            verification_key(&a.cert_der, &m.cert_der, 1234, 16).unwrap(),
             ab
         );
         assert_ne!(
-            verification_key(&a.cert_der, &b.cert_der, 1235).unwrap(),
+            verification_key(&a.cert_der, &b.cert_der, 1235, 16).unwrap(),
             ab
         );
     }

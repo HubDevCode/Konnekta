@@ -30,6 +30,15 @@ pub struct IdentityBody {
     pub outgoing_capabilities: Vec<String>,
     #[serde(rename = "tcpPort", default, skip_serializing_if = "Option::is_none")]
     pub tcp_port: Option<u16>,
+    /// Program name ("Konnekta"); absent for KDE Connect peers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app: Option<String>,
+    #[serde(
+        rename = "appVersion",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub app_version: Option<String>,
 }
 
 impl IdentityBody {
@@ -47,6 +56,10 @@ impl IdentityBody {
         }
         if self.incoming_capabilities.len() > 256 || self.outgoing_capabilities.len() > 256 {
             return Err("too many capabilities");
+        }
+        let long = |s: &Option<String>| s.as_ref().is_some_and(|v| v.len() > 64);
+        if long(&self.app) || long(&self.app_version) {
+            return Err("invalid app field");
         }
         Ok(())
     }

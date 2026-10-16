@@ -39,9 +39,12 @@ enum Cmd {
         /// Device name shown to other devices.
         #[arg(long)]
         name: Option<String>,
-        /// Do not broadcast our presence (manual `connect` still works).
+        /// Do not broadcast our presence (paired devices are still dialed).
         #[arg(long)]
         no_announce: bool,
+        /// Also accept KDE Connect apps (compatibility mode, saved).
+        #[arg(long)]
+        kde_compat: bool,
         #[arg(short, long)]
         verbose: bool,
     },
@@ -49,14 +52,21 @@ enum Cmd {
     Info,
     /// List known and nearby devices.
     Devices,
-    /// Ask a device at a known IP address to connect.
+    /// Devices seen on the network that are not connected.
+    Discover,
+    /// Connect to a device by address (`ip`, `ip:port` or host name).
     Connect { address: String },
-    /// Request pairing (compare the code shown on both screens!).
+    /// Request pairing, then confirm the 16-character key.
     Pair { device: String },
-    /// Accept a pairing request.
-    Accept { device: String },
-    /// Reject a pairing request.
-    Reject { device: String },
+    /// Accept a request, or confirm a pairing; KEY = the key you compared.
+    Accept { device: String, key: Vec<String> },
+    /// Reject an open pairing.
+    Reject { device: String, key: Vec<String> },
+    /// Set the addresses dialed when a paired device is away (Tailscale...).
+    Addresses {
+        device: String,
+        addresses: Vec<String>,
+    },
     /// Forget a paired device.
     Unpair { device: String },
     /// Show granted permissions.
@@ -102,7 +112,12 @@ fn data_dir(cli: &Cli) -> PathBuf {
         .unwrap_or_else(Config::default_data_dir)
 }
 
-async fn run_daemon(dir: PathBuf, name: Option<String>, no_announce: bool) -> Result<()> {
+async fn run_daemon(
+    dir: PathBuf,
+    name: Option<String>,
+    no_announce: bool,
+    kde_compat: bool,
+) -> Result<()> {
     std::fs::create_dir_all(&dir)?;
     let cfg_path = dir.join("config.json");
     let mut cfg = Config::load(&cfg_path)?;
@@ -111,6 +126,9 @@ async fn run_daemon(dir: PathBuf, name: Option<String>, no_announce: bool) -> Re
     }
     if no_announce {
         cfg.announce = false;
+    }
+    if kde_compat {
+        cfg.kde_compat = true;
     }
     cfg.save(&cfg_path)?;
     let platform = konnekta_platform::Platform::native();
@@ -135,9 +153,10 @@ async fn run_daemon(dir: PathBuf, name: Option<String>, no_announce: bool) -> Re
                 device_id,
             } = &ev
             {
+                let key = konnekta_crypto::format_key(verification_key);
                 println!(
-                    "\n>>> Pairing request from \"{device_name}\" — verification code {verification_key}\n    \
-                     compare it with the code on the other device, then run: konnekta accept {device_id}\n"
+                    "\n>>> Pairing request from \"{device_name}\" — key {key}\n    \
+                     compare it with the key on the other device, then run: konnekta accept {device_id} {key}\n"
                 );
             }
             if let konnekta_core::Event::SecurityWarning { message, .. } = &ev {
@@ -205,6 +224,47 @@ fn print_devices(v: &Value) {
     }
 }
 
+async fn device_name(c: &mut ipc::Client, id: &str) -> String {
+    c.call("device", json!({ "deviceId": id }))
+        .await
+        .ok()
+        .and_then(|d| d["name"].as_str().map(str::to_owned))
+        .unwrap_or_else(|| id.to_owned())
+}
+
+/// Ask the user to compare the key; only an explicit "y" pins the device.
+async fn confirm_key(
+    c: &mut ipc::Client,
+    id: &str,
+    name: &str,
+    key: &str,
+    after_accept: bool,
+) -> Result<()> {
+    use std::io::{BufRead, IsTerminal, Write};
+    let shown = konnekta_crypto::format_key(key);
+    if !std::io::stdin().is_terminal() {
+        println!("Compare the key, then run: konnekta accept {id} {shown}");
+        return Ok(());
+    }
+    if after_accept {
+        println!("{name} accepted.");
+    }
+    print!("Does {name} show {shown}? [y/N] ");
+    std::io::stdout().flush().ok();
+    let mut line = String::new();
+    std::io::stdin().lock().read_line(&mut line)?;
+    if line.trim().eq_ignore_ascii_case("y") {
+        c.call("acceptPair", json!({ "deviceId": id, "key": key }))
+            .await?;
+        println!("Paired with {name} ({id}).");
+    } else {
+        c.call("rejectPair", json!({ "deviceId": id, "key": key }))
+            .await?;
+        println!("Rejected: the keys must match.");
+    }
+    Ok(())
+}
+
 async fn action(
     c: &mut ipc::Client,
     dev: Option<String>,
@@ -232,6 +292,7 @@ async fn main() -> Result<()> {
     if let Cmd::Daemon {
         name,
         no_announce,
+        kde_compat,
         verbose,
     } = cli.cmd
     {
@@ -246,7 +307,7 @@ async fn main() -> Result<()> {
                     .unwrap_or_else(|_| filter.into()),
             )
             .init();
-        return run_daemon(dir, name, no_announce).await;
+        return run_daemon(dir, name, no_announce, kde_compat).await;
     }
     let mut c = ipc::Client::connect(&ipc::endpoint(&dir)).await?;
     match cli.cmd {
@@ -257,22 +318,96 @@ async fn main() -> Result<()> {
             c.call("connect", json!({ "address": address })).await?;
             println!("Request sent. The device should appear in `konnekta devices`.");
         }
+        Cmd::Discover => {
+            for d in c
+                .call("discovered", Value::Null)
+                .await?
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+            {
+                println!(
+                    "{:<24} {:<8} {:<12} {:<22} {}",
+                    d["name"].as_str().unwrap_or_default(),
+                    d["deviceType"].as_str().unwrap_or_default(),
+                    d["protocol"].as_str().unwrap_or_default(),
+                    d["address"].as_str().unwrap_or_default(),
+                    d["id"].as_str().unwrap_or_default(),
+                );
+            }
+        }
         Cmd::Pair { device } => {
             let id = resolve(&mut c, &device).await?;
+            let name = device_name(&mut c, &id).await;
+            // Listen before asking, so the answer cannot be missed.
+            let events = ipc::Client::connect(&ipc::endpoint(&dir)).await?;
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            tokio::spawn(events.subscribe(move |v| {
+                let _ = tx.send(v);
+            }));
             let r = c.call("pair", json!({ "deviceId": id })).await?;
-            println!(
-                "Pairing requested. Verification code: {}\nAccept on the other device only if it shows the same code.",
-                r["verificationKey"].as_str().unwrap_or_default()
-            );
+            let key = r["verificationKey"].as_str().unwrap_or_default().to_owned();
+            println!("{name}  {id}");
+            println!("Key: {}", konnekta_crypto::format_key(&key));
+            println!("Accept on {name} only if it shows the same key. Waiting…");
+            let answer = tokio::time::timeout(std::time::Duration::from_secs(35), async {
+                while let Some(v) = rx.recv().await {
+                    if v["deviceId"].as_str() != Some(id.as_str()) {
+                        continue;
+                    }
+                    match v["event"].as_str() {
+                        Some("pairConfirm") => return Some(true),
+                        Some("pairRejected") => return Some(false),
+                        _ => {}
+                    }
+                }
+                None
+            })
+            .await
+            .ok()
+            .flatten();
+            match answer {
+                Some(true) => confirm_key(&mut c, &id, &name, &key, true).await?,
+                Some(false) => bail!("{name} rejected the pairing"),
+                None => bail!("no answer from {name} within 30 seconds"),
+            }
         }
-        Cmd::Accept { device } => {
+        Cmd::Accept { device, key } => {
             let id = resolve(&mut c, &device).await?;
-            c.call("acceptPair", json!({ "deviceId": id })).await?;
-            println!("Paired.");
+            let name = device_name(&mut c, &id).await;
+            let given = key.join("");
+            if given.is_empty() {
+                let d = c.call("device", json!({ "deviceId": id })).await?;
+                let open = d["pairKey"]
+                    .as_str()
+                    .context("no open pairing with this device")?
+                    .to_owned();
+                confirm_key(&mut c, &id, &name, &open, false).await?;
+            } else {
+                c.call("acceptPair", json!({ "deviceId": id, "key": given }))
+                    .await?;
+                println!("Paired with {name} ({id}).");
+            }
         }
-        Cmd::Reject { device } => {
+        Cmd::Reject { device, key } => {
             let id = resolve(&mut c, &device).await?;
-            c.call("rejectPair", json!({ "deviceId": id })).await?;
+            let key = key.join("");
+            c.call(
+                "rejectPair",
+                json!({ "deviceId": id, "key": (!key.is_empty()).then_some(key) }),
+            )
+            .await?;
+            println!("Rejected.");
+        }
+        Cmd::Addresses { device, addresses } => {
+            let id = resolve(&mut c, &device).await?;
+            c.call(
+                "setExtraAddresses",
+                json!({ "deviceId": id, "addresses": addresses }),
+            )
+            .await?;
+            let d = c.call("device", json!({ "deviceId": id })).await?;
+            println!("Extra addresses: {}", d["extraAddresses"]);
         }
         Cmd::Unpair { device } => {
             let id = resolve(&mut c, &device).await?;

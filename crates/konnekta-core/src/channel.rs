@@ -10,7 +10,7 @@ use konnekta_crypto::{PeerExpectation, client_config, server_config};
 use rustls_pki_types::ServerName;
 use std::net::SocketAddr;
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpStream;
 use tokio_rustls::{TlsAcceptor, TlsConnector};
 
 pub trait Channel: AsyncRead + AsyncWrite + Send + Unpin {}
@@ -43,7 +43,8 @@ impl DeviceHandle {
             bail!("device not paired");
         }
         let bind = core.config.read().unwrap().bind_addr;
-        let listener = TcpListener::bind(SocketAddr::new(bind, 0)).await?;
+        let listener =
+            crate::payload::bind_payload_port(bind, self.protocol.payload_ports()).await?;
         let port = listener.local_addr()?.port();
         let acceptor = TlsAcceptor::from(server_config(&core.identity, self.expectation())?);
         let peer_ip = self.addr.ip();

@@ -77,6 +77,9 @@ const fmtBytes = (n) => {
 
 const clone = (o) => JSON.parse(JSON.stringify(o));
 
+const fmtKey = (k) => (k || '').replace(/(.{4})(?=.)/g, '$1 ');
+const protoBadge = (p) => p === 'kdeConnect' ? h('span', { class: 'badge' }, 'KDE Connect') : h('span', { class: 'badge k' }, 'Konnekta');
+
 const typeIcon = (t) => ({ phone: '📱', tablet: '📟', laptop: '💻', desktop: '🖥️', tv: '📺' }[t] || '🔗');
 
 // ------------------------------------------------------------------ state --
@@ -127,16 +130,28 @@ function onEvent(ev) {
     case 'pairRequested':
       modal('Richiesta di associazione', h('div', {},
         h('p', {}, `"${ev.deviceName}" vuole associarsi a questo computer.`),
-        h('p', { class: 'muted' }, 'Accetta solo se lo stesso codice è visualizzato sull\'altro dispositivo:'),
-        h('div', { class: 'code' }, ev.verificationKey)),
-      [['Rifiuta', () => api('rejectPair', { deviceId: ev.deviceId })],
-       ['Accetta', () => run(api('acceptPair', { deviceId: ev.deviceId })), 'primary']]);
+        h('p', { class: 'muted' }, 'Accetta solo se l\'altro dispositivo mostra esattamente lo stesso codice (tutti i caratteri):'),
+        h('div', { class: 'code' }, fmtKey(ev.verificationKey))),
+      [['Rifiuta', () => api('rejectPair', { deviceId: ev.deviceId, key: ev.verificationKey })],
+       ['Accetta', () => run(api('acceptPair', { deviceId: ev.deviceId, key: ev.verificationKey })), 'primary']]);
       break;
     case 'pairOutgoing':
-      modal('Verifica il codice', h('div', {},
-        h('p', {}, 'Conferma l\'associazione sull\'altro dispositivo solo se mostra questo codice:'),
-        h('div', { class: 'code' }, ev.verificationKey)),
+      modal('Associazione in corso', h('div', {},
+        h('p', {}, 'Sull\'altro dispositivo accetta la richiesta solo se mostra questo codice:'),
+        h('div', { class: 'code' }, fmtKey(ev.verificationKey)),
+        h('p', { class: 'small muted' }, 'Dopo l\'accettazione ti verrà chiesta una conferma anche qui.')),
       [['Chiudi']]);
+      break;
+    case 'pairConfirm':
+      modal('Conferma l\'associazione', h('div', {},
+        h('p', {}, `"${ev.deviceName}" ha accettato. Il dispositivo mostra questo codice?`),
+        h('div', { class: 'code' }, fmtKey(ev.verificationKey)),
+        h('p', { class: 'small muted' }, 'Il dispositivo diventa attendibile solo dopo la tua conferma.')),
+      [['No, rifiuta', () => api('rejectPair', { deviceId: ev.deviceId, key: ev.verificationKey }), 'danger'],
+       ['Sì, conferma', () => run(api('acceptPair', { deviceId: ev.deviceId, key: ev.verificationKey })), 'primary']]);
+      break;
+    case 'pairRefused':
+      toast(`Richiesta di associazione bloccata da "${ev.deviceName}" (${ev.address}): ${ev.reason}`, 'warn');
       break;
     case 'pairRejected':
       document.getElementById('modal-root').innerHTML = '';
@@ -254,7 +269,7 @@ function deviceList() {
   if (!S.devices.length) {
     return h('div', { class: 'card empty' },
       h('p', {}, 'Nessun dispositivo trovato.'),
-      h('p', { class: 'small' }, 'Apri Konnekta (o KDE Connect) sul telefono nella stessa rete Wi-Fi.'),
+      h('p', { class: 'small' }, 'Apri Konnekta sul telefono nella stessa rete Wi-Fi, oppure collegalo tramite indirizzo (anche Tailscale).'),
       connectBox());
   }
   return h('div', { class: 'card' },
@@ -270,12 +285,26 @@ function deviceList() {
         d.connected ? 'Online' : 'Offline',
         S.battery[d.id] ? ` · 🔋 ${S.battery[d.id].currentCharge}%` : '')),
     d.paired ? h('span', { class: 'badge ok' }, 'Associato')
-      : h('span', { class: 'badge warn' }, d.pairState === 'requested' ? 'In attesa' : 'Nuovo'))),
-    h('div', { style: 'margin-top:10px' }, connectBox()));
+      : h('span', { class: 'badge warn' }, { requested: 'In attesa', confirm: 'Da confermare', requestedByPeer: 'Richiesta' }[d.pairState] || 'Nuovo'))),
+    h('div', { style: 'margin-top:10px' }, connectBox()),
+    nearbyBox());
+}
+
+function nearbyBox() {
+  const box = h('div');
+  api('discovered').then((list) => {
+    if (!list.length) return;
+    box.append(h('h3', {}, 'Nelle vicinanze (non connessi)'),
+      ...list.map((x) => h('div', { class: 'dev', onclick: () => run(api('connect', { address: x.address }), 'Connessione in corso') },
+        h('div', { class: 'icon' }, typeIcon(x.deviceType)),
+        h('div', { class: 'grow' }, h('div', {}, x.name), h('div', { class: 'small muted' }, x.address)),
+        protoBadge(x.protocol))));
+  }).catch(() => {});
+  return box;
 }
 
 function connectBox() {
-  const ip = h('input', { type: 'text', placeholder: 'IP del dispositivo (es. 192.168.1.20)' });
+  const ip = h('input', { type: 'text', placeholder: 'Indirizzo: 192.168.1.20, nome-telefono.ts.net, host:porta' });
   return h('div', { class: 'row', style: 'margin-top:8px' }, ip,
     btn('Connetti', () => run(api('connect', { address: ip.value }), 'Richiesta inviata')),
     btn('Aggiorna', () => run(api('refresh')).then(refreshDevices)));
@@ -298,14 +327,23 @@ async function deviceDetail(d) {
     h('div', { style: 'font-size:28px' }, typeIcon(d.deviceType)),
     h('div', { class: 'grow' },
       h('div', { style: 'font-size:18px;font-weight:700' }, d.name),
-      h('div', { class: 'small muted' }, d.connected ? `Connesso · ${d.address}` : 'Non raggiungibile')),
+      h('div', { class: 'small muted row', style: 'gap:6px' }, d.connected ? `Connesso · ${d.address}` : 'Non raggiungibile', protoBadge(d.protocol))),
     d.paired ? btn('Dissocia', () => modal('Dissociare il dispositivo?',
       h('p', {}, `${d.name} non potrà più comunicare con questo computer finché non verrà associato di nuovo.`),
       [['Annulla'], ['Dissocia', () => run(api('unpair', { deviceId: d.id })), 'danger']]), 'danger')
-      : d.connected ? btn('Associa', () => run(api('pair', { deviceId: d.id })), 'primary') : null);
+      : d.connected && d.pairState === 'notPaired' ? btn('Associa', () => run(api('pair', { deviceId: d.id })), 'primary') : null);
 
   if (!d.paired) {
+    const open = d.pairKey && d.pairState !== 'notPaired';
     return h('div', { class: 'card' }, head,
+      open ? h('div', {},
+        h('p', {}, d.pairState === 'requestedByPeer' ? 'Il dispositivo chiede di associarsi. Codice:'
+          : d.pairState === 'confirm' ? 'Il dispositivo ha accettato. Confermi che mostra questo codice?'
+            : 'In attesa che il dispositivo accetti. Codice:'),
+        h('div', { class: 'code' }, fmtKey(d.pairKey)),
+        d.pairState !== 'requested' ? h('div', { class: 'row' },
+          btn('Rifiuta', () => run(api('rejectPair', { deviceId: d.id, key: d.pairKey })), 'danger'),
+          btn(d.pairState === 'confirm' ? 'Conferma' : 'Accetta', () => run(api('acceptPair', { deviceId: d.id, key: d.pairKey })), 'primary')) : null) : null,
       h('p', { class: 'muted' }, 'Il dispositivo non è associato: finché non lo associ e confermi il codice di verifica, non può scambiare alcun dato con questo computer.'),
       d.fingerprint ? h('p', { class: 'small' }, 'Impronta certificato: ', h('span', { class: 'mono' }, d.fingerprint)) : null);
   }
@@ -342,13 +380,13 @@ function actionsTab(d) {
       }, 'primary'),
       btn('📋 Invia appunti', () => run(act('clipboard', 'send', null, d.id), 'Appunti inviati')),
       btn('🔔 Ping', () => run(act('ping', 'send', { message: 'Ping da Konnekta' }, d.id))),
-      hasCap(d, 'kdeconnect.findmyphone.request') ? btn('📳 Fai squillare', () => run(act('findmyphone', 'ring', null, d.id))) : null),
+      hasCap(d, 'konnekta.findmyphone.request') ? btn('📳 Fai squillare', () => run(act('findmyphone', 'ring', null, d.id))) : null),
     h('h3', {}, 'Condividi testo'),
     text,
     h('div', { class: 'row', style: 'margin-top:6px' },
       btn('Invia testo', () => run(act('share', 'sendText', { text: text.value }, d.id), 'Inviato')),
       btn('Invia come link', () => run(act('share', 'sendUrl', { url: text.value.trim() }, d.id), 'Inviato'))),
-    hasCap(d, 'kdeconnect.runcommand') ? remoteCommands(d) : null,
+    hasCap(d, 'konnekta.runcommand') ? remoteCommands(d) : null,
     transfers.length ? h('div', {}, h('h3', {}, 'Trasferimenti recenti'), transfers.map(transferItem)) : null);
 }
 
@@ -476,11 +514,20 @@ async function devicePluginsTab(d) {
 }
 
 function infoTab(d) {
+  const addrs = h('textarea', { placeholder: 'Uno per riga, es. pixel.tail1234.ts.net oppure 100.101.102.103' }, (d.extraAddresses || []).join('\n'));
   return h('div', {},
+    h('p', {}, 'Protocollo: ', protoBadge(d.protocol), d.app ? h('span', { class: 'small muted' }, `  ${d.app}`) : null),
     h('p', {}, 'ID: ', h('span', { class: 'mono' }, d.id)),
     h('p', {}, 'Impronta del certificato (SHA-256): ', h('div', { class: 'mono' }, d.fingerprint || '—')),
     h('p', { class: 'small muted' }, `Capacità in ingresso: ${d.incomingCapabilities.length} · in uscita: ${d.outgoingCapabilities.length}`),
-    h('p', { class: 'small muted' }, 'Il certificato è fissato (pinning): se cambia, la connessione viene rifiutata.'));
+    h('p', { class: 'small muted' }, 'Il certificato è fissato (pinning): se cambia, la connessione viene rifiutata.'),
+    d.protocol === 'konnekta' ? h('div', {},
+      h('h3', {}, 'Raggiungibile anche fuori casa'),
+      h('p', { class: 'small muted' }, 'Indirizzi che questo computer prova quando il dispositivo non è sulla rete locale, per esempio il nome o l\'IP Tailscale. È sempre il computer ad aprire la connessione, quindi non servono porte aperte in ingresso.'),
+      addrs,
+      h('div', { class: 'row', style: 'margin-top:6px' }, btn('Salva indirizzi', () => run(api('setExtraAddresses', {
+        deviceId: d.id, addresses: addrs.value.split('\n').map((x) => x.trim()).filter(Boolean),
+      }), 'Indirizzi salvati')))) : null);
 }
 
 // --- transfers ----------------------------------------------------------------
@@ -741,7 +788,7 @@ async function renderSettings() {
   const get = (p) => act(p, 'getConfig').catch(() => null);
   const [share, clip, shot, filter, dnd, pres, tel] = await Promise.all([
     get('share'), get('clipboard'), get('screenshot'), act('notifications', 'getFilter').catch(() => null), get('dnd'), get('presenter'), get('telephony')]);
-  const general = { deviceName: cfg.device_name, downloadDir: cfg.download_dir, announce: cfg.announce };
+  const general = { deviceName: cfg.device_name, downloadDir: cfg.download_dir, announce: cfg.announce, mdns: cfg.mdns, kdeCompat: cfg.kde_compat };
   const txt = (o, k, label) => h('label', { class: 'field' }, label, h('input', { type: 'text', value: o[k] ?? '', oninput: (e) => { o[k] = e.target.value; } }));
   const chk = (o, k, label) => h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: o[k], onchange: (e) => { o[k] = e.target.checked; } }), label);
   const folder = (o, k, label) => {
@@ -759,7 +806,9 @@ async function renderSettings() {
     card('Generale', h('div', { class: 'list' },
       txt(general, 'deviceName', 'Nome di questo computer'),
       folder(general, 'downloadDir', 'Cartella predefinita per i file ricevuti'),
-      chk(general, 'announce', 'Annuncia questo computer sulla rete locale (disattiva sulle reti pubbliche: la connessione manuale via IP resta disponibile)')),
+      chk(general, 'announce', 'Annuncia questo computer sulla rete locale (disattiva sulle reti pubbliche: i dispositivi associati vengono comunque contattati)'),
+      chk(general, 'mdns', 'Trova i dispositivi con mDNS (_konnekta._tcp)'),
+      chk(general, 'kdeCompat', 'Compatibilità KDE Connect: permetti di usare l\'app KDE Connect sul telefono (porta 1716; richiede il riavvio)')),
     () => api('setConfig', general)),
     share && card('File', h('div', { class: 'list' },
       folder(share, 'destination', 'Cartella di destinazione (vuoto = predefinita)'),

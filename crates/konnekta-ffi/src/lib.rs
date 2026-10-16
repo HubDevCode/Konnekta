@@ -83,6 +83,18 @@ fn start(config_json: &str, data_dir: &str) -> Result<Handle> {
     if let Some(a) = v.get("announce").and_then(Value::as_bool) {
         cfg.announce = a;
     }
+    if let Some(a) = v.get("mdns").and_then(Value::as_bool) {
+        cfg.mdns = a;
+    }
+    if let Some(a) = v.get("kdeCompat").and_then(Value::as_bool) {
+        cfg.kde_compat = a;
+    }
+    if let Some(p) = v.get("tcpPort").and_then(Value::as_u64) {
+        cfg.tcp_port = p as u16;
+    }
+    if let Some(p) = v.get("udpPort").and_then(Value::as_u64) {
+        cfg.udp_port = p as u16;
+    }
     let call_control = v
         .get("callControl")
         .and_then(Value::as_bool)
@@ -468,7 +480,7 @@ mod tests {
             let dir =
                 std::env::temp_dir().join(format!("konnekta-ffi-test-{}", std::process::id()));
             let cfg = CString::new(
-                r#"{"deviceName":"Test Phone","deviceType":"phone","announce":false}"#,
+                r#"{"deviceName":"Test Phone","deviceType":"phone","announce":false,"mdns":false,"tcpPort":0,"udpPort":0}"#,
             )
             .unwrap();
             let d = CString::new(dir.to_string_lossy().as_bytes()).unwrap();

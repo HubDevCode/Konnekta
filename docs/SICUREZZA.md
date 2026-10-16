@@ -11,9 +11,9 @@ dispositivo associato.
 
 | Attaccante | Contromisura |
 |---|---|
-| Ascolto passivo sulla LAN | TLS 1.3/1.2 obbligatorio per controllo, payload e stream; solo suite AEAD con (EC)DHE. Nessun dato sensibile in chiaro: in chiaro viaggia solo l'identità (id, nome, capacità). |
-| Man-in-the-middle attivo | Autenticazione TLS **reciproca**; dopo il pairing il certificato del peer è **fissato** (confronto byte per byte). Al primo pairing il codice di verifica lega entrambe le chiavi pubbliche: un MITM produce codici diversi sui due schermi. |
-| Dispositivo malevolo sulla rete | Un dispositivo non associato può solo inviare `kdeconnect.pair`; ogni altro pacchetto viene scartato. Numero massimo di link non associati (8). Il pairing richiede conferma esplicita. |
+| Ascolto passivo sulla LAN | TLS 1.3/1.2 obbligatorio per controllo, payload e stream; solo suite AEAD con (EC)DHE. Nel protocollo nativo l'identità viaggia solo dentro TLS; in chiaro c'è solo l'annuncio UDP/mDNS (id, nome, tipo, porta), disattivabile. |
+| Man-in-the-middle attivo | Autenticazione TLS **reciproca**; dopo il pairing il certificato del peer è **fissato** (confronto byte per byte). Al pairing il codice di 16 caratteri (64 bit) lega entrambe le chiavi pubbliche: un MITM produce codici diversi e non può cercare un certificato con lo stesso codice nei 30 s della richiesta. Chi avvia il pairing deve confermare il codice anche dopo l'accettazione dell'altro lato; accetta/rifiuta sono legati al codice confrontato. |
+| Dispositivo malevolo sulla rete | Un dispositivo non associato può solo inviare `konnekta.pair`; ogni altro pacchetto viene scartato. Limiti per link, handshake e richieste di pairing per indirizzo, righe da 64 KiB, chiusura dopo 2 minuti senza richiesta (vedi PROTOCOLLO.md). La compatibilità KDE Connect è spenta di default, quindi le porte 1716–1764 restano chiuse. |
 | Impersonificazione di un dispositivo associato | Il certificato deve coincidere con quello fissato; la firma dell'handshake prova il possesso della chiave privata. Test: `paired_device_reconnects_with_pinned_certificate`. |
 | Replay | Ogni sessione TLS ha chiavi nuove (forward secrecy) e numeri di sequenza propri: un messaggio registrato non è riutilizzabile in un'altra sessione né riordinabile nella stessa. Il timestamp di pairing è accettato solo entro ±30 minuti e la richiesta scade dopo 30 s. Gli id di sessione degli stream sono casuali a 128 bit e legati al dispositivo. |
 | Abuso di funzioni sensibili | Permessi per dispositivo; quelli sensibili (input remoto, comandi, Deck, microfono, fotocamera, desktop, audio di sistema) sono **disattivati per default**. Il controllo è centralizzato nel core per pacchetti in ingresso e in uscita. |
@@ -37,6 +37,9 @@ dispositivo associato.
 - I log non contengono contenuti privati: gli appunti vengono registrati solo come lunghezza.
 
 ## Disconnessioni e anomalie
+
+Un file `devices.json` illeggibile viene spostato in `devices.json.broken-<ora>` e Konnekta parte senza dispositivi associati; un certificato fissato che non si legge equivale a "non associato".
+
 
 Una verifica TLS fallita per un dispositivo associato genera un **avviso di sicurezza** nella
 UI. Sessioni e stream terminano alla disconnessione, alla dissociazione o alla revoca dei

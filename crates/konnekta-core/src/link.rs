@@ -1,15 +1,19 @@
-//! Secure link establishment and framing.
+//! Link establishment and framing for both protocols.
 //!
-//! KDE Connect v8 handshake:
-//! 1. the device that *received* a UDP identity opens a TCP connection and
-//!    sends its identity in clear text (non-secret metadata only);
-//! 2. TLS starts with **inverted roles**: the TCP client is the TLS server;
-//! 3. both sides re-send their identity *inside* TLS and the inner identity is
-//!    the one we trust (it must match the certificate CN).
+//! **Native Konnekta**: TCP, then TLS immediately with normal roles (the
+//! dialer is the TLS client). Both certificates are required. The identity
+//! is exchanged only *inside* TLS, so nothing about the device travels in
+//! clear text on the connection. A listener cannot know who connects before
+//! the handshake, so it accepts any certificate there
+//! ([`PeerExpectation::Deferred`]) and the core checks it against the
+//! announced identity and the trust store before the link carries anything.
+//!
+//! **KDE Connect compatibility**: the KDE Connect v8 handshake — clear text
+//! identity, then TLS with inverted roles, then identity again inside TLS.
 
 use anyhow::{Context, Result, bail};
 use konnekta_crypto::{LocalIdentity, PeerExpectation, client_config, server_config};
-use konnekta_proto::{IdentityBody, MAX_PACKET_LEN, Packet, types};
+use konnekta_proto::{IdentityBody, Packet, Protocol, kde};
 use rustls_pki_types::ServerName;
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -20,6 +24,10 @@ use tokio_rustls::{TlsAcceptor, TlsConnector, TlsStream};
 pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 /// Identity packets are small; anything bigger before authentication is abuse.
 pub const MAX_IDENTITY_LEN: usize = 16 * 1024;
+/// Line limit until the device is paired.
+pub const MAX_UNPAIRED_LINE: usize = 64 * 1024;
+/// Line limit for paired devices.
+pub const MAX_PAIRED_LINE: usize = konnekta_proto::MAX_PACKET_LEN;
 
 pub type SecureStream = TlsStream<TcpStream>;
 
@@ -61,17 +69,30 @@ pub async fn read_line_limited<R: AsyncBufRead + Unpin>(
     }
 }
 
-pub fn identity_from_packet(p: &Packet) -> Result<IdentityBody> {
-    if p.packet_type != types::IDENTITY {
-        bail!("expected identity packet, got {}", p.packet_type);
+/// Parse and validate an identity packet of `proto`. Capabilities of KDE
+/// Connect peers are translated to canonical names.
+pub fn identity_from_packet(p: &Packet, proto: Protocol) -> Result<IdentityBody> {
+    if p.packet_type != proto.identity_type() {
+        bail!("expected {} identity, got {}", proto.label(), p.packet_type);
     }
-    let body: IdentityBody = p.body_as()?;
+    let mut body: IdentityBody = p.body_as()?;
     body.validate().map_err(anyhow::Error::msg)?;
-    if body.protocol_version < 8 {
-        bail!(
-            "protocol version {} not supported (need >= 8)",
-            body.protocol_version
-        );
+    match proto {
+        Protocol::KdeConnect => {
+            if body.protocol_version < 8 {
+                bail!(
+                    "KDE Connect protocol {} not supported (need 8)",
+                    body.protocol_version
+                );
+            }
+            body.incoming_capabilities = kde::caps_from_kde(&body.incoming_capabilities);
+            body.outgoing_capabilities = kde::caps_from_kde(&body.outgoing_capabilities);
+        }
+        Protocol::Konnekta => {
+            if body.protocol_version != konnekta_proto::PROTOCOL_VERSION {
+                bail!("Konnekta protocol {} not supported", body.protocol_version);
+            }
+        }
     }
     Ok(body)
 }
@@ -85,10 +106,49 @@ pub fn tune_socket(stream: &TcpStream) {
     let _ = sock.set_tcp_keepalive(&ka);
 }
 
-/// Read the clear-text identity a connecting peer sends before TLS.
+async fn tcp_connect(addr: SocketAddr) -> Result<TcpStream> {
+    let tcp = tokio::time::timeout(HANDSHAKE_TIMEOUT, TcpStream::connect(addr))
+        .await
+        .context("connect timeout")??;
+    tune_socket(&tcp);
+    Ok(tcp)
+}
+
+// --- native -----------------------------------------------------------------------
+
+/// Dial a device with the native protocol (we are TLS client).
+pub async fn dial_native(
+    local: &LocalIdentity,
+    addr: SocketAddr,
+    expect: PeerExpectation,
+) -> Result<SecureStream> {
+    let tcp = tcp_connect(addr).await?;
+    let connector = TlsConnector::from(client_config(local, expect)?);
+    let tls = tokio::time::timeout(
+        HANDSHAKE_TIMEOUT,
+        connector.connect(ServerName::IpAddress(addr.ip().into()), tcp),
+    )
+    .await
+    .context("tls timeout")??;
+    Ok(TlsStream::Client(tls))
+}
+
+/// Accept a native connection (we are TLS server, peer unknown until the
+/// identity arrives inside TLS).
+pub async fn accept_native(local: &LocalIdentity, tcp: TcpStream) -> Result<SecureStream> {
+    tune_socket(&tcp);
+    let acceptor = TlsAcceptor::from(server_config(local, PeerExpectation::Deferred)?);
+    let tls = tokio::time::timeout(HANDSHAKE_TIMEOUT, acceptor.accept(tcp))
+        .await
+        .context("tls timeout")??;
+    Ok(TlsStream::Server(tls))
+}
+
+// --- KDE Connect compatibility ----------------------------------------------------
+
+/// Read the clear-text identity a KDE Connect peer sends before TLS.
 pub async fn read_plain_identity(stream: &mut TcpStream) -> Result<IdentityBody> {
-    // Read byte-wise through a small BufReader we then discard: the peer must
-    // not send anything else before the TLS ClientHello it waits for.
+    // Capacity 1: never read past the identity line into the TLS stream.
     let mut reader = BufReader::with_capacity(1, stream);
     let line = tokio::time::timeout(
         HANDSHAKE_TIMEOUT,
@@ -97,20 +157,17 @@ pub async fn read_plain_identity(stream: &mut TcpStream) -> Result<IdentityBody>
     .await
     .context("identity timeout")??
     .context("connection closed before identity")?;
-    identity_from_packet(&Packet::from_line(&line)?)
+    identity_from_packet(&Packet::from_line(&line)?, Protocol::KdeConnect)
 }
 
-/// Outgoing connection: TCP client, sends identity, becomes TLS **server**.
-pub async fn connect_outgoing(
+/// KDE: TCP client sends its identity, then becomes TLS **server**.
+pub async fn dial_kde(
     local: &LocalIdentity,
     my_identity: &Packet,
     addr: SocketAddr,
     expect: PeerExpectation,
 ) -> Result<SecureStream> {
-    let mut tcp = tokio::time::timeout(HANDSHAKE_TIMEOUT, TcpStream::connect(addr))
-        .await
-        .context("connect timeout")??;
-    tune_socket(&tcp);
+    let mut tcp = tcp_connect(addr).await?;
     tcp.write_all(&my_identity.to_line()).await?;
     let acceptor = TlsAcceptor::from(server_config(local, expect)?);
     let tls = tokio::time::timeout(HANDSHAKE_TIMEOUT, acceptor.accept(tcp))
@@ -119,8 +176,8 @@ pub async fn connect_outgoing(
     Ok(TlsStream::Server(tls))
 }
 
-/// Incoming connection (identity already read): we become TLS **client**.
-pub async fn accept_incoming(
+/// KDE: identity already read from the TCP client; we become TLS **client**.
+pub async fn accept_kde(
     local: &LocalIdentity,
     tcp: TcpStream,
     expect: PeerExpectation,
@@ -137,6 +194,8 @@ pub async fn accept_incoming(
     Ok(TlsStream::Client(tls))
 }
 
+// --- common ------------------------------------------------------------------------
+
 pub fn peer_certificate(stream: &SecureStream) -> Option<Vec<u8>> {
     let (_, conn) = stream.get_ref();
     conn.peer_certificates()
@@ -144,10 +203,11 @@ pub fn peer_certificate(stream: &SecureStream) -> Option<Vec<u8>> {
         .map(|c| c.as_ref().to_vec())
 }
 
-/// Protocol v8: exchange identities over the encrypted channel.
+/// Exchange identities over the encrypted channel.
 pub async fn exchange_identity<S: AsyncRead + AsyncWrite + Unpin>(
     stream: &mut BufReader<S>,
     my_identity: &Packet,
+    proto: Protocol,
 ) -> Result<IdentityBody> {
     stream.get_mut().write_all(&my_identity.to_line()).await?;
     stream.get_mut().flush().await?;
@@ -158,16 +218,41 @@ pub async fn exchange_identity<S: AsyncRead + AsyncWrite + Unpin>(
     .await
     .context("identity timeout")??
     .context("closed during identity exchange")?;
-    identity_from_packet(&Packet::from_line(&line)?)
+    identity_from_packet(&Packet::from_line(&line)?, proto)
 }
 
-/// Read packets from an established link.
-pub async fn read_packet<R: AsyncBufRead + Unpin>(r: &mut R) -> Result<Option<Packet>> {
-    match read_line_limited(r, MAX_PACKET_LEN).await? {
-        None => Ok(None),
-        Some(line) if line.iter().all(|b| b.is_ascii_whitespace()) => Ok(Some(Packet::empty(""))),
-        Some(line) => Ok(Some(Packet::from_line(&line)?)),
+/// Read one packet (with the limit for the current trust level) and map its
+/// type to the canonical name. Returns `Ok(Some(None))` for packets to skip.
+pub async fn read_packet<R: AsyncBufRead + Unpin>(
+    r: &mut R,
+    proto: Protocol,
+    max: usize,
+) -> Result<Option<Option<Packet>>> {
+    let Some(line) = read_line_limited(r, max).await? else {
+        return Ok(None);
+    };
+    if line.iter().all(u8::is_ascii_whitespace) {
+        return Ok(Some(None));
     }
+    let mut p = Packet::from_line(&line)?;
+    if proto == Protocol::KdeConnect {
+        match kde::from_kde(&p.packet_type) {
+            Some(t) => p.packet_type = t,
+            None => {
+                tracing::debug!(packet = %p.packet_type, "ignoring KDE Connect packet without Konnekta equivalent");
+                return Ok(Some(None));
+            }
+        }
+    }
+    Ok(Some(Some(p)))
+}
+
+/// Map a canonical packet to the wire name of `proto` (None = not sendable).
+pub fn to_wire(mut p: Packet, proto: Protocol) -> Option<Packet> {
+    if proto == Protocol::KdeConnect {
+        p.packet_type = kde::to_kde(&p.packet_type)?;
+    }
+    Some(p)
 }
 
 #[cfg(test)]
@@ -193,5 +278,40 @@ mod tests {
         let empty: &[u8] = b"";
         let mut r = BufReader::new(empty);
         assert!(read_line_limited(&mut r, 100).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn kde_packets_are_translated() {
+        let data = b"{\"id\":1,\"type\":\"kdeconnect.ping\",\"body\":{}}\n{\"id\":2,\"type\":\"kdeconnect.sftp\",\"body\":{}}\n".to_vec();
+        let mut r = BufReader::new(&data[..]);
+        let p = read_packet(&mut r, Protocol::KdeConnect, 1000)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(p.packet_type, konnekta_proto::types::PING);
+        assert!(
+            read_packet(&mut r, Protocol::KdeConnect, 1000)
+                .await
+                .unwrap()
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            to_wire(
+                Packet::empty(konnekta_proto::types::K_DECK),
+                Protocol::KdeConnect
+            )
+            .is_none()
+        );
+        assert_eq!(
+            to_wire(
+                Packet::empty(konnekta_proto::types::PING),
+                Protocol::KdeConnect
+            )
+            .unwrap()
+            .packet_type,
+            "kdeconnect.ping"
+        );
     }
 }

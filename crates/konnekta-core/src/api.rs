@@ -4,7 +4,6 @@
 use crate::{Konnekta, Permission};
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
-use std::net::{IpAddr, SocketAddr};
 
 fn s<'a>(p: &'a Value, k: &str) -> Result<&'a str> {
     p.get(k)
@@ -18,14 +17,6 @@ fn b(p: &Value, k: &str) -> Result<bool> {
         .with_context(|| format!("missing '{k}'"))
 }
 
-pub fn parse_address(addr: &str) -> Result<SocketAddr> {
-    if let Ok(sa) = addr.parse::<SocketAddr>() {
-        return Ok(sa);
-    }
-    let ip: IpAddr = addr.trim().parse().context("invalid IP address")?;
-    Ok(SocketAddr::new(ip, konnekta_proto::DEFAULT_PORT))
-}
-
 pub async fn call(k: &Konnekta, method: &str, p: Value) -> Result<Value> {
     Ok(match method {
         "info" => {
@@ -34,12 +25,21 @@ pub async fn call(k: &Konnekta, method: &str, p: Value) -> Result<Value> {
                 "deviceId": k.device_id(), "deviceName": c.device_name, "deviceType": c.device_type,
                 "fingerprint": k.fingerprint(), "tcpPort": k.tcp_port(), "udpPort": k.udp_port(),
                 "protocolVersion": konnekta_proto::PROTOCOL_VERSION, "version": env!("CARGO_PKG_VERSION"),
+                "kdeCompat": c.kde_compat, "kdeTcpPort": k.kde_ports().0, "mdns": c.mdns,
             })
         }
         "devices" => serde_json::to_value(k.devices())?,
         "device" => serde_json::to_value(k.device(s(&p, "deviceId")?))?,
         "connect" => {
-            k.connect_to(parse_address(s(&p, "address")?)?).await?;
+            k.connect_to(s(&p, "address")?).await?;
+            Value::Null
+        }
+        "discovered" => Value::Array(k.discovered()),
+        "setExtraAddresses" => {
+            let list: Vec<String> =
+                serde_json::from_value(p.get("addresses").cloned().unwrap_or_default())
+                    .context("addresses must be a list of strings")?;
+            k.set_extra_addresses(s(&p, "deviceId")?, list)?;
             Value::Null
         }
         "refresh" => {
@@ -48,11 +48,13 @@ pub async fn call(k: &Konnekta, method: &str, p: Value) -> Result<Value> {
         }
         "pair" => json!({ "verificationKey": k.request_pair(s(&p, "deviceId")?).await? }),
         "acceptPair" => {
-            k.accept_pair(s(&p, "deviceId")?).await?;
+            k.accept_pair(s(&p, "deviceId")?, p.get("key").and_then(Value::as_str))
+                .await?;
             Value::Null
         }
         "rejectPair" => {
-            k.reject_pair(s(&p, "deviceId")?).await?;
+            k.reject_pair(s(&p, "deviceId")?, p.get("key").and_then(Value::as_str))
+                .await?;
             Value::Null
         }
         "unpair" => {
@@ -123,21 +125,15 @@ pub async fn call(k: &Konnekta, method: &str, p: Value) -> Result<Value> {
                 if let Some(a) = p.get("announce").and_then(Value::as_bool) {
                     c.announce = a;
                 }
+                if let Some(a) = p.get("kdeCompat").and_then(Value::as_bool) {
+                    c.kde_compat = a;
+                }
+                if let Some(a) = p.get("mdns").and_then(Value::as_bool) {
+                    c.mdns = a;
+                }
             })?;
             Value::Null
         }
         _ => bail!("unknown method '{method}'"),
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn addresses() {
-        assert_eq!(parse_address("192.168.1.5").unwrap().port(), 1716);
-        assert_eq!(parse_address("10.0.0.2:1800").unwrap().port(), 1800);
-        assert!(parse_address("evil.example").is_err());
-    }
 }
