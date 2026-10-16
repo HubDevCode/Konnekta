@@ -33,10 +33,13 @@ pub const K_DECK_REQUEST: &str = "konnekta.deck.request";
 pub const K_DND: &str = "konnekta.dnd";
 pub const K_SCREENSHOT: &str = "konnekta.screenshot";
 pub const K_CALL_ACTION: &str = "konnekta.telephony.action";
-pub const K_STREAM_REQUEST: &str = "konnekta.stream.request";
-pub const K_STREAM_OFFER: &str = "konnekta.stream.offer";
-pub const K_STREAM_STOP: &str = "konnekta.stream.stop";
-pub const K_STREAM_STATS: &str = "konnekta.stream.stats";
+/// Real-time streams: one packet type per stream kind so each is guarded by
+/// its own permission. Body: [`crate::bodies::StreamMessage`].
+pub const K_MICROPHONE: &str = "konnekta.microphone";
+pub const K_CAMERA: &str = "konnekta.camera";
+pub const K_DESKTOP: &str = "konnekta.desktop";
+pub const K_SYSTEM_AUDIO: &str = "konnekta.systemaudio";
+pub const K_PHONE_SCREEN: &str = "konnekta.phonescreen";
 pub const K_COMMAND_STATE: &str = "konnekta.command.state";
 
 pub fn is_proprietary(packet_type: &str) -> bool {

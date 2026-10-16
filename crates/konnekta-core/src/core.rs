@@ -267,7 +267,7 @@ impl Konnekta {
         }
 
         for p in &inner.plugins {
-            p.start(self.handle()).await;
+            p.clone().start(self.handle()).await;
         }
         Ok(())
     }
@@ -380,29 +380,34 @@ impl Konnekta {
         action: &str,
         args: Value,
     ) -> Result<Value> {
+        self.inner.plugin_action(device_id, plugin, action, args).await
+    }
+}
+
+impl Inner {
+    pub(crate) async fn plugin_action(
+        &self,
+        device_id: Option<&str>,
+        plugin: &str,
+        action: &str,
+        args: Value,
+    ) -> Result<Value> {
         let p = self
-            .inner
             .plugins
             .iter()
             .find(|p| p.info().id == plugin)
             .cloned()
             .with_context(|| format!("unknown plugin {plugin}"))?;
-        if !self.handle().is_plugin_enabled(plugin) {
+        if self.config.read().unwrap().disabled_plugins.contains(plugin) {
             bail!("plugin {plugin} is disabled");
         }
         let dev = match device_id {
-            Some(id) => Some(
-                self.inner
-                    .paired_handle(id)
-                    .context("device not connected or not paired")?,
-            ),
+            Some(id) => Some(self.paired_handle(id).context("device not connected or not paired")?),
             None => None,
         };
         p.handle_action(dev.as_ref(), action, args).await
     }
-}
 
-impl Inner {
     fn capabilities(&self) -> (Vec<String>, Vec<String>) {
         let disabled = self.config.read().unwrap().disabled_plugins.clone();
         let mut inc = BTreeSet::new();

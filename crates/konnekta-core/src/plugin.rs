@@ -42,8 +42,9 @@ pub struct PluginInfo {
 pub trait Plugin: Send + Sync + 'static {
     fn info(&self) -> PluginInfo;
 
-    /// Called once when the core starts (spawn background watchers here).
-    async fn start(&self, _core: CoreHandle) {}
+    /// Called once when the core starts. Background tasks may keep the
+    /// `Arc` and should exit once [`CoreHandle::is_alive`] returns false.
+    async fn start(self: Arc<Self>, _core: CoreHandle) {}
 
     /// A paired device became reachable (or was just paired).
     async fn on_connected(&self, _dev: &DeviceHandle) {}
@@ -74,6 +75,11 @@ pub struct CoreHandle {
 impl CoreHandle {
     pub(crate) fn upgrade(&self) -> Option<Arc<Inner>> {
         self.inner.upgrade()
+    }
+
+    /// False once the core has been dropped: background tasks must stop.
+    pub fn is_alive(&self) -> bool {
+        self.inner.strong_count() > 0
     }
 
     pub fn emit(&self, event: Event) {
@@ -116,6 +122,18 @@ impl CoreHandle {
 
     pub fn local_device_id(&self) -> String {
         self.upgrade().map(|i| i.identity.device_id.clone()).unwrap_or_default()
+    }
+
+    /// Invoke another plugin's local action (used by the Deck and macros).
+    pub async fn plugin_action(
+        &self,
+        device_id: Option<&str>,
+        plugin: &str,
+        action: &str,
+        args: Value,
+    ) -> Result<Value> {
+        let Some(inner) = self.upgrade() else { bail!("core stopped") };
+        inner.plugin_action(device_id, plugin, action, args).await
     }
 
     pub fn is_plugin_enabled(&self, id: &str) -> bool {

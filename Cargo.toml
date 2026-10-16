@@ -33,7 +33,7 @@ rust-version = "1.85"
 konnekta-proto = { path = "crates/konnekta-proto" }
 konnekta-crypto = { path = "crates/konnekta-crypto" }
 konnekta-core = { path = "crates/konnekta-core" }
-konnekta-platform = { path = "crates/konnekta-platform" }
+konnekta-platform = { path = "crates/konnekta-platform", default-features = false }
 konnekta-media = { path = "crates/konnekta-media" }
 konnekta-plugins = { path = "crates/konnekta-plugins" }
 

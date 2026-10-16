@@ -1294,6 +1294,24 @@ dependencies = [
 [[package]]
 name = "konnekta-plugins"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bytes",
+ "directories",
+ "hex",
+ "konnekta-core",
+ "konnekta-crypto",
+ "konnekta-media",
+ "konnekta-platform",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "uuid",
+]
 
 [[package]]
 name = "konnekta-proto"

@@ -259,37 +259,44 @@ pub struct CallActionBody {
 pub struct DndBody {
     pub enabled: bool,
     /// Wall clock ms when the change happened on the origin device.
+    #[serde(rename = "changedAt")]
     pub changed_at: i64,
-    /// Whether this is an explicit user change (true) or a state report.
-    #[serde(default)]
+    /// True for a user change, false for a state report (e.g. on connect).
+    #[serde(rename = "userInitiated", default)]
     pub user_initiated: bool,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub enum StreamKind {
-    /// Phone microphone -> computer virtual input device.
-    Microphone,
-    /// Phone camera -> computer virtual webcam.
-    Camera,
-    /// Computer system audio -> phone speaker.
-    SystemAudio,
-    /// Computer screen -> phone (remote desktop).
-    Screen,
-    /// Phone screen -> computer.
-    PhoneScreen,
+pub enum StreamAction {
+    /// Consumer asks the producer to start streaming.
+    Request,
+    /// Producer announces a stream channel (`port`) and its parameters.
+    Offer,
+    /// Either side ends the session.
+    Stop,
+    /// Consumer asks for an IDR frame (video).
+    Keyframe,
+    /// Consumer requests a different quality / camera.
+    Configure,
 }
 
+/// Body of every `konnekta.<stream>` packet.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct StreamRequestBody {
-    pub kind: StreamKind,
+pub struct StreamMessage {
+    pub action: StreamAction,
     pub session: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
     #[serde(default)]
     pub params: StreamParams,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct StreamParams {
+    /// "pcm_s16le", "h264"
     #[serde(default)]
     pub codec: String,
     #[serde(default)]
@@ -298,9 +305,9 @@ pub struct StreamParams {
     pub height: u32,
     #[serde(default)]
     pub fps: u32,
-    #[serde(default)]
+    #[serde(rename = "bitrateKbps", default)]
     pub bitrate_kbps: u32,
-    #[serde(default)]
+    #[serde(rename = "sampleRate", default)]
     pub sample_rate: u32,
     #[serde(default)]
     pub channels: u8,
@@ -322,20 +329,6 @@ impl Default for StreamParams {
             facing: None,
         }
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct StreamOfferBody {
-    pub kind: StreamKind,
-    pub session: String,
-    pub params: StreamParams,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct StreamStopBody {
-    pub session: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
 }
 
 #[cfg(test)]

@@ -8,6 +8,7 @@
 use crate::keys::{Key, Modifiers};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "desktop")]
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
