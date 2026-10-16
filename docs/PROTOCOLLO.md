@@ -63,3 +63,13 @@ u8 kind (1 audio, 2 video, 3 controllo) | u8 flags (1 keyframe, 2 config)
 u32 seq | u64 pts_us | u32 len | payload
 ```
 Audio: PCM s16le 48 kHz (microfono mono, audio di sistema stereo). Video: H.264 Annex B.
+
+## Interoperabilità verificata
+
+`scripts/interop-kdeconnect.sh` avvia un `kdeconnectd` reale isolato (HOME temporanea,
+sessione D-Bus privata) e verifica con Konnekta: scoperta, pairing con codice di verifica,
+invio di file in entrambe le direzioni. Verificato con KDE Connect 26.08.
+
+Con KDE Connect funzionano le funzioni standard della tabella sopra; le estensioni
+`konnekta.*` (Mobile Deck, stream, DND, screenshot, ripresa trasferimenti) richiedono
+Konnekta su entrambi i dispositivi.

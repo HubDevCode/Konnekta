@@ -188,14 +188,22 @@ impl Plugin for ClipboardPlugin {
     }
 
     async fn handle_packet(&self, dev: &DeviceHandle, p: Packet) -> Result<()> {
-        let body: ClipboardBody = p.body_as()?;
+        // Parsed leniently: KDE Connect sends `content: null` / no timestamp
+        // when its clipboard is empty.
+        let Some(content) = p
+            .get_str("content")
+            .filter(|c| !c.is_empty())
+            .map(str::to_owned)
+        else {
+            return Ok(());
+        };
         match p.packet_type.as_str() {
-            types::CLIPBOARD => self.apply_remote(dev, body.content, now_millis()).await,
+            types::CLIPBOARD => self.apply_remote(dev, content, now_millis()).await,
             types::CLIPBOARD_CONNECT => {
-                let ts = body.timestamp.unwrap_or(0);
+                let ts = p.get_i64("timestamp").unwrap_or(0);
                 let newer = ts > 0 && ts > self.state.lock().unwrap().changed_at;
                 if newer {
-                    self.apply_remote(dev, body.content, ts).await
+                    self.apply_remote(dev, content, ts).await
                 } else {
                     Ok(())
                 }
@@ -245,6 +253,15 @@ impl Plugin for ClipboardPlugin {
 mod tests {
     use super::*;
     use konnekta_platform::mock::MockPlatform;
+
+    #[test]
+    fn kde_empty_clipboard_connect_is_ignored() {
+        let p = Packet::new(
+            types::CLIPBOARD_CONNECT,
+            serde_json::json!({"content": null, "timestamp": 0}),
+        );
+        assert_eq!(p.get_str("content"), None);
+    }
 
     #[test]
     fn loop_prevention_state_machine() {
