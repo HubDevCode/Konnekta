@@ -9,6 +9,7 @@
 //!   device is paired, the plugin is enabled and the permission is granted);
 //! * encrypted payload transfers (files, screenshots) with optional resume.
 
+pub mod api;
 pub mod channel;
 pub mod config;
 pub mod core;
