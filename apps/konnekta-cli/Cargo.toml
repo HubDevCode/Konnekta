@@ -1,0 +1,4 @@
+[package]
+name = "konnekta-cli"
+version.workspace = true
+edition.workspace = true

@@ -1,0 +1,66 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/konnekta-proto",
+    "crates/konnekta-crypto",
+    "crates/konnekta-core",
+    "crates/konnekta-platform",
+    "crates/konnekta-media",
+    "crates/konnekta-plugins",
+    "crates/konnekta-ffi",
+    "apps/konnekta-cli",
+    # "apps/desktop/src-tauri",
+]
+default-members = [
+    "crates/konnekta-proto",
+    "crates/konnekta-crypto",
+    "crates/konnekta-core",
+    "crates/konnekta-platform",
+    "crates/konnekta-media",
+    "crates/konnekta-plugins",
+    "crates/konnekta-ffi",
+    "apps/konnekta-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/konnekta/konnekta"
+rust-version = "1.85"
+
+[workspace.dependencies]
+konnekta-proto = { path = "crates/konnekta-proto" }
+konnekta-crypto = { path = "crates/konnekta-crypto" }
+konnekta-core = { path = "crates/konnekta-core" }
+konnekta-platform = { path = "crates/konnekta-platform" }
+konnekta-media = { path = "crates/konnekta-media" }
+konnekta-plugins = { path = "crates/konnekta-plugins" }
+
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "sync", "fs", "process", "signal"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rustls-pki-types = "1"
+rcgen = { version = "0.13", default-features = false, features = ["ring", "pem", "crypto"] }
+x509-parser = "0.16"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+async-trait = "0.1"
+sha2 = "0.10"
+hex = "0.4"
+base64 = "0.22"
+uuid = { version = "1", features = ["v4"] }
+rand = "0.8"
+directories = "5"
+socket2 = { version = "0.5", features = ["all"] }
+bytes = "1"
+tempfile = "3"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

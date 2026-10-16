@@ -1,0 +1,9 @@
+/target
+**/node_modules
+apps/desktop/src-tauri/gen
+apps/mobile/build
+apps/mobile/.dart_tool
+apps/mobile/.flutter-plugins*
+*.keystore
+*.jks
+.env
