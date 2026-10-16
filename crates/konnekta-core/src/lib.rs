@@ -9,6 +9,7 @@
 //!   device is paired, the plugin is enabled and the permission is granted);
 //! * encrypted payload transfers (files, screenshots) with optional resume.
 
+pub mod channel;
 pub mod config;
 pub mod core;
 pub mod device;
@@ -24,6 +25,7 @@ pub mod util;
 
 pub use crate::core::{Konnekta, KonnektaBuilder};
 pub use config::Config;
+pub use channel::SecureChannel;
 pub use device::{DeviceHandle, DeviceInfo};
 pub use event::Event;
 pub use permissions::Permission;

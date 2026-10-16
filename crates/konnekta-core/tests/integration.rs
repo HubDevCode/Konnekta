@@ -269,3 +269,30 @@ async fn paired_device_reconnects_with_pinned_certificate() {
     wait_for(&mut a2.events, |e| matches!(e, Event::SecurityWarning { .. })).await;
     assert!(a2.k.device_handle(&b_id).is_none());
 }
+
+#[tokio::test]
+async fn secure_stream_channel() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut a = node("Alpha").await;
+    let mut b = node("Beta").await;
+    connect(&mut a, &mut b).await;
+    pair(&mut a, &mut b).await;
+    let ha = a.k.device_handle(b.k.device_id()).unwrap();
+    let hb = b.k.device_handle(a.k.device_id()).unwrap();
+    let (port, accept) = ha.listen_channel().await.unwrap();
+    let server = tokio::spawn(async move {
+        let mut ch = accept.await.unwrap();
+        ch.write_all(b"frame").await.unwrap();
+        ch.flush().await.unwrap();
+        let mut ack = [0u8; 3];
+        ch.read_exact(&mut ack).await.unwrap();
+        ack
+    });
+    let mut ch = hb.connect_channel(port).await.unwrap();
+    let mut buf = [0u8; 5];
+    ch.read_exact(&mut buf).await.unwrap();
+    assert_eq!(&buf, b"frame");
+    ch.write_all(b"ack").await.unwrap();
+    ch.flush().await.unwrap();
+    assert_eq!(&server.await.unwrap(), b"ack");
+}
