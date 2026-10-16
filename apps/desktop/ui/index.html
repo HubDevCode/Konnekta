@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Konnekta</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="brand">
+      <svg viewBox="0 0 64 64" aria-hidden="true"><rect x="4" y="4" width="56" height="56" rx="14" fill="url(#g)"/><defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#4f46e5"/><stop offset="1" stop-color="#1eb8d6"/></linearGradient></defs><rect x="14" y="19" width="12" height="26" rx="3" fill="none" stroke="#fff" stroke-width="3"/><rect x="34" y="23" width="17" height="13" rx="2" fill="none" stroke="#fff" stroke-width="3"/><path d="M31 41h23M26 32l8-2" stroke="#fff" stroke-width="3"/></svg>
+      <div>
+        <div class="brand-name">Konnekta</div>
+        <div class="brand-sub" id="me-name">—</div>
+      </div>
+    </div>
+    <nav id="nav">
+      <button data-view="devices" class="active">📱 Dispositivi</button>
+      <button data-view="transfers">⇅ Trasferimenti</button>
+      <button data-view="commands">⌘ Comandi</button>
+      <button data-view="deck">▦ Mobile Deck</button>
+      <button data-view="plugins">🧩 Plugin</button>
+      <button data-view="settings">⚙ Impostazioni</button>
+      <button data-view="security">🔒 Sicurezza</button>
+    </nav>
+    <div class="sidebar-foot" id="status">Avvio…</div>
+  </aside>
+  <main id="main"></main>
+  <div id="modal-root"></div>
+  <div id="toasts"></div>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -9,7 +9,7 @@ members = [
     "crates/konnekta-plugins",
     "crates/konnekta-ffi",
     "apps/konnekta-cli",
-    # "apps/desktop/src-tauri",
+    "apps/desktop/src-tauri",
 ]
 default-members = [
     "crates/konnekta-proto",

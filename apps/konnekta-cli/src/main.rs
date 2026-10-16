@@ -1,6 +1,6 @@
 //! `konnekta` — daemon and command line client.
 
-mod ipc;
+use konnekta_core::ipc;
 
 /// Like `println!` but exits quietly when stdout is closed (`| head`).
 macro_rules! println {

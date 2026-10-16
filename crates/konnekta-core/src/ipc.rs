@@ -23,7 +23,7 @@ pub fn endpoint(data_dir: &std::path::Path) -> PathBuf {
 }
 
 /// Serve one client connection.
-pub async fn serve_client<S>(stream: S, k: konnekta_core::Konnekta)
+pub async fn serve_client<S>(stream: S, k: crate::Konnekta)
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
@@ -50,7 +50,7 @@ where
             }
         }
         let params = req.get("params").cloned().unwrap_or(Value::Null);
-        let resp = match konnekta_core::api::call(&k, &method, params).await {
+        let resp = match crate::api::call(&k, &method, params).await {
             Ok(r) => json!({ "id": id, "result": r }),
             Err(e) => json!({ "id": id, "error": format!("{e:#}") }),
         };
@@ -63,7 +63,7 @@ where
 }
 
 #[cfg(unix)]
-pub async fn listen(path: PathBuf, k: konnekta_core::Konnekta) -> Result<()> {
+pub async fn listen(path: PathBuf, k: crate::Konnekta) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
     if path.exists() {
         // Refuse to steal the socket of a running daemon.
@@ -82,7 +82,7 @@ pub async fn listen(path: PathBuf, k: konnekta_core::Konnekta) -> Result<()> {
 }
 
 #[cfg(windows)]
-pub async fn listen(path: PathBuf, k: konnekta_core::Konnekta) -> Result<()> {
+pub async fn listen(path: PathBuf, k: crate::Konnekta) -> Result<()> {
     use tokio::net::windows::named_pipe::ServerOptions;
     let name = path.to_string_lossy().into_owned();
     let mut server = ServerOptions::new()

@@ -16,6 +16,7 @@ pub mod core;
 pub mod device;
 pub mod discovery;
 pub mod event;
+pub mod ipc;
 pub mod link;
 pub mod pairing;
 pub mod payload;
