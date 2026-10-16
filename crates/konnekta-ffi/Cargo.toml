@@ -1,5 +1,23 @@
 [package]
 name = "konnekta-ffi"
+description = "C ABI of the Konnekta core for the Android / iOS apps"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+konnekta-core.workspace = true
+konnekta-plugins.workspace = true
+konnekta-media.workspace = true
+tokio.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+bytes.workspace = true
+
+[target.'cfg(target_os = "android")'.dependencies]
+tracing-android = "0.2"

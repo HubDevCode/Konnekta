@@ -196,3 +196,46 @@ async fn notifications_are_shown_and_filtered() {
     eventually(|| a.mock.calls().iter().any(|c| c == "notify:hello:x")).await;
     assert!(!a.mock.calls().iter().any(|c| c.contains("buy")));
 }
+
+/// Desktop (full plugins) <-> phone (bridge plugins used by the mobile apps).
+#[tokio::test]
+async fn desktop_interoperates_with_mobile_bridge() {
+    use konnekta_plugins::bridge::{PendingPayloads, mobile};
+    let mut desk = node("Desktop").await;
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = Config { device_name: "Phone".into(), device_type: konnekta_core::proto::DeviceType::Phone, bind_addr: LO, tcp_port: 0, udp_port: 0, announce: false, ..Config::default() };
+    let phone = Konnekta::builder(cfg)
+        .data_dir(dir.path())
+        .plugins(mobile(Arc::new(PendingPayloads::default()), true))
+        .build()
+        .unwrap();
+    let mut pev = phone.subscribe();
+    phone.start().await.unwrap();
+    phone.connect_to(SocketAddr::new(LO, desk.k.udp_port())).await.unwrap();
+    wait(&mut pev, |e| matches!(e, Event::DeviceConnected { .. })).await;
+    let did = desk.k.device_id().to_string();
+    let pid = phone.device_id().to_string();
+    phone.request_pair(&did).await.unwrap();
+    wait(&mut desk.ev, |e| matches!(e, Event::PairRequested { .. })).await;
+    desk.k.accept_pair(&pid).await.unwrap();
+    wait(&mut pev, |e| matches!(e, Event::Paired { .. })).await;
+
+    // Phone -> desktop notification through the bridge.
+    phone
+        .device_handle(&did)
+        .unwrap()
+        .send(Packet::new(types::NOTIFICATION, json!({ "id": "n1", "appName": "Telegram", "title": "Hi", "text": "there" })))
+        .await
+        .unwrap();
+    eventually(|| desk.mock.calls().iter().any(|c| c == "notify:Hi:there")).await;
+
+    // Desktop -> phone ping arrives as a bridge event for the app.
+    desk.k.plugin_action(Some(&pid), "ping", "send", json!({ "message": "yo" })).await.unwrap();
+    let e = wait(&mut pev, |e| matches!(e, Event::Plugin { plugin, kind, .. } if plugin == "ping" && kind == "packet")).await;
+    let Event::Plugin { data, .. } = e else { unreachable!() };
+    assert_eq!(data["body"]["message"], "yo");
+
+    // The desktop can't remote-control the phone's input: the phone bridge
+    // declares mousepad as outgoing only.
+    assert!(desk.k.device(&pid).unwrap().incoming_capabilities.iter().all(|c| c != types::MOUSEPAD_REQUEST));
+}

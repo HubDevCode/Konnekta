@@ -10,6 +10,7 @@
 
 pub mod actions;
 pub mod battery;
+pub mod bridge;
 pub mod clipboard;
 pub mod deck;
 pub mod dnd;
