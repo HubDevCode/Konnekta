@@ -168,7 +168,15 @@ private fun Home(
                                 core(toast) { it.call("connect", JSONObject().put("address", d.optString("address"))) }
                                 delay(1500)
                             }
-                            core(toast) { it.call("pair", JSONObject().put("deviceId", id)) }
+                            val r = core(toast) { it.callObject("pair", JSONObject().put("deviceId", id)) }
+                            // Show our key while the computer asks its user to compare it.
+                            r?.optString("verificationKey")?.takeIf { it.isNotEmpty() }?.let { key ->
+                                KonnektaService.pairPrompt.value = JSONObject()
+                                    .put("deviceId", id)
+                                    .put("deviceName", d.optString("name"))
+                                    .put("verificationKey", key)
+                                    .put("waiting", true)
+                            }
                             onChanged()
                         }
                     }) { Text("Associa") }
@@ -196,9 +204,32 @@ private fun PairDialog(p: JSONObject, toast: (String) -> Unit, onClose: () -> Un
     val id = p.optString("deviceId")
     val key = p.optString("verificationKey")
     val confirm = p.optBoolean("confirm")
+    val name = p.optString("deviceName")
+    if (p.optBoolean("waiting")) {
+        // We asked: the answer arrives as pairConfirm / pairRejected, which replace or close this.
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("In attesa di $name") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Il computer deve mostrare lo stesso codice:")
+                    Text(formatKey(key), style = MaterialTheme.typography.headlineSmall)
+                    Text("Accetta sul computer solo se tutti i 16 caratteri coincidono.", style = MaterialTheme.typography.bodySmall)
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = {
+                    scope.launch { core(toast) { it.call("rejectPair", JSONObject().put("deviceId", id).put("key", key)) } }
+                    onClose()
+                }) { Text("Annulla") }
+            },
+        )
+        return
+    }
     AlertDialog(
         onDismissRequest = {},
-        title = { Text(if (confirm) "Conferma l'associazione" else "Associare ${p.optString("deviceName")}?") },
+        title = { Text(if (confirm) "Conferma l'associazione" else "Associare $name?") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Il computer deve mostrare lo stesso codice:")
