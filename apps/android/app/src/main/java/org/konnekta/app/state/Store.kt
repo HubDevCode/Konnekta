@@ -70,6 +70,7 @@ object Store {
         val p = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         _selected.value = p.getString("selected", null)
         grid.value = p.getBoolean("grid", false)
+        Settings.load(ctx)
     }
 
     fun setGrid(ctx: Context, on: Boolean) {

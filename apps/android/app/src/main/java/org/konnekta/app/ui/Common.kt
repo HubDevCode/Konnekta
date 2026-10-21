@@ -49,6 +49,14 @@ import org.json.JSONObject
 import org.konnekta.app.KonnektaApp
 import org.konnekta.app.core.Core
 import org.konnekta.app.state.Store
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material3.Button
+import androidx.compose.material3.TextButton
+import org.konnekta.app.state.Settings
 
 /** Run a core call off the main thread; errors become a toast. */
 suspend fun <T> core(toast: (String) -> Unit, f: (Core) -> T): T? =
@@ -102,7 +110,7 @@ fun StatusDot(on: Boolean, modifier: Modifier = Modifier) {
 
 /** Scope chip: which computer the screens act on. */
 @Composable
-fun ScopeChip(devices: List<JSONObject>, current: JSONObject?) {
+fun ScopeChip(devices: List<JSONObject>, current: JSONObject?, compact: Boolean = false) {
     val ctx = LocalContext.current
     var open by remember { mutableStateOf(false) }
     val paired = devices.filter { it.optBoolean("paired") }
@@ -112,10 +120,11 @@ fun ScopeChip(devices: List<JSONObject>, current: JSONObject?) {
             shape = RoundedCornerShape(12.dp),
             color = MaterialTheme.colorScheme.surfaceContainerHigh,
         ) {
-            Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Filled.Computer, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
-                Spacer(Modifier.width(8.dp))
-                Text(current?.optString("name") ?: "Nessun computer", style = MaterialTheme.typography.titleSmall)
+            Row(Modifier.padding(horizontal = if (compact) 8.dp else 12.dp, vertical = if (compact) 3.dp else 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Filled.Computer, null, Modifier.size(if (compact) 14.dp else 18.dp), tint = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.width(if (compact) 6.dp else 8.dp))
+                Text(current?.optString("name") ?: "Nessun computer",
+                    style = if (compact) MaterialTheme.typography.labelMedium else MaterialTheme.typography.titleSmall)
                 Spacer(Modifier.width(8.dp))
                 paired.forEach { StatusDot(it.optBoolean("connected"), Modifier.padding(end = 3.dp)) }
                 if (paired.size > 1) Icon(Icons.Filled.ExpandMore, null, Modifier.size(18.dp))
@@ -236,7 +245,94 @@ data class Fn(
     val highlight: Boolean = false,
     val trailing: (@Composable () -> Unit)? = null,
     val onClick: () -> Unit,
-)
+) {
+    /** Stable id for the saved order: the title, which never names a device. */
+    val key: String get() = title
+}
+
+/** A titled group of features on Controllo or Invia. */
+class FnSection(val key: String, val title: String?, val items: List<Fn>)
+
+/**
+ * The feature sections of [screen] in the user's order, without the hidden
+ * ones. In "Personalizza" mode every section and feature gets arrows to
+ * move it and an eye to hide or show it.
+ */
+@Composable
+fun FnSections(screen: String, sections: List<FnSection>) {
+    val ctx = LocalContext.current
+    val editing by Settings.editing.collectAsState()
+    val hidden by Settings.hidden.collectAsState()
+    @Suppress("UNUSED_VARIABLE") val order by Settings.order.collectAsState()
+    val arranged = Settings.arrange(screen, sections) { it.key }
+    if (editing != screen) {
+        arranged.forEach { sec ->
+            val shown = Settings.arrange("$screen/${sec.key}", sec.items) { it.key }.filter { "$screen/${it.key}" !in hidden }
+            if (shown.isEmpty()) return@forEach
+            sec.title?.let { SectionTitle(it) }
+            FnList(shown)
+        }
+        return
+    }
+    val secKeys = arranged.map { it.key }
+    Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text("Personalizza: sposta con le frecce, nascondi con l'occhio", Modifier.weight(1f),
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        TextButton(onClick = { Settings.resetLayout(ctx, screen) }) { Text("Ripristina") }
+        Button(onClick = { Settings.editing.value = null }) { Text("Fine") }
+    }
+    arranged.forEach { sec ->
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(sec.title ?: "In alto", Modifier.weight(1f).padding(top = 16.dp, bottom = 6.dp),
+                style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+            if (arranged.size > 1) {
+                Arrows(secKeys, sec.key) { by -> Settings.move(ctx, screen, secKeys, sec.key, by) }
+            }
+        }
+        val items = Settings.arrange("$screen/${sec.key}", sec.items) { it.key }
+        val keys = items.map { it.key }
+        items.forEach { f ->
+            val k = "$screen/${f.key}"
+            val off = k in hidden
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                border = BorderStroke(1.dp, LocalStatus.current.border),
+                modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+            ) {
+                Row(Modifier.padding(start = 12.dp, end = 4.dp, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(f.icon, null, tint = if (off) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .4f) else MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.width(12.dp))
+                    Text(f.title, Modifier.weight(1f), style = MaterialTheme.typography.titleSmall,
+                        color = if (off) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .6f) else MaterialTheme.colorScheme.onSurface)
+                    IconButton(onClick = { Settings.setHidden(ctx, k, !off) }) {
+                        Icon(if (off) Icons.Filled.VisibilityOff else Icons.Filled.Visibility, if (off) "Mostra" else "Nascondi")
+                    }
+                    Arrows(keys, f.key) { by -> Settings.move(ctx, "$screen/${sec.key}", keys, f.key, by) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun Arrows(keys: List<String>, key: String, move: (Int) -> Unit) {
+    val i = keys.indexOf(key)
+    IconButton(onClick = { move(-1) }, enabled = i > 0) { Icon(Icons.Filled.KeyboardArrowUp, "Su") }
+    IconButton(onClick = { move(1) }, enabled = i < keys.size - 1) { Icon(Icons.Filled.KeyboardArrowDown, "Giù") }
+}
+
+/** Entry to "Personalizza" at the end of Controllo and Invia. */
+@Composable
+fun CustomizeButton(screen: String) {
+    val editing by Settings.editing.collectAsState()
+    if (editing == screen) return
+    TextButton(onClick = { Settings.editing.value = screen }, modifier = Modifier.padding(vertical = 4.dp)) {
+        Icon(Icons.Filled.Edit, null, Modifier.size(18.dp))
+        Spacer(Modifier.width(6.dp))
+        Text("Personalizza questa pagina")
+    }
+}
 
 /** A group of features: one per line, or two per row with the grid setting. */
 @Composable

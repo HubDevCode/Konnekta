@@ -59,6 +59,12 @@ import org.json.JSONObject
 import org.konnekta.app.KonnektaApp
 import org.konnekta.app.service.KonnektaService
 import org.konnekta.app.state.Store
+import android.content.res.Configuration
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.material3.NavigationRail
+import androidx.compose.material3.NavigationRailItem
+import androidx.compose.ui.platform.LocalConfiguration
+import org.konnekta.app.state.Settings
 
 /** Set while the Presentation screen is open: the computer the volume keys drive. */
 object PresenterKeys {
@@ -146,7 +152,18 @@ sealed interface Route {
     data object Deck : Route
     data object Browse : Route
     data object Desktop : Route
+    data object Settings : Route
     data class Device(val id: String) : Route
+}
+
+/**
+ * Navigation state held by the process, not by the composition: rotating
+ * the phone (even when Android rebuilds the activity) keeps the open
+ * feature and the tab.
+ */
+object Nav {
+    val route = kotlinx.coroutines.flow.MutableStateFlow<Route?>(null)
+    var tab = 0
 }
 
 @Composable
@@ -155,7 +172,7 @@ private fun App() {
     val devices by Store.devices.collectAsState()
     val selected by Store.selected.collectAsState()
     val prompt by KonnektaService.pairPrompt.collectAsState()
-    var route by remember { mutableStateOf<Route?>(null) }
+    val route by Nav.route.collectAsState()
 
     // Keep the device list fresh while the app is open.
     LaunchedEffect(Unit) {
@@ -183,10 +200,14 @@ private fun App() {
         return
     }
 
+    // Over every screen, also inside a feature.
+    RequestDialogs()
+    StreamProblemDialog()
+
     route?.let { r ->
-        BackHandler { route = null }
+        BackHandler { Nav.route.value = null }
         Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).safeDrawingPadding().padding(horizontal = 16.dp)) {
-            val back = { route = null }
+            val back = { Nav.route.value = null }
             when (r) {
                 Route.Media -> MediaScreen(current, back)
                 Route.Touchpad -> TouchpadScreen(current, back)
@@ -195,34 +216,40 @@ private fun App() {
                 Route.Deck -> DeckScreen(current, back)
                 Route.Browse -> BrowseScreen(current, back)
                 Route.Desktop -> RemoteDesktopScreen(current, back)
+                Route.Settings -> SettingsScreen(back)
                 is Route.Device -> DeviceScreen(r.id, back)
             }
         }
         return
     }
 
-    RequestDialogs()
-
     // Tabs follow the swipe; tapping a tab scrolls the pager.
-    val pager = androidx.compose.foundation.pager.rememberPagerState(pageCount = { Tab.entries.size })
+    val pager = androidx.compose.foundation.pager.rememberPagerState(initialPage = Nav.tab, pageCount = { Tab.entries.size })
+    LaunchedEffect(pager.currentPage) { Nav.tab = pager.currentPage }
+    // "Personalizza" from the settings: show the page being arranged.
+    val editing by Settings.editing.collectAsState()
+    LaunchedEffect(editing) {
+        when (editing) {
+            "control" -> pager.animateScrollToPage(Tab.Control.ordinal)
+            "send" -> pager.animateScrollToPage(Tab.Send.ordinal)
+        }
+    }
     val scope = rememberCoroutineScope()
-    Scaffold(
-        bottomBar = {
-            NavigationBar {
-                Tab.entries.forEach { t ->
-                    NavigationBarItem(
-                        selected = pager.currentPage == t.ordinal,
-                        onClick = { scope.launch { pager.animateScrollToPage(t.ordinal) } },
-                        icon = { Icon(t.icon, null) },
-                        label = { Text(t.label) },
-                    )
-                }
+    val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+    val navSide by Settings.navLandscape.collectAsState()
+    val topBar by Settings.topBarLandscape.collectAsState()
+    val side = if (landscape) navSide else Settings.NavSide.Bottom
+    val goTo = { t: Tab -> scope.launch { pager.animateScrollToPage(t.ordinal) }; Unit }
+    val open = { r: Route -> Nav.route.value = r }
+
+    val content: @Composable (Modifier) -> Unit = { mod ->
+        Column(mod) {
+            when {
+                !landscape || topBar == Settings.TopBar.Full ->
+                    Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 4.dp)) { ScopeChip(devices, current) }
+                topBar == Settings.TopBar.Compact ->
+                    Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 4.dp)) { ScopeChip(devices, current, compact = true) }
             }
-        },
-    ) { pad ->
-        Column(Modifier.fillMaxSize().padding(pad)) {
-            Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 4.dp)) { ScopeChip(devices, current) }
-            val open = { r: Route -> route = r }
             androidx.compose.foundation.pager.HorizontalPager(pager, Modifier.fillMaxSize(), beyondViewportPageCount = 1) { page ->
                 Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
                     when (Tab.entries[page]) {
@@ -233,6 +260,44 @@ private fun App() {
                 }
             }
         }
+    }
+
+    if (side == Settings.NavSide.Bottom) {
+        Scaffold(
+            bottomBar = {
+                NavigationBar {
+                    Tab.entries.forEach { t ->
+                        NavigationBarItem(
+                            selected = pager.currentPage == t.ordinal,
+                            onClick = { goTo(t) },
+                            icon = { Icon(t.icon, null) },
+                            label = { Text(t.label) },
+                        )
+                    }
+                }
+            },
+        ) { pad -> content(Modifier.fillMaxSize().padding(pad)) }
+        return
+    }
+    // Landscape: the tabs on one side free the height for the content.
+    val rail: @Composable () -> Unit = {
+        NavigationRail(Modifier.fillMaxHeight()) {
+            Spacer(Modifier.weight(1f))
+            Tab.entries.forEach { t ->
+                NavigationRailItem(
+                    selected = pager.currentPage == t.ordinal,
+                    onClick = { goTo(t) },
+                    icon = { Icon(t.icon, null) },
+                    label = { Text(t.label) },
+                )
+            }
+            Spacer(Modifier.weight(1f))
+        }
+    }
+    Row(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).safeDrawingPadding()) {
+        if (side == Settings.NavSide.Left) rail()
+        content(Modifier.weight(1f).fillMaxHeight())
+        if (side == Settings.NavSide.Right) rail()
     }
 }
 

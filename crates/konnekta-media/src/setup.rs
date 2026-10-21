@@ -77,7 +77,8 @@ pub fn check() -> Report {
         if r.status == Status::Ok {
             continue;
         }
-        let skip_install = usize::from(r.status == Status::Missing && package(env.distro, r.id).is_some());
+        let skip_install =
+            usize::from(r.status == Status::Missing && package(env.distro, r.id).is_some());
         for c in r.commands.iter().skip(skip_install) {
             if !all_commands.contains(c) {
                 all_commands.push(c.clone());
@@ -90,6 +91,28 @@ pub fn check() -> Report {
         features,
         all_commands,
     }
+}
+
+/// What one feature still needs: missing items and the commands that fix
+/// them (empty when the feature is ready or unknown).
+pub fn needs(feature: &str) -> (Vec<String>, Vec<String>) {
+    let env = Env::detect();
+    let Some(f) = features(&env).into_iter().find(|f| f.id == feature) else {
+        return (vec![], vec![]);
+    };
+    let bad: Vec<&Requirement> = f
+        .requirements
+        .iter()
+        .filter(|r| r.status != Status::Ok)
+        .collect();
+    let missing = bad.iter().map(|r| r.id.to_owned()).collect();
+    let mut fix: Vec<String> = Vec::new();
+    for c in bad.iter().flat_map(|r| &r.commands) {
+        if !fix.contains(c) {
+            fix.push(c.clone());
+        }
+    }
+    (missing, fix)
 }
 
 struct Env {
@@ -214,7 +237,8 @@ fn v4l2loopback(env: &Env) -> Requirement {
             .map(|o| o.status.success())
             .unwrap_or(false);
     let mut commands = vec![];
-    if !installed && let Some(i) = package(env.distro, "v4l2loopback").and_then(|p| install(env, p)) {
+    if !installed && let Some(i) = package(env.distro, "v4l2loopback").and_then(|p| install(env, p))
+    {
         commands.push(i);
     }
     if !loaded {
@@ -269,7 +293,11 @@ fn features(env: &Env) -> Vec<Feature> {
     }
     let pulse = |id: &'static str, purpose| program(env, id, purpose);
     let desktop = if env.wayland {
-        let wf = program(env, "wf-recorder", "cattura dello schermo su Wayland (wlroots)");
+        let wf = program(
+            env,
+            "wf-recorder",
+            "cattura dello schermo su Wayland (wlroots)",
+        );
         let wlroots = !["GNOME", "KDE"].iter().any(|d| env.desktop.contains(d));
         if wf.status == Status::Ok || wlroots {
             vec![wf]
@@ -292,14 +320,29 @@ fn features(env: &Env) -> Vec<Feature> {
     #[cfg(not(target_os = "linux"))]
     let webcam = vec![ffmpeg()];
     vec![
-        feature("microphone", vec![pulse("pactl", "crea il microfono virtuale")]),
+        feature(
+            "microphone",
+            vec![pulse("pactl", "crea il microfono virtuale")],
+        ),
         feature("webcam", webcam),
         feature("phoneScreen", vec![ffplay()]),
         feature("desktop", desktop),
-        feature("systemAudio", vec![pulse("parec", "registra l'audio del computer")]),
-        feature("phoneAudio", vec![pulse("pacat", "riproduce l'audio del telefono")]),
-        feature("media", vec![program(env, "playerctl", "controlla i lettori (MPRIS)")]),
-        feature("mixer", vec![pulse("pactl", "volumi di uscite, ingressi e app")]),
+        feature(
+            "systemAudio",
+            vec![pulse("parec", "registra l'audio del computer")],
+        ),
+        feature(
+            "phoneAudio",
+            vec![pulse("pacat", "riproduce l'audio del telefono")],
+        ),
+        feature(
+            "media",
+            vec![program(env, "playerctl", "controlla i lettori (MPRIS)")],
+        ),
+        feature(
+            "mixer",
+            vec![pulse("pactl", "volumi di uscite, ingressi e app")],
+        ),
     ]
 }
 
@@ -312,9 +355,15 @@ mod tests {
         assert_eq!(distro("ID=arch\n"), Some("arch"));
         assert_eq!(distro("ID=endeavouros\nID_LIKE=arch\n"), Some("arch"));
         assert_eq!(distro("ID=ubuntu\nID_LIKE=debian\n"), Some("debian"));
-        assert_eq!(distro("ID=\"linuxmint\"\nID_LIKE=\"ubuntu debian\"\n"), Some("debian"));
+        assert_eq!(
+            distro("ID=\"linuxmint\"\nID_LIKE=\"ubuntu debian\"\n"),
+            Some("debian")
+        );
         assert_eq!(distro("ID=fedora\n"), Some("fedora"));
-        assert_eq!(distro("ID=\"opensuse-tumbleweed\"\nID_LIKE=\"opensuse suse\"\n"), Some("opensuse"));
+        assert_eq!(
+            distro("ID=\"opensuse-tumbleweed\"\nID_LIKE=\"opensuse suse\"\n"),
+            Some("opensuse")
+        );
         assert_eq!(distro("ID=nixos\n"), None);
     }
 

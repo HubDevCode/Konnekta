@@ -17,18 +17,19 @@ use async_trait::async_trait;
 use konnekta_core::proto::bodies::{StreamAction, StreamMessage, StreamParams};
 use konnekta_core::proto::{Packet, types};
 use konnekta_core::{CoreHandle, DeviceHandle, Permission, Plugin, PluginInfo, SecureChannel};
-use konnekta_media::abr::{DEFAULT_LADDER, NetworkSample};
+use konnekta_media::FrameSender;
+use konnekta_media::abr::DEFAULT_LADDER;
+use konnekta_media::flv::{FlvReader, FlvVideo};
 use konnekta_media::frame::{FLAG_CONFIG, Frame, FrameKind, read_frame};
-use konnekta_media::pipeline::{AnnexBSplitter, ProcessPipeline, screen_capture_command};
+use konnekta_media::pipeline::{ProcessPipeline, screen_capture_command};
 use konnekta_media::virtual_devices::{
     Speakers, SystemAudioCapture, VirtualCamera, VirtualMic, screen_viewer,
 };
-use konnekta_media::{AdaptiveBitrate, FrameSender};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio::task::AbortHandle;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,6 +43,18 @@ pub enum Kind {
 }
 
 impl Kind {
+    /// Feature id in the setup assistant ([`konnekta_media::setup`]).
+    fn feature(self) -> &'static str {
+        match self {
+            Self::Microphone => "microphone",
+            Self::Camera => "webcam",
+            Self::PhoneScreen => "phoneScreen",
+            Self::Desktop => "desktop",
+            Self::SystemAudio => "systemAudio",
+            Self::PhoneAudio => "phoneAudio",
+        }
+    }
+
     fn produces_locally(self) -> bool {
         matches!(self, Self::Desktop | Self::SystemAudio)
     }
@@ -187,8 +200,46 @@ impl StreamPlugin {
                 port,
                 params,
                 reason,
+                missing: vec![],
+                fix: vec![],
             },
         )
+    }
+
+    /// What this computer still needs for the stream, checked off the
+    /// async threads (it looks for programs and kernel modules).
+    async fn needs(kind: Kind) -> (Vec<String>, Vec<String>) {
+        tokio::task::spawn_blocking(move || konnekta_media::setup::needs(kind.feature()))
+            .await
+            .unwrap_or_default()
+    }
+
+    /// Refuse a stream because something is missing here: the phone shows
+    /// what and how to install it.
+    async fn refuse_missing(
+        &self,
+        dev: &DeviceHandle,
+        session: &str,
+        missing: Vec<String>,
+        fix: Vec<String>,
+    ) -> Result<()> {
+        let reason = format!("missing on the computer: {}", missing.join(", "));
+        tracing::warn!(plugin = self.info.id, "{reason}");
+        dev.emit(
+            self.info.id,
+            "error",
+            json!({ "error": reason, "missing": missing, "fix": fix }),
+        );
+        let mut p = self.msg(
+            StreamAction::Stop,
+            session,
+            None,
+            StreamParams::default(),
+            Some(reason),
+        );
+        p.body.insert("missing".into(), json!(missing));
+        p.body.insert("fix".into(), json!(fix));
+        dev.send_if_supported(p).await
     }
 
     fn stop_local(&self, device_id: &str) -> bool {
@@ -242,16 +293,23 @@ impl StreamPlugin {
             if me.session_matches(dev_c.id(), &sid) {
                 me.sessions.lock().unwrap().remove(dev_c.id());
                 dev_c.emit(me.info.id, "stopped", json!({ "session": sid }));
+                let failed = r.is_err();
                 let reason = r.err().map(|e| e.to_string());
-                let _ = dev_c
-                    .send_if_supported(me.msg(
-                        StreamAction::Stop,
-                        &sid,
-                        None,
-                        StreamParams::default(),
-                        reason,
-                    ))
-                    .await;
+                let mut p = me.msg(
+                    StreamAction::Stop,
+                    &sid,
+                    None,
+                    StreamParams::default(),
+                    reason,
+                );
+                if failed {
+                    let (missing, fix) = Self::needs(me.kind).await;
+                    if !missing.is_empty() {
+                        p.body.insert("missing".into(), json!(missing));
+                        p.body.insert("fix".into(), json!(fix));
+                    }
+                }
+                let _ = dev_c.send_if_supported(p).await;
             }
         });
         self.sessions.lock().unwrap().insert(
@@ -341,54 +399,63 @@ impl StreamPlugin {
 
     // --- producer side (computer produces) ----------------------------------
 
+    /// The computer's screen: one frame per encoded picture, sent the moment
+    /// the encoder writes it. Quality is fixed for the session (constant
+    /// quality encoding keeps the bitrate low on a still screen); a short
+    /// queue drops stale pictures up to the next keyframe instead of piling
+    /// up delay.
     async fn produce_desktop(ch: SecureChannel, params: StreamParams) -> Result<()> {
-        let sender = FrameSender::new(ch, 30);
-        let max_level = DEFAULT_LADDER
+        let sender = FrameSender::new(ch, 6);
+        let level = DEFAULT_LADDER
             .iter()
             .rposition(|q| params.height == 0 || q.height <= params.height)
-            .unwrap_or(0);
-        // Start sharp (1080p30 on a LAN); congestion steps it down.
-        let start = max_level.min(3);
-        let mut abr = AdaptiveBitrate::new(DEFAULT_LADDER, start, max_level);
+            .unwrap_or(0)
+            .min(3);
+        let q = DEFAULT_LADDER[level];
+        sender.push(Frame::control(&json!({ "quality": q })));
+        let (prog, args) = screen_capture_command(q)?;
+        tracing::info!(program = %prog, height = q.height, fps = q.fps, "screen capture");
+        let mut proc = ProcessPipeline::spawn(&prog, &args, false, true)?;
+        let out = proc.stdout.take().context("capture has no output")?;
+        let mut flv = FlvReader::new(out);
+        let mut config: Option<bytes::Bytes> = None;
+        let mut tick = tokio::time::interval(Duration::from_secs(1));
         loop {
-            let q = abr.current();
-            sender.push(Frame::control(&json!({ "quality": q })));
-            let (prog, args) = screen_capture_command(q)?;
-            let mut proc = ProcessPipeline::spawn(&prog, &args, false, true)?;
-            let mut out = proc.stdout.take().context("capture has no output")?;
-            let mut splitter = AnnexBSplitter::default();
-            let mut buf = vec![0u8; 64 * 1024];
-            let mut tick = tokio::time::interval(Duration::from_secs(1));
-            loop {
-                tokio::select! {
-                    n = out.read(&mut buf) => {
-                        let n = n?;
-                        if n == 0 {
-                            bail!("screen capture stopped");
+            tokio::select! {
+                v = flv.next() => {
+                    match v? {
+                        None => bail!("screen capture stopped ({prog})"),
+                        Some(FlvVideo::Config(c)) => {
+                            let mut f = Frame::new(FrameKind::Video, now_us(), c.clone()).keyframe();
+                            f.flags |= FLAG_CONFIG;
+                            sender.push(f);
+                            config = Some(c);
                         }
-                        for nal in splitter.push(&buf[..n]) {
-                            let mut f = Frame::new(FrameKind::Video, now_us(), nal.data.clone());
-                            if nal.is_key() { f = f.keyframe(); }
-                            if nal.is_config() { f.flags |= FLAG_CONFIG; }
+                        Some(FlvVideo::Picture { data, key }) => {
+                            // SPS/PPS again before each keyframe: a decoder that
+                            // dropped frames (or joined late) restarts there.
+                            if key && let Some(c) = &config {
+                                let mut f = Frame::new(FrameKind::Video, now_us(), c.clone()).keyframe();
+                                f.flags |= FLAG_CONFIG;
+                                sender.push(f);
+                            }
+                            let mut f = Frame::new(FrameKind::Video, now_us(), data);
+                            if key {
+                                f = f.keyframe();
+                            }
                             sender.push(f);
                         }
-                        if sender.is_closed() {
-                            return Ok(());
-                        }
                     }
-                    _ = tick.tick() => {
-                        if sender.is_closed() {
-                            return Ok(());
-                        }
-                        let s = NetworkSample { queue_delay: sender.stats.queue_delay(), dropped: sender.stats.take_dropped() };
-                        if let Some(nq) = abr.update(s, Instant::now()) {
-                            tracing::info!(?nq, "adapting desktop stream quality");
-                            break;
-                        }
+                    if sender.is_closed() {
+                        return Ok(());
+                    }
+                }
+                _ = tick.tick() => {
+                    if sender.is_closed() {
+                        return Ok(());
                     }
                 }
             }
-            drop(proc);
         }
     }
 
@@ -487,9 +554,19 @@ impl Plugin for StreamPlugin {
             bail!("invalid session id");
         }
         match (m.action, self.kind.produces_locally()) {
-            (StreamAction::Request, true) => self.start_producer(dev, m.session, m.params).await?,
+            (StreamAction::Request, true) => {
+                let (missing, fix) = Self::needs(self.kind).await;
+                if !missing.is_empty() {
+                    return self.refuse_missing(dev, &m.session, missing, fix).await;
+                }
+                self.start_producer(dev, m.session, m.params).await?
+            }
             (StreamAction::Offer, false) => {
                 let port = m.port.context("offer without port")?;
+                let (missing, fix) = Self::needs(self.kind).await;
+                if !missing.is_empty() {
+                    return self.refuse_missing(dev, &m.session, missing, fix).await;
+                }
                 self.stop_local(dev.id());
                 let ch = dev.connect_channel(port).await?;
                 let title = format!("{} — Konnekta", dev.name());

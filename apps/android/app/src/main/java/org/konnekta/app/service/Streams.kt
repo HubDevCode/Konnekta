@@ -68,6 +68,10 @@ object Streams {
         StreamRequest(deviceId, deviceName, plugin, newSession(), params)
 
     val pending = MutableStateFlow<List<StreamRequest>>(emptyList())
+
+    /** A stream the computer refused because something is not installed there. */
+    data class StreamProblem(val deviceName: String, val plugin: String, val missing: List<String>, val fix: List<String>)
+    val problem = MutableStateFlow<StreamProblem?>(null)
     val live = MutableStateFlow<Map<String, LiveStream>>(emptyMap())
 
     /** Called when a request was accepted or declined (the service clears its notification). */
@@ -115,6 +119,15 @@ object Streams {
             "stop" -> {
                 pending.update { l -> l.filterNot { it.deviceId == deviceId && it.plugin == plugin } }
                 stop(deviceId, plugin, notifyPeer = false)
+                // The computer lacks a program or module: tell the user how to fix it.
+                val missing = b.optJSONArray("missing")
+                if (missing != null && missing.length() > 0) {
+                    problem.value = StreamProblem(
+                        deviceName, plugin,
+                        (0 until missing.length()).map { missing.optString(it) },
+                        b.optJSONArray("fix")?.let { f -> (0 until f.length()).map { f.optString(it) } }.orEmpty(),
+                    )
+                }
             }
             "request" -> if (plugin in PRODUCED) {
                 val r = StreamRequest(deviceId, deviceName, plugin, session, params)
@@ -384,23 +397,43 @@ object Streams {
             open(cm, id)
         }
 
+        /*
+         * The camera answers on its own thread, possibly after the stream
+         * ended (the computer refused it, or the user stopped it at once): the
+         * encoder's Surface is gone by then, so every step checks `running`
+         * and never lets an exception escape (it would close the app).
+         */
         @SuppressLint("MissingPermission")
         private fun open(cm: CameraManager, id: String) {
             cm.openCamera(id, object : CameraDevice.StateCallback() {
                 override fun onOpened(d: CameraDevice) {
-                    device = d
-                    @Suppress("DEPRECATION")
-                    d.createCaptureSession(listOf(input), object : CameraCaptureSession.StateCallback() {
-                        override fun onConfigured(s: CameraCaptureSession) {
-                            val req = d.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
-                                addTarget(input)
-                                set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, Range(fps, fps))
-                            }.build()
-                            runCatching { s.setRepeatingRequest(req, null, handler) }
+                    synchronized(this@CameraProducer) {
+                        if (!running) {
+                            runCatching { d.close() }
+                            return
                         }
+                        device = d
+                    }
+                    try {
+                        @Suppress("DEPRECATION")
+                        d.createCaptureSession(listOf(input), object : CameraCaptureSession.StateCallback() {
+                            override fun onConfigured(s: CameraCaptureSession) {
+                                if (!running) return
+                                runCatching {
+                                    val req = d.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
+                                        addTarget(input)
+                                        set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, Range(fps, fps))
+                                    }.build()
+                                    s.setRepeatingRequest(req, null, handler)
+                                }.onFailure { Log.w(TAG, "camera request failed", it); stop() }
+                            }
 
-                        override fun onConfigureFailed(s: CameraCaptureSession) = stop()
-                    }, handler)
+                            override fun onConfigureFailed(s: CameraCaptureSession) = stop()
+                        }, handler)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "camera session failed", e)
+                        stop()
+                    }
                 }
 
                 override fun onDisconnected(d: CameraDevice) = stop()
@@ -409,7 +442,7 @@ object Streams {
         }
 
         override fun onClosed() {
-            runCatching { device?.close() }
+            synchronized(this) { runCatching { device?.close() }; device = null }
             thread.quitSafely()
         }
     }
@@ -534,12 +567,13 @@ object Streams {
     }
 
     /**
-     * The computer's screen: one H.264 NAL unit per frame (Annex-B, with
-     * start code), several slices per picture. NALs are joined into access
-     * units — what MediaCodec expects per input buffer. The decoder is set up
-     * from the stream's own SPS/PPS (size and csd), hardware first; if it
-     * refuses them or shows nothing, the software decoder takes over. It is
-     * rebuilt when the Surface or the stream's resolution changes.
+     * The computer's screen: one complete picture per frame (Annex B), and a
+     * config frame with SPS + PPS before every keyframe. Each picture goes to
+     * the decoder the moment it arrives, and a render thread shows each
+     * decoded picture at once (Flux-style: nothing is held back for smooth
+     * playback). Hardware decoder first; if it refuses the stream or shows
+     * nothing, the software one takes over. Rebuilt when the Surface or the
+     * stream's parameter sets change.
      */
     private class DesktopDecoder(private val core: Core, private val channel: Long, w: Int, h: Int, private val ended: () -> Unit) : Worker {
         @Volatile
@@ -547,17 +581,17 @@ object Streams {
         @Volatile
         private var rebuild = true
         private var codec: MediaCodec? = null
+        private var renderer: Thread? = null
+        @Volatile
+        private var rendering = false
         private var software = false
         private var sps: ByteArray? = null
         private var pps: ByteArray? = null
         private var size = w to h
         private var waitingKey = true
         private var queuedSinceBuild = 0
-        private var rendered = 0
-        private val au = java.io.ByteArrayOutputStream(512 * 1024)
-        private var auHasVcl = false
-        private var auKey = false
-        private var auPts = 0L
+        private val rendered = java.util.concurrent.atomic.AtomicInteger()
+        private var frames = 0L
 
         init {
             Thread(::run, "konnekta-desktop").start()
@@ -568,6 +602,9 @@ object Streams {
         }
 
         private fun release() {
+            rendering = false
+            renderer?.let { if (it !== Thread.currentThread()) runCatching { it.join(500) } }
+            renderer = null
             codec?.let { runCatching { it.stop() }; it.release() }
             codec = null
         }
@@ -576,11 +613,12 @@ object Streams {
             release()
             waitingKey = true
             queuedSinceBuild = 0
-            rendered = 0
+            rendered.set(0)
             val (fw, fh) = size
             val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, fw, fh).apply {
                 sps?.let { setByteBuffer("csd-0", java.nio.ByteBuffer.wrap(it)) }
                 pps?.let { setByteBuffer("csd-1", java.nio.ByteBuffer.wrap(it)) }
+                setInteger(MediaFormat.KEY_PRIORITY, 0) // real time
                 if (android.os.Build.VERSION.SDK_INT >= 30) setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
             }
             val names = buildList {
@@ -596,6 +634,8 @@ object Streams {
                     c.start()
                     codec = c
                     software = software || n.startsWith("c2.android") || n.startsWith("OMX.google")
+                    rendering = true
+                    renderer = Thread({ renderLoop(c) }, "konnekta-desktop-render").apply { isDaemon = true; start() }
                     Log.i(TAG, "remote desktop decoder $n ${fw}x$fh")
                     return
                 } catch (e: Exception) {
@@ -605,67 +645,96 @@ object Streams {
             }
         }
 
-        private fun render(c: MediaCodec, info: MediaCodec.BufferInfo) {
-            while (true) {
-                val o = c.dequeueOutputBuffer(info, 0)
-                when {
-                    o >= 0 -> {
-                        c.releaseOutputBuffer(o, true)
-                        rendered++
+        /** Shows every decoded picture as soon as it is ready. */
+        private fun renderLoop(c: MediaCodec) {
+            val info = MediaCodec.BufferInfo()
+            try {
+                while (rendering) {
+                    val o = c.dequeueOutputBuffer(info, 10_000)
+                    when {
+                        o >= 0 -> {
+                            c.releaseOutputBuffer(o, true)
+                            rendered.incrementAndGet()
+                        }
+                        o == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> c.outputFormat.let { f ->
+                            val cw = if (f.containsKey("crop-right")) f.getInteger("crop-right") - f.getInteger("crop-left") + 1 else f.getInteger(MediaFormat.KEY_WIDTH)
+                            val ch = if (f.containsKey("crop-bottom")) f.getInteger("crop-bottom") - f.getInteger("crop-top") + 1 else f.getInteger(MediaFormat.KEY_HEIGHT)
+                            desktopSize.value = cw to ch
+                        }
                     }
-                    o == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> c.outputFormat.let { f ->
-                        val cw = if (f.containsKey("crop-right")) f.getInteger("crop-right") - f.getInteger("crop-left") + 1 else f.getInteger(MediaFormat.KEY_WIDTH)
-                        val ch = if (f.containsKey("crop-bottom")) f.getInteger("crop-bottom") - f.getInteger("crop-top") + 1 else f.getInteger(MediaFormat.KEY_HEIGHT)
-                        desktopSize.value = cw to ch
-                    }
-                    else -> return
                 }
+            } catch (e: Exception) {
+                if (rendering) Log.i(TAG, "desktop render stopped: ${e.message}")
             }
         }
 
-        /** Hand the collected access unit to the decoder. */
-        private fun flush(info: MediaCodec.BufferInfo) {
-            if (!auHasVcl) return
-            val c = codec
-            if (c != null && (!waitingKey || auKey)) {
-                try {
-                    val i = c.dequeueInputBuffer(30_000)
-                    if (i >= 0) {
-                        val data = au.toByteArray()
-                        val inBuf = c.getInputBuffer(i)!!
-                        inBuf.clear()
-                        if (data.size <= inBuf.capacity()) {
-                            inBuf.put(data)
-                            c.queueInputBuffer(i, 0, data.size, auPts, 0)
-                            waitingKey = false
-                            queuedSinceBuild++
-                        } else {
-                            c.queueInputBuffer(i, 0, 0, auPts, 0)
-                        }
-                    }
-                    render(c, info)
-                } catch (e: Exception) {
-                    Log.w(TAG, "decoder failed, switching to software", e)
-                    software = true
-                    rebuild = true
+        /** Queue one picture; waits briefly for a free input buffer. */
+        private fun feed(data: ByteArray, n: Int, key: Boolean) {
+            val c = codec ?: return
+            if (waitingKey && !key) return
+            try {
+                var i = -1
+                while (running && !rebuild && i < 0) i = c.dequeueInputBuffer(10_000)
+                if (i < 0) return
+                val inBuf = c.getInputBuffer(i)!!
+                inBuf.clear()
+                if (n > inBuf.capacity()) {
+                    c.queueInputBuffer(i, 0, 0, 0, 0)
+                    waitingKey = true
+                    return
                 }
-                // Hardware decoder that takes frames but never shows one: use software.
-                if (!software && queuedSinceBuild >= 30 && rendered == 0) {
-                    Log.w(TAG, "hardware decoder shows nothing, switching to software")
-                    software = true
-                    rebuild = true
+                inBuf.put(data, 0, n)
+                // The time only orders the pictures: each shows when decoded.
+                c.queueInputBuffer(i, 0, n, frames++ * 33_333, if (key) MediaCodec.BUFFER_FLAG_KEY_FRAME else 0)
+                waitingKey = false
+                queuedSinceBuild++
+            } catch (e: Exception) {
+                Log.w(TAG, "decoder failed, switching to software", e)
+                software = true
+                rebuild = true
+            }
+            // Hardware decoder that takes pictures but never shows one: use software.
+            if (!software && queuedSinceBuild >= 30 && rendered.get() == 0) {
+                Log.w(TAG, "hardware decoder shows nothing, switching to software")
+                software = true
+                rebuild = true
+            }
+        }
+
+        /** SPS and PPS out of a config frame (Annex B, several NAL units). */
+        private fun parameterSets(buf: ByteArray, n: Int) {
+            var i = 0
+            val starts = mutableListOf<Int>()
+            while (i + 3 < n) {
+                if (buf[i].toInt() == 0 && buf[i + 1].toInt() == 0 && buf[i + 2].toInt() == 1) {
+                    starts += i
+                    i += 3
+                } else i++
+            }
+            starts.forEachIndexed { k, s ->
+                // Include a 4-byte start code's leading zero.
+                val from = if (s > 0 && buf[s - 1].toInt() == 0) s - 1 else s
+                val to = (starts.getOrNull(k + 1)?.let { if (buf[it - 1].toInt() == 0) it - 1 else it }) ?: n
+                val nal = buf.copyOfRange(from, to)
+                val hdr = s - from + 3
+                when (nal.getOrNull(hdr)?.toInt()?.and(0x1f)) {
+                    7 -> if (!nal.contentEquals(sps)) {
+                        sps = nal
+                        H264.spsSize(nal, hdr)?.let { size = it }
+                        rebuild = true
+                    }
+                    8 -> if (!nal.contentEquals(pps)) {
+                        pps = nal
+                        rebuild = true
+                    }
                 }
             }
-            au.reset()
-            auHasVcl = false
-            auKey = false
         }
 
         private fun run() {
             val buf = ByteArray(8 * 1024 * 1024)
             val meta = ByteArray(2)
             val pts = LongArray(1)
-            val info = MediaCodec.BufferInfo()
             try {
                 while (running) {
                     val n = core.streamRead(channel, buf, meta, pts, 100)
@@ -674,39 +743,13 @@ object Streams {
                         rebuild = false
                         desktopSurface?.takeIf { it.isValid }?.let(::build) ?: release()
                     }
-                    if (n == 0) {
-                        flush(info)
+                    if (n == 0 || meta[0].toInt() != Frame.VIDEO) continue
+                    val flags = meta[1].toInt()
+                    if (flags and Frame.CONFIG != 0) {
+                        parameterSets(buf, n)
                         continue
                     }
-                    if (meta[0].toInt() != Frame.VIDEO) continue
-                    // Start code is 00 00 01 or 00 00 00 01.
-                    val hdr = if (n > 3 && buf[2].toInt() == 1) 3 else 4
-                    if (n <= hdr) continue
-                    val type = buf[hdr].toInt() and 0x1f
-                    when (type) {
-                        7 -> {
-                            val nal = buf.copyOf(n)
-                            if (!nal.contentEquals(sps)) {
-                                sps = nal
-                                H264.spsSize(nal, hdr)?.let { size = it }
-                                // New resolution (quality change): the decoder starts over.
-                                rebuild = true
-                            }
-                        }
-                        8 -> if (!buf.copyOf(n).contentEquals(pps)) {
-                            pps = buf.copyOf(n)
-                            rebuild = true
-                        }
-                    }
-                    val vcl = type in 1..5
-                    // first_mb_in_slice == 0 (ue(v) "1") marks a new picture.
-                    val firstSlice = vcl && n > hdr + 1 && (buf[hdr + 1].toInt() and 0x80) != 0
-                    if (auHasVcl && (!vcl || firstSlice)) flush(info)
-                    if (au.size() == 0) auPts = pts[0]
-                    au.write(buf, 0, n)
-                    if (vcl) auHasVcl = true
-                    if (type == 5) auKey = true
-                    codec?.let { c -> runCatching { render(c, info) } }
+                    feed(buf, n, flags and Frame.KEYFRAME != 0)
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "remote desktop stopped", e)

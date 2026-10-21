@@ -233,15 +233,20 @@ async fn permissions_stay_the_same_on_both_devices() {
     let (a, b) = paired_pair().await;
     let (aid, bid) = (a.k.device_id().to_string(), b.k.device_id().to_string());
     let has = |k: &Konnekta, id: &str, p: Permission| {
-        k.device(id).map(|d| d.permissions.contains(&p)).unwrap_or(false)
+        k.device(id)
+            .map(|d| d.permissions.contains(&p))
+            .unwrap_or(false)
     };
     // Granted on the phone: the computer follows, and the command runs.
-    b.k.set_permission(&aid, Permission::Commands, true).unwrap();
+    b.k.set_permission(&aid, Permission::Commands, true)
+        .unwrap();
     eventually(|| has(&a.k, &bid, Permission::Commands)).await;
     // Revoked on the computer: the phone follows.
-    a.k.set_permission(&bid, Permission::Commands, false).unwrap();
+    a.k.set_permission(&bid, Permission::Commands, false)
+        .unwrap();
     eventually(|| !has(&b.k, &aid, Permission::Commands)).await;
-    a.k.set_permission(&bid, Permission::RemoteInput, true).unwrap();
+    a.k.set_permission(&bid, Permission::RemoteInput, true)
+        .unwrap();
     eventually(|| has(&b.k, &aid, Permission::RemoteInput)).await;
 
     // With sync off on the computer, its permissions are its own.
@@ -249,6 +254,60 @@ async fn permissions_stay_the_same_on_both_devices() {
     b.k.set_permission(&aid, Permission::Camera, true).unwrap();
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert!(!has(&a.k, &bid, Permission::Camera));
+}
+
+#[tokio::test]
+async fn reinstalled_phone_replaces_its_old_entry() {
+    let (mut a, b) = paired_pair().await;
+    let (aid, old_id) = (a.k.device_id().to_string(), b.k.device_id().to_string());
+    a.k.set_permission(&old_id, Permission::RemoteInput, true)
+        .unwrap();
+    // The app is reinstalled: the old identity goes offline for good.
+    b.k.shutdown();
+    drop(b);
+    wait(
+        &mut a.ev,
+        |e| matches!(e, Event::DeviceDisconnected { device_id } if *device_id == old_id),
+    )
+    .await;
+
+    // Same name, new identity, paired again with the key.
+    let mut c = node("Phone").await;
+    let new_id = c.k.device_id().to_string();
+    c.k.announce_to(SocketAddr::new(LO, a.k.udp_port()), Protocol::Konnekta)
+        .await
+        .unwrap();
+    wait(
+        &mut a.ev,
+        |e| matches!(e, Event::DeviceConnected { device } if device.id == new_id),
+    )
+    .await;
+    let key = a.k.request_pair(&new_id).await.unwrap();
+    wait(&mut c.ev, |e| matches!(e, Event::PairRequested { .. })).await;
+    c.k.accept_pair(&aid, Some(&key)).await.unwrap();
+    wait(&mut a.ev, |e| matches!(e, Event::PairConfirm { .. })).await;
+    a.k.accept_pair(&new_id, Some(&key)).await.unwrap();
+    wait(&mut a.ev, |e| matches!(e, Event::Paired { .. })).await;
+
+    let paired: Vec<String> =
+        a.k.devices()
+            .into_iter()
+            .filter(|d| d.paired)
+            .map(|d| d.id)
+            .collect();
+    assert_eq!(paired, vec![new_id.clone()], "one entry for the phone");
+    assert!(
+        a.k.device(&new_id)
+            .unwrap()
+            .permissions
+            .contains(&Permission::RemoteInput)
+    );
+    // The phone learns the kept permissions through the sync.
+    eventually(|| {
+        c.k.device(&aid)
+            .is_some_and(|d| d.permissions.contains(&Permission::RemoteInput))
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -281,10 +340,11 @@ async fn phone_drives_the_computer_mixer() {
     // The phone gets the state back after the change.
     let mut got = None;
     for _ in 0..300 {
-        got = b.k.plugin_action(Some(&aid), "mixer", "remoteState", json!(null))
-            .await
-            .ok()
-            .filter(|v| !v.is_null());
+        got =
+            b.k.plugin_action(Some(&aid), "mixer", "remoteState", json!(null))
+                .await
+                .ok()
+                .filter(|v| !v.is_null());
         if got.is_some() {
             break;
         }
@@ -513,7 +573,9 @@ async fn phone_browses_computer_read_only() {
         phone.device_id().to_string(),
     );
     // With permission sync off the computer decides alone.
-    desk.k.update_config(|c| c.sync_permissions = false).unwrap();
+    desk.k
+        .update_config(|c| c.sync_permissions = false)
+        .unwrap();
     phone
         .set_permission(&did, Permission::BrowseFiles, true)
         .unwrap();

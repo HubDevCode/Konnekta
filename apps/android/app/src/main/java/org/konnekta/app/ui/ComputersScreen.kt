@@ -21,6 +21,8 @@ import androidx.compose.material.icons.filled.LinkOff
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -86,11 +88,12 @@ fun ComputersScreen(devices: List<JSONObject>, open: (Route) -> Unit) {
             Row(Modifier.padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Filled.PhoneAndroid, null, tint = MaterialTheme.colorScheme.primary)
                 Spacer(Modifier.width(12.dp))
-                Column {
+                Column(Modifier.weight(1f)) {
                     Text(me?.optString("deviceName") ?: "Questo telefono", style = MaterialTheme.typography.titleMedium)
                     Text("Visibile ai computer su questa rete", style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
+                IconButton(onClick = { open(Route.Settings) }) { Icon(Icons.Filled.Settings, "Impostazioni") }
             }
         }
         item { SectionTitle("Associati") }
@@ -133,10 +136,12 @@ fun ComputersScreen(devices: List<JSONObject>, open: (Route) -> Unit) {
                 Text("Cerca di nuovo")
             }
         }
-        item { SectionTitle("Impostazioni") }
-        item { LayoutSetting() }
-        item { NotificationsSetting() }
-        item { PhoneFeatures() }
+        item { SectionTitle("App") }
+        item {
+            ActionCard(Icons.Filled.Settings, "Impostazioni", "Aspetto, barre con il telefono girato, funzioni, touchpad, accessi del telefono") {
+                open(Route.Settings)
+            }
+        }
         item {
             ActionCard(Icons.Filled.Info, "Informazioni", me?.let { "Konnekta ${it.optString("version", "0.1")} · ${it.optString("deviceId").take(8)}" } ?: "Konnekta") {}
         }
@@ -185,18 +190,6 @@ fun AvailableCard(d: JSONObject, onClick: () -> Unit) {
             }
         }
     }
-}
-
-/** Features one per line, or two per row. */
-@Composable
-private fun LayoutSetting() {
-    val ctx = LocalContext.current
-    val grid by Store.grid.collectAsState()
-    ActionCard(
-        Icons.Filled.GridView, "Funzioni in griglia",
-        if (grid) "Due per riga, più compatte" else "Una per riga, con la descrizione completa",
-        trailing = { Switch(grid, { Store.setGrid(ctx, it) }) },
-    ) { Store.setGrid(ctx, !grid) }
 }
 
 @Composable
@@ -284,17 +277,26 @@ fun DevicePermissionList(id: String) {
     Column {
         perms.forEach { p ->
             val pid = p.optString("id")
-            Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(PERMISSION_LABELS[pid] ?: p.optString("label"))
-                    if (p.optBoolean("sensitive")) Text("sensibile", style = MaterialTheme.typography.bodySmall, color = LocalStatus.current.warn)
-                }
-                Switch(checked = pid in granted, onCheckedChange = { on ->
-                    scope.launch {
-                        core(ui.toast) { it.call("setPermission", JSONObject().put("deviceId", id).put("permission", pid).put("granted", on)) }
-                        core(ui.toast) { it.callArray("devices") }?.let { Store.devices.value = it.objects() }
+            val on = pid in granted
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                border = BorderStroke(1.dp, LocalStatus.current.border),
+                modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+            ) {
+                Row(Modifier.padding(horizontal = 14.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(PERMISSION_LABELS[pid] ?: p.optString("label"), style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.onSurface)
+                        if (p.optBoolean("sensitive")) Text("sensibile", style = MaterialTheme.typography.bodySmall, color = LocalStatus.current.warn)
                     }
-                })
+                    Switch(checked = on, onCheckedChange = { v ->
+                        scope.launch {
+                            core(ui.toast) { it.call("setPermission", JSONObject().put("deviceId", id).put("permission", pid).put("granted", v)) }
+                            core(ui.toast) { it.callArray("devices") }?.let { Store.devices.value = it.objects() }
+                        }
+                    })
+                }
             }
         }
     }
@@ -324,7 +326,7 @@ fun DeviceScreen(id: String, onBack: () -> Unit) {
         }
         item {
             SectionTitle("Cosa può fare con questo telefono")
-            Hint("Le funzioni sensibili restano spente finché non le attivi.")
+            Hint("Le funzioni sensibili restano spente finché non le attivi. Le modifiche valgono anche sul computer.")
         }
         item { DevicePermissionList(id) }
         item {

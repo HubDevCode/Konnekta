@@ -145,6 +145,143 @@ impl InputPlugin {
     }
 }
 
+/// What a three-finger swipe does on this desktop.
+#[derive(Debug, PartialEq)]
+enum SwipeAction {
+    /// A compositor command.
+    Run(&'static str, Vec<&'static str>),
+    Keys(Key, Modifiers),
+    Nothing,
+}
+
+/// Fingers moving left reveal the workspace on the right (next), as on a
+/// laptop touchpad; up opens the overview where the desktop has one.
+fn swipe_action(dir: &str, desktop: &str) -> SwipeAction {
+    let next = match dir {
+        "left" => Some(true),
+        "right" => Some(false),
+        _ => None,
+    };
+    let meta = Modifiers {
+        meta: true,
+        ..Default::default()
+    };
+    let ctrl_meta = Modifiers {
+        ctrl: true,
+        meta: true,
+        ..Default::default()
+    };
+    let special = |k| Key::Special(k);
+    match (desktop, next) {
+        ("hyprland", Some(n)) => SwipeAction::Run(
+            "hyprctl",
+            vec!["dispatch", "workspace", if n { "e+1" } else { "e-1" }],
+        ),
+        ("sway", Some(n)) => SwipeAction::Run(
+            "swaymsg",
+            vec![
+                "workspace",
+                if n {
+                    "next_on_output"
+                } else {
+                    "prev_on_output"
+                },
+            ],
+        ),
+        ("gnome", Some(n)) => SwipeAction::Keys(
+            special(if n {
+                SpecialKey::PageDown
+            } else {
+                SpecialKey::PageUp
+            }),
+            meta,
+        ),
+        ("kde" | "windows", Some(n)) => SwipeAction::Keys(
+            special(if n {
+                SpecialKey::Right
+            } else {
+                SpecialKey::Left
+            }),
+            ctrl_meta,
+        ),
+        ("macos", Some(n)) => SwipeAction::Keys(
+            special(if n {
+                SpecialKey::Right
+            } else {
+                SpecialKey::Left
+            }),
+            Modifiers {
+                ctrl: true,
+                ..Default::default()
+            },
+        ),
+        ("gnome", None) if dir == "up" => {
+            SwipeAction::Keys(special(SpecialKey::Super), Modifiers::default())
+        }
+        ("kde", None) if dir == "up" => SwipeAction::Keys(Key::Char('w'), meta),
+        ("windows", None) => SwipeAction::Keys(
+            if dir == "up" {
+                special(SpecialKey::Tab)
+            } else {
+                Key::Char('d')
+            },
+            meta,
+        ),
+        ("macos", None) => SwipeAction::Keys(
+            special(if dir == "up" {
+                SpecialKey::Up
+            } else {
+                SpecialKey::Down
+            }),
+            Modifiers {
+                ctrl: true,
+                ..Default::default()
+            },
+        ),
+        _ => SwipeAction::Nothing,
+    }
+}
+
+fn desktop_kind() -> &'static str {
+    if cfg!(windows) {
+        return "windows";
+    }
+    if cfg!(target_os = "macos") {
+        return "macos";
+    }
+    if crate::hyprland::running() {
+        return "hyprland";
+    }
+    if std::env::var_os("SWAYSOCK").is_some() {
+        return "sway";
+    }
+    let d = std::env::var("XDG_CURRENT_DESKTOP")
+        .unwrap_or_default()
+        .to_uppercase();
+    if d.contains("GNOME") {
+        "gnome"
+    } else if d.contains("KDE") {
+        "kde"
+    } else {
+        "other"
+    }
+}
+
+impl InputPlugin {
+    async fn swipe(&self, dir: &str) -> Result<()> {
+        match swipe_action(dir, desktop_kind()) {
+            SwipeAction::Run("hyprctl", args) => crate::hyprland::hyprctl(&args).await.map(drop),
+            SwipeAction::Run(prog, args) => {
+                konnekta_platform::cmd::output(prog, &args).await.map(drop)
+            }
+            SwipeAction::Keys(key, modifiers) => {
+                self.platform.input.send(InputEvent::Key { key, modifiers })
+            }
+            SwipeAction::Nothing => Ok(()),
+        }
+    }
+}
+
 #[async_trait]
 impl Plugin for InputPlugin {
     fn info(&self) -> PluginInfo {
@@ -169,6 +306,9 @@ impl Plugin for InputPlugin {
         for ev in self.events(&body) {
             self.platform.input.send(ev)?;
         }
+        if let Some(dir) = body.swipe.as_deref() {
+            self.swipe(dir).await?;
+        }
         if body.send_ack {
             let mut echo = p.body.clone();
             echo.insert("isAck".into(), Value::Bool(true));
@@ -186,6 +326,26 @@ mod tests {
 
     fn plugin() -> InputPlugin {
         InputPlugin::new(MockPlatform::new().platform())
+    }
+
+    #[test]
+    fn three_finger_swipes() {
+        assert_eq!(
+            swipe_action("left", "hyprland"),
+            SwipeAction::Run("hyprctl", vec!["dispatch", "workspace", "e+1"])
+        );
+        assert_eq!(
+            swipe_action("right", "hyprland"),
+            SwipeAction::Run("hyprctl", vec!["dispatch", "workspace", "e-1"])
+        );
+        assert_eq!(swipe_action("up", "hyprland"), SwipeAction::Nothing);
+        assert!(
+            matches!(swipe_action("left", "gnome"), SwipeAction::Keys(Key::Special(SpecialKey::PageDown), m) if m.meta)
+        );
+        assert!(
+            matches!(swipe_action("right", "kde"), SwipeAction::Keys(Key::Special(SpecialKey::Left), m) if m.ctrl && m.meta)
+        );
+        assert_eq!(swipe_action("sideways", "kde"), SwipeAction::Nothing);
     }
 
     #[test]

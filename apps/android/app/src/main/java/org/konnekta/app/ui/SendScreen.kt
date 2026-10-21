@@ -78,7 +78,7 @@ fun SendScreen(current: JSONObject?, open: (Route) -> Unit) {
                 style = MaterialTheme.typography.bodyMedium,
             )
         }
-        FnList(listOf(
+        FnSections("send", listOf(FnSection("quick", null, listOf(
             Fn(Icons.Filled.ContentPasteGo, "Invia appunti", "Incollali sul computer", enabled = online, highlight = online) {
                 val text = ui.clipboard()
                 if (text.isNullOrEmpty()) ui.toast("Gli appunti sono vuoti")
@@ -89,13 +89,13 @@ fun SendScreen(current: JSONObject?, open: (Route) -> Unit) {
             Fn(Icons.Filled.NotificationsActive, "Ping", "Fai comparire un avviso sul computer", enabled = online) {
                 scope.launch { send(ui.toast, id!!, Types.PING, JSONObject().put("message", "Ping dal telefono")) }
             },
-        ))
-        SectionTitle("File")
-        FnList(listOf(
+        )),
+        FnSection("files", "File", listOf(
             Fn(Icons.Filled.UploadFile, "Invia file", "Scegli dei file su questo telefono", enabled = online) { pick.launch(arrayOf("*/*")) },
             Fn(Icons.Filled.FolderOpen, "Prendi file", "Sfoglia le cartelle condivise del computer",
                 enabled = online && current?.supports(Types.BROWSE_REQUEST) == true) { open(Route.Browse) },
-        ))
+        ))))
+        CustomizeButton("send")
         Hint("Per inviare testo, link o foto da un'altra app, sceglili e tocca Condividi › Konnekta.")
         Received()
     }

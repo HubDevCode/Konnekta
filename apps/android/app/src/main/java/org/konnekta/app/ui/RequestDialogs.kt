@@ -2,6 +2,21 @@ package org.konnekta.app.ui
 
 import android.content.Intent
 import androidx.compose.material3.AlertDialog
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.unit.dp
 import androidx.compose.material3.Button
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -103,4 +118,70 @@ fun RequestDialogs() {
             },
         )
     }
+}
+
+private val STREAM_LABELS = mapOf(
+    "microphone" to "il microfono del telefono",
+    "camera" to "la webcam del telefono",
+    "phonescreen" to "lo schermo del telefono",
+    "phoneaudio" to "l'audio del telefono",
+    "desktop" to "il desktop remoto",
+    "systemaudio" to "l'audio del computer",
+)
+
+private val MISSING_LABELS = mapOf(
+    "v4l2loopback" to "v4l2loopback (modulo per la webcam virtuale)",
+    "ffmpeg" to "ffmpeg (codifica video)",
+    "ffplay" to "ffplay (finestra video, parte di ffmpeg)",
+    "pactl" to "pactl (audio PipeWire / PulseAudio)",
+    "pacat" to "pacat (riproduzione audio)",
+    "parec" to "parec (registrazione audio)",
+    "wf-recorder" to "wf-recorder (cattura dello schermo)",
+    "playerctl" to "playerctl (controllo dei lettori)",
+)
+
+/**
+ * The computer refused a stream because a program or module is missing
+ * there: what, and the commands to run on the computer. Closing it starts
+ * nothing; the next attempt asks again until the computer is ready.
+ */
+@Composable
+fun StreamProblemDialog() {
+    val ui = LocalUi.current
+    val ctx = LocalContext.current
+    val p by Streams.problem.collectAsState()
+    val problem = p ?: return
+    val close = { Streams.problem.value = null }
+    AlertDialog(
+        onDismissRequest = close,
+        title = {
+            androidx.compose.foundation.layout.Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                Text("Manca qualcosa sul computer", Modifier.weight(1f))
+                IconButton(onClick = close) { Icon(Icons.Filled.Close, "Chiudi") }
+            }
+        },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Per usare ${STREAM_LABELS[problem.plugin] ?: problem.plugin}, su ${problem.deviceName} manca:")
+                problem.missing.forEach { Text("• ${MISSING_LABELS[it] ?: it}") }
+                if (problem.fix.isNotEmpty()) {
+                    Text("Esegui questi comandi nel terminale del computer:", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Surface(shape = RoundedCornerShape(10.dp), color = MaterialTheme.colorScheme.surfaceContainerHighest) {
+                        Text(problem.fix.joinToString("\n"), Modifier.padding(10.dp),
+                            style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace))
+                    }
+                }
+                Text("Li trovi anche in Konnekta sul computer › Configurazione. Poi riprova.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        },
+        confirmButton = {
+            if (problem.fix.isNotEmpty()) TextButton(onClick = {
+                ctx.getSystemService(android.content.ClipboardManager::class.java)
+                    ?.setPrimaryClip(android.content.ClipData.newPlainText("Konnekta", problem.fix.joinToString("\n")))
+                ui.toast("Comandi copiati")
+            }) { Text("Copia comandi") }
+        },
+        dismissButton = { TextButton(onClick = close) { Text("Chiudi") } },
+    )
 }

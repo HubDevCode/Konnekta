@@ -81,7 +81,15 @@ val LocalStatus = staticCompositionLocalOf { LightStatus }
 @Composable
 fun KonnektaTheme(content: @Composable () -> Unit) {
     val dark = isSystemInDarkTheme()
+    val scheme = if (dark) Dark else Light
     androidx.compose.runtime.CompositionLocalProvider(LocalStatus provides if (dark) DarkStatus else LightStatus) {
-        MaterialTheme(colorScheme = if (dark) Dark else Light, content = content)
+        MaterialTheme(colorScheme = scheme) {
+            // Text outside a Surface/Scaffold (onboarding, feature screens,
+            // lists) takes the theme's colour instead of Compose's black.
+            androidx.compose.runtime.CompositionLocalProvider(
+                androidx.compose.material3.LocalContentColor provides scheme.onBackground,
+                content = content,
+            )
+        }
     }
 }

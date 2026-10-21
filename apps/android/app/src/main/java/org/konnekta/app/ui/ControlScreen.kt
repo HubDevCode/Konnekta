@@ -125,6 +125,7 @@ import org.konnekta.app.KonnektaApp
 import org.konnekta.app.core.Types
 import org.konnekta.app.service.Streams
 import org.konnekta.app.state.Store
+import org.konnekta.app.state.Settings
 import org.konnekta.app.state.supports
 import kotlin.math.abs
 
@@ -156,8 +157,7 @@ fun ControlScreen(current: JSONObject?, open: (Route) -> Unit) {
             Fn(icon, title, if (on(plugin)) "Dal vivo · tocca per fermare" else subtitle, enabled || on(plugin), on(plugin), trailing, onClick)
         if (!online) Hint("$name non è raggiungibile: i comandi si attivano quando si collega.")
 
-        SectionTitle("Al computer")
-        FnList(listOf(
+        FnSections("control", listOf(FnSection("toPc", "Al computer", listOf(
             stream(Icons.Filled.Mic, "Microfono", "Il telefono diventa il microfono di $name", "microphone", can(Types.MICROPHONE)) {
                 toggle("microphone")
             },
@@ -187,28 +187,23 @@ fun ControlScreen(current: JSONObject?, open: (Route) -> Unit) {
                 if (on("phoneaudio") && !on("phonescreen")) "Dal vivo · tocca per fermare" else "Musica, video e giochi del telefono dalle casse di $name",
                 enabled = can(Types.PHONE_AUDIO) && android.os.Build.VERSION.SDK_INT >= 29,
                 highlight = on("phoneaudio") && !on("phonescreen")) { toggle("phoneaudio") },
-        ))
-
-        SectionTitle("Dal computer")
-        FnList(listOf(
+        )),
+        FnSection("fromPc", "Dal computer", listOf(
             Fn(Icons.Filled.DesktopWindows, "Desktop remoto", "Vedi e controlla lo schermo del computer", can(Types.DESKTOP)) { open(Route.Desktop) },
             stream(Icons.Filled.Speaker, "Audio del computer", "Ascolta sul telefono l'audio di $name", "systemaudio", can(Types.SYSTEM_AUDIO)) {
                 if (on("systemaudio")) Thread { Streams.stop(id, "systemaudio") }.start() else Streams.request(id, "systemaudio")
             },
-        ))
-
-        SectionTitle("Comandi")
-        FnList(listOf(
+        )),
+        FnSection("commands", "Comandi", listOf(
             Fn(Icons.Filled.MusicNote, "Media e audio", "Riproduzione, volume, uscite e ingressi audio", can(Types.MEDIA_REQUEST)) { open(Route.Media) },
             Fn(Icons.Filled.TouchApp, "Touchpad e tastiera", "Muovi il puntatore e scrivi sul computer", can(Types.INPUT)) { open(Route.Touchpad) },
             Fn(Icons.Filled.Slideshow, "Presentazione", "Avanti e indietro (anche con i tasti del volume), puntatore laser", can(Types.PRESENTER)) { open(Route.Presenter) },
-        ))
-
-        SectionTitle("Automazioni")
-        FnList(listOf(
+        )),
+        FnSection("automations", "Automazioni", listOf(
             Fn(Icons.Filled.Dashboard, "Mobile Deck", "I pulsanti configurati sul computer", can(Types.DECK_REQUEST)) { open(Route.Deck) },
             Fn(Icons.Filled.Terminal, "Comandi personalizzati", "Avvia i comandi configurati sul computer", can(Types.COMMANDS_REQUEST)) { open(Route.Commands) },
-        ))
+        ))))
+        CustomizeButton("control")
         Hint("Le voci spente si attivano concedendo il permesso, qui (Computer › Permessi) o sul computer: le due app restano allineate.")
     }
 }
@@ -233,7 +228,17 @@ fun MediaScreen(current: JSONObject?, onBack: () -> Unit) {
     val mix = mixer[id]
 
     SubHeader("Media", current.optString("name"), onBack)
-    Column(Modifier.verticalScroll(rememberScrollState())) {
+    var section by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(0) }
+    androidx.compose.material3.PrimaryTabRow(selectedTabIndex = section, containerColor = MaterialTheme.colorScheme.background) {
+        listOf("Riproduzione", "Mixer").forEachIndexed { i, label ->
+            androidx.compose.material3.Tab(selected = section == i, onClick = { section = i }, text = { Text(label) })
+        }
+    }
+    Column(Modifier.verticalScroll(rememberScrollState()).padding(top = 8.dp)) {
+    if (section == 1) {
+        MixerSection(id, mix)
+        return@Column
+    }
     if (list.size > 1) {
         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 8.dp)) {
             items(list) { p ->
@@ -274,8 +279,7 @@ fun MediaScreen(current: JSONObject?, onBack: () -> Unit) {
         }
         BigButton(Icons.Filled.SkipNext, Modifier.weight(1f)) { req(JSONObject().put("action", "Next")) }
     }
-    // The mixer shows the default output too: one volume control is enough.
-    if (m.has("volume") && mix == null) {
+    if (m.has("volume")) {
         var vol by remember(m.optInt("volume")) { mutableFloatStateOf(m.optInt("volume").toFloat()) }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.AutoMirrored.Filled.VolumeDown, null)
@@ -283,8 +287,8 @@ fun MediaScreen(current: JSONObject?, onBack: () -> Unit) {
                 onValueChangeFinished = { req(JSONObject().put("setVolume", vol.toInt())) })
             Icon(Icons.AutoMirrored.Filled.VolumeUp, null)
         }
+        Hint("Volume di ogni app, uscite e ingressi nella sezione Mixer.")
     }
-    MixerSection(id, mix)
     }
 }
 
@@ -475,10 +479,10 @@ fun ColumnScope.TouchpadScreen(current: JSONObject?, onBack: () -> Unit) {
             shape = RoundedCornerShape(16.dp),
             color = MaterialTheme.colorScheme.surfaceContainerLow,
             border = BorderStroke(1.dp, LocalStatus.current.border),
-            modifier = m.pointerInput(id) { touchpad(sensitivity, ::emit) },
+            modifier = m.pointerInput(id) { touchpad(sensitivity, { Settings.scrollSpeed.value }, ::emit) },
         ) {
             Box(contentAlignment = Alignment.Center) {
-                Text("1 dito muove · tocco = clic\n2 dita scorrono · tocco con 2 dita = tasto destro\ntieni premuto per trascinare",
+                Text("1 dito muove · tocco = clic\n2 dita scorrono · tocco con 2 dita = tasto destro\n3 dita a destra/sinistra cambiano workspace\ntieni premuto per trascinare",
                     textAlign = TextAlign.Center, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
@@ -602,10 +606,13 @@ private fun KeyCap(label: String, modifier: Modifier, on: Boolean = false, onLon
 
 /**
  * Touchpad gestures: one finger moves (tap = click, double tap = double
- * click, hold still = drag), two fingers scroll (tap = right click).
+ * click, hold still = drag), two fingers scroll (tap = right click; speed
+ * from the settings), three fingers swipe to switch workspace (up/down:
+ * overview where the desktop has one).
  */
-private suspend fun androidx.compose.ui.input.pointer.PointerInputScope.touchpad(sens: Float, emit: (JSONObject) -> Unit) {
+suspend fun androidx.compose.ui.input.pointer.PointerInputScope.touchpad(sens: Float, scrollSpeed: () -> Float, emit: (JSONObject) -> Unit) {
     var lastTapUp = 0L
+    val swipeMin = 60.dp.toPx()
     awaitEachGesture {
         val down = awaitFirstDown()
         val start = down.uptimeMillis
@@ -614,6 +621,8 @@ private suspend fun androidx.compose.ui.input.pointer.PointerInputScope.touchpad
         var dragging = false
         var pendX = 0f
         var pendY = 0f
+        var swipeX = 0f
+        var swipeY = 0f
         while (true) {
             val ev = awaitPointerEvent()
             val pressed = ev.changes.filter { it.pressed }
@@ -628,22 +637,38 @@ private suspend fun androidx.compose.ui.input.pointer.PointerInputScope.touchpad
                 val dx = c.position.x - c.previousPosition.x
                 val dy = c.position.y - c.previousPosition.y
                 moved += abs(dx) + abs(dy)
+                ev.changes.forEach { it.consume() }
+                if (maxPointers >= 3) {
+                    // Three fingers: one gesture at the end, no pointer motion.
+                    swipeX += dx
+                    swipeY += dy
+                    continue
+                }
                 pendX += dx
                 pendY += dy
                 // Coalesce tiny moves: fewer packets, same path.
                 if (abs(pendX) + abs(pendY) >= 2f) {
                     // Raw distance: the computer turns it into wheel steps and keeps the remainder.
-                    if (pressed.size >= 2) emit(JSONObject().put("dx", pendX).put("dy", pendY).put("scroll", true))
-                    else emit(JSONObject().put("dx", pendX * sens).put("dy", pendY * sens))
+                    if (pressed.size >= 2) {
+                        val k = scrollSpeed()
+                        emit(JSONObject().put("dx", pendX * k).put("dy", pendY * k).put("scroll", true))
+                    } else emit(JSONObject().put("dx", pendX * sens).put("dy", pendY * sens))
                     pendX = 0f
                     pendY = 0f
                 }
-                ev.changes.forEach { it.consume() }
             }
         }
         val now = System.currentTimeMillis()
         when {
             dragging -> emit(JSONObject().put("singlerelease", true))
+            maxPointers >= 3 -> {
+                val dir = when {
+                    abs(swipeX) >= abs(swipeY) && abs(swipeX) > swipeMin -> if (swipeX < 0) "left" else "right"
+                    abs(swipeY) > swipeMin -> if (swipeY < 0) "up" else "down"
+                    else -> null
+                }
+                dir?.let { emit(JSONObject().put("konnektaSwipe", it)) }
+            }
             moved < 12f && maxPointers >= 2 -> emit(JSONObject().put("rightclick", true))
             moved < 12f -> {
                 if (now - lastTapUp < 300) emit(JSONObject().put("doubleclick", true)) else emit(JSONObject().put("singleclick", true))
@@ -658,23 +683,20 @@ private suspend fun androidx.compose.ui.input.pointer.PointerInputScope.touchpad
 @Composable
 fun ColumnScope.PresenterScreen(current: JSONObject?, onBack: () -> Unit) {
     val ui = LocalUi.current
+    val ctx = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
     val id = current?.optString("id") ?: return onBack()
+    val name = current.optString("name")
     fun cmd(c: String) = scope.launch { send(ui.toast, id, Types.PRESENTER, JSONObject().put("konnektaKey", c)) }
+    val anywhere by Settings.presenterAnywhere.collectAsState()
+    val remote by org.konnekta.app.service.PresenterRemote.active.collectAsState()
     androidx.compose.runtime.DisposableEffect(id) {
         PresenterKeys.deviceId = id
         onDispose { if (PresenterKeys.deviceId == id) PresenterKeys.deviceId = null }
     }
-    SubHeader("Presentazione", current.optString("name"), onBack)
-    Hint("Puoi cambiare slide anche con i tasti del volume: su = avanti, giù = indietro.")
-    Row(Modifier.fillMaxWidth().height(220.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        BigTile(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Indietro", Modifier.weight(1f).fillMaxSize()) { cmd("previous") }
-        BigTile(Icons.AutoMirrored.Filled.KeyboardArrowRight, "Avanti", Modifier.weight(1f).fillMaxSize(), primary = true) { cmd("next") }
-    }
-    Row(Modifier.fillMaxWidth().height(90.dp).padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        BigTile(Icons.Filled.PlayArrow, "Avvia", Modifier.weight(1f).fillMaxSize()) { cmd("start") }
-        BigTile(Icons.Filled.Stop, "Esci", Modifier.weight(1f).fillMaxSize()) { cmd("stop") }
-        BigTile(Icons.Filled.DarkMode, "Nero", Modifier.weight(1f).fillMaxSize()) { cmd("black") }
+    // "Volume keys everywhere": the keys keep working after leaving the app.
+    LaunchedEffect(id, anywhere) {
+        if (anywhere && remote != id) org.konnekta.app.service.PresenterRemote.start(ctx, id, name)
     }
     val laser = LocalStatus.current.danger
     val queue = remember { Channel<JSONObject>(Channel.UNLIMITED) }
@@ -683,22 +705,71 @@ fun ColumnScope.PresenterScreen(current: JSONObject?, onBack: () -> Unit) {
             for (b in queue) runCatching { KonnektaApp.core?.sendPacket(id, Types.PRESENTER, b) }
         }
     }
-    Surface(
-        shape = RoundedCornerShape(16.dp),
-        color = laser.copy(alpha = .10f),
-        border = BorderStroke(1.dp, laser.copy(alpha = .4f)),
-        modifier = Modifier.fillMaxWidth().weight(1f).padding(vertical = 12.dp).pointerInput(id) {
-            detectDragGestures(
-                onDragEnd = { queue.trySend(JSONObject().put("stop", true)) },
-                onDragCancel = { queue.trySend(JSONObject().put("stop", true)) },
-            ) { change, d ->
-                change.consume()
-                queue.trySend(JSONObject().put("dx", d.x / 1000).put("dy", d.y / 1000))
+    val laserPad: @Composable (Modifier) -> Unit = { m ->
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = laser.copy(alpha = .10f),
+            border = BorderStroke(1.dp, laser.copy(alpha = .4f)),
+            modifier = m.pointerInput(id) {
+                detectDragGestures(
+                    onDragEnd = { queue.trySend(JSONObject().put("stop", true)) },
+                    onDragCancel = { queue.trySend(JSONObject().put("stop", true)) },
+                ) { change, d ->
+                    change.consume()
+                    queue.trySend(JSONObject().put("dx", d.x / 1000).put("dy", d.y / 1000))
+                }
+            },
+        ) {
+            Box(contentAlignment = Alignment.Center) { Text("Trascina qui per il puntatore laser", color = laser) }
+        }
+    }
+    val hint = when {
+        remote == id -> "Tasti del volume attivi anche a schermo spento: su = avanti, giù = indietro."
+        else -> "Puoi cambiare slide anche con i tasti del volume: su = avanti, giù = indietro."
+    }
+    val stopRemote: @Composable () -> Unit = {
+        if (remote == id) TextButton(onClick = { org.konnekta.app.service.PresenterRemote.stop(ctx) }) { Text("Ferma i tasti del volume") }
+    }
+    val small: @Composable (Modifier) -> Unit = { m ->
+        Row(m, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            BigTile(Icons.Filled.PlayArrow, "Avvia", Modifier.weight(1f).fillMaxSize()) { cmd("start") }
+            BigTile(Icons.Filled.Stop, "Esci", Modifier.weight(1f).fillMaxSize()) { cmd("stop") }
+            BigTile(Icons.Filled.DarkMode, "Nero", Modifier.weight(1f).fillMaxSize()) { cmd("black") }
+        }
+    }
+
+    androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth().weight(1f)) {
+        if (maxWidth > maxHeight) {
+            // Landscape: big previous / next on the left, the rest on the right.
+            Row(Modifier.fillMaxSize().padding(vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Column(Modifier.weight(1.2f).fillMaxSize()) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        BackButton(onBack)
+                        Text("Presentazione · $name", style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        BigTile(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Indietro", Modifier.weight(1f).fillMaxSize()) { cmd("previous") }
+                        BigTile(Icons.AutoMirrored.Filled.KeyboardArrowRight, "Avanti", Modifier.weight(1f).fillMaxSize(), primary = true) { cmd("next") }
+                    }
+                }
+                Column(Modifier.weight(1f).fillMaxSize()) {
+                    small(Modifier.fillMaxWidth().height(76.dp))
+                    laserPad(Modifier.fillMaxWidth().weight(1f).padding(top = 10.dp))
+                    stopRemote()
+                }
             }
-        },
-    ) {
-        Box(contentAlignment = Alignment.Center) {
-            Text("Trascina qui per il puntatore laser", color = laser)
+        } else {
+            Column(Modifier.fillMaxSize()) {
+                SubHeader("Presentazione", name, onBack)
+                Hint(hint)
+                stopRemote()
+                Row(Modifier.fillMaxWidth().height(220.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    BigTile(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Indietro", Modifier.weight(1f).fillMaxSize()) { cmd("previous") }
+                    BigTile(Icons.AutoMirrored.Filled.KeyboardArrowRight, "Avanti", Modifier.weight(1f).fillMaxSize(), primary = true) { cmd("next") }
+                }
+                small(Modifier.fillMaxWidth().height(90.dp).padding(top = 10.dp))
+                laserPad(Modifier.fillMaxWidth().weight(1f).padding(vertical = 12.dp))
+            }
         }
     }
 }

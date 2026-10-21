@@ -152,7 +152,12 @@ fn main() {
                 api.prevent_close();
             }
         })
-        .invoke_handler(tauri::generate_handler![api, setup_check, pick_files, pick_folder])
+        .invoke_handler(tauri::generate_handler![
+            api,
+            setup_check,
+            pick_files,
+            pick_folder
+        ])
         .run(tauri::generate_context!())
         .expect("error while running Konnekta");
 }

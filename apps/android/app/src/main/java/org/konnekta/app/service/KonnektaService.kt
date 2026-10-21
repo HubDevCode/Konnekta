@@ -147,6 +147,7 @@ class KonnektaService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP_RING) stopRing()
+        if (intent?.action == PresenterRemote.ACTION_STOP) PresenterRemote.stop(this)
         if (intent?.action == ACTION_REFRESH) restartFeatures()
         if (intent?.action == ACTION_ACCEPT_STREAM) onAcceptStream(intent)
         if (intent?.action == ACTION_DECLINE_STREAM) {

@@ -127,7 +127,7 @@ pub fn running() -> bool {
     std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some()
 }
 
-async fn hyprctl(args: &[&str]) -> Result<String> {
+pub(crate) async fn hyprctl(args: &[&str]) -> Result<String> {
     let out = tokio::time::timeout(
         HYPRCTL_TIMEOUT,
         tokio::process::Command::new("hyprctl")

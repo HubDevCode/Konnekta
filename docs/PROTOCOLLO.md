@@ -80,7 +80,14 @@ Tutti i tipi sono nel namespace `konnekta.`:
 | Flussi | `microphone`, `camera`, `desktop`, `systemaudio`, `phonescreen`, `phoneaudio` |
 
 Campi dei trasferimenti: ripresa con offset e `konnektaSha256`; `konnektaAbsX/Y` nel touchpad
-(desktop remoto); `konnektaKey` nel presentatore.
+(desktop remoto); `konnektaSwipe` (`left`, `right`, `up`, `down`) per il gesto a tre dita, che sul
+computer cambia workspace; `konnektaKey` nel presentatore.
+
+Stream rifiutato perché sul computer manca qualcosa: lo `stop` porta anche `missing` (programmi o
+moduli) e `fix` (comandi per installarli), e il telefono li mostra in un popup.
+
+Associazione di nuovo dopo una reinstallazione: se un dispositivo appena associato ha lo stesso
+nome e tipo di uno già associato ma non connesso, sostituisce quella voce e ne eredita i permessi.
 
 Permessi: `permissions` (`{permissions: [...], changedAt}`) è gestito dal core, solo tra dispositivi
 associati e solo sul protocollo nativo. Ogni coppia ha un unico insieme di permessi: chi modifica un
@@ -96,6 +103,10 @@ isDefault, output, icon}`) e invia le variazioni per 60 s dall'ultima richiesta.
 controllo multimediale.
 
 ### Frame dei flussi
+
+Video del desktop remoto: un frame per immagine completa (Annex B), inviato appena l'encoder lo
+scrive. Il computer legge l'uscita FLV della cattura, che ha un tag per immagine, e manda SPS/PPS
+(flag config) prima di ogni keyframe.
 
 ```
 u8 kind (1 audio, 2 video, 3 controllo) | u8 flags (1 keyframe, 2 config)

@@ -12,6 +12,7 @@
 //! * video is encoded with zero-latency settings (no B-frames, short GOP).
 
 pub mod abr;
+pub mod flv;
 pub mod frame;
 pub mod jitter;
 pub mod pipeline;

@@ -1,6 +1,7 @@
 //! Capture / encode pipelines built on external tools (ffmpeg, parec,
-//! wf-recorder). They write H.264 Annex B or raw PCM to stdout, which we
-//! split into frames and push to a [`FrameSender`](crate::FrameSender).
+//! wf-recorder, gpu-screen-recorder). The screen comes out as H.264 in FLV
+//! (one tag per picture, see [`crate::flv`]), audio as raw PCM; both are
+//! pushed to a [`FrameSender`](crate::FrameSender).
 
 use crate::abr::Quality;
 use anyhow::{Context, Result, bail};
@@ -37,8 +38,6 @@ impl ProcessPipeline {
     }
 }
 
-/// Command line producing a low-latency H.264 elementary stream of the
-/// primary screen on stdout.
 /// Hardware H.264 encoder usable by ffmpeg, checked once: NVENC when an
 /// NVIDIA GPU is present. `KONNEKTA_ENCODER=x264` forces the software one.
 fn nvenc() -> bool {
@@ -66,17 +65,20 @@ pub fn screen_capture_command(q: Quality) -> Result<(String, Vec<String>)> {
     let gop = (q.fps * 2).to_string();
     // ffmpeg options of the encoder: NVENC ultra-low-latency, or x264 at a
     // constant quality capped by the bitrate (sharp text, no CBR mush).
+    // Constant quality: a still screen costs almost nothing, text stays
+    // sharp, and nothing waits for a rate controller to refill.
     let codec_opts: Vec<(&str, String)> = if nvenc() {
         vec![
             ("preset", "p1".into()),
             ("tune", "ull".into()),
-            ("rc", "cbr".into()),
-            ("b", rate.clone()),
+            ("rc", "vbr".into()),
+            ("cq", "23".into()),
+            ("maxrate", rate.clone()),
             ("zerolatency", "1".into()),
         ]
     } else {
         vec![
-            ("preset", "veryfast".into()),
+            ("preset", "ultrafast".into()),
             ("tune", "zerolatency".into()),
             ("crf", "23".into()),
             ("maxrate", rate.clone()),
@@ -109,10 +111,11 @@ pub fn screen_capture_command(q: Quality) -> Result<(String, Vec<String>)> {
                 "0",
                 "-g",
                 &gop,
-                "-bsf:v",
-                "dump_extra",
+                // One FLV tag per picture, written as soon as it is encoded.
                 "-f",
-                "h264",
+                "flv",
+                "-flush_packets",
+                "1",
                 "-",
             ]
             .into_iter()
@@ -122,10 +125,13 @@ pub fn screen_capture_command(q: Quality) -> Result<(String, Vec<String>)> {
     };
     #[cfg(target_os = "linux")]
     {
+        if let Some(gsr) = gpu_screen_recorder(q) {
+            return Ok(gsr);
+        }
         if std::env::var_os("WAYLAND_DISPLAY").is_some() {
             if which("wf-recorder") {
                 let mut a: Vec<String> =
-                    ["-y", "-m", "h264", "-c", codec, "-x", "yuv420p", "-r", &fps]
+                    ["-y", "-m", "flv", "-c", codec, "-x", "yuv420p", "-r", &fps]
                         .into_iter()
                         .map(String::from)
                         .collect();
@@ -137,7 +143,8 @@ pub fn screen_capture_command(q: Quality) -> Result<(String, Vec<String>)> {
                 {
                     a.extend(["-p".into(), format!("{k}={v}")]);
                 }
-                a.extend(["-f".into(), "/dev/stdout".into()]);
+                // wf-recorder opens the output by name: "pipe:1" is stdout.
+                a.extend(["-f".into(), "pipe:1".into()]);
                 return Ok(("wf-recorder".into(), a));
             }
             if std::env::var_os("DISPLAY").is_none() {
@@ -181,6 +188,78 @@ pub fn screen_capture_command(q: Quality) -> Result<(String, Vec<String>)> {
         let _ = (enc, fps);
         bail!("screen capture not supported on this platform")
     }
+}
+
+/// gpu-screen-recorder captures and encodes on the GPU (zero copy), the way
+/// Flux does; used when installed and the monitor is known (Hyprland).
+#[cfg(target_os = "linux")]
+fn gpu_screen_recorder(q: Quality) -> Option<(String, Vec<String>)> {
+    if std::env::var("KONNEKTA_CAPTURE").is_ok_and(|c| c != "gsr") || !which("gpu-screen-recorder")
+    {
+        return None;
+    }
+    let (name, w, h) = focused_monitor()?;
+    let (w, h) = fit(w, h, q.height);
+    let args = [
+        "-w",
+        &name,
+        "-c",
+        "flv",
+        "-k",
+        "h264",
+        "-s",
+        &format!("{w}x{h}"),
+        "-f",
+        &q.fps.to_string(),
+        "-bm",
+        "qp",
+        "-q",
+        "high",
+        "-keyint",
+        "2",
+        "-cursor",
+        "yes",
+        "-fallback-cpu-encoding",
+        "yes",
+        "-v",
+        "no",
+    ];
+    Some((
+        "gpu-screen-recorder".into(),
+        args.iter().map(|a| a.to_string()).collect(),
+    ))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn gpu_screen_recorder(_: Quality) -> Option<(String, Vec<String>)> {
+    None
+}
+
+/// Name and size (as captured) of the focused Hyprland monitor.
+#[cfg(target_os = "linux")]
+fn focused_monitor() -> Option<(String, u32, u32)> {
+    let out = std::process::Command::new("hyprctl")
+        .args(["monitors", "-j"])
+        .output()
+        .ok()?;
+    let ms: Vec<serde_json::Value> = serde_json::from_slice(&out.stdout).ok()?;
+    let m = ms
+        .iter()
+        .find(|m| m["focused"].as_bool() == Some(true))
+        .or_else(|| ms.first())?;
+    let (mut w, mut h) = (m["width"].as_u64()? as u32, m["height"].as_u64()? as u32);
+    // A rotated monitor is captured with its sides swapped.
+    if m["transform"].as_u64().unwrap_or(0) % 2 == 1 {
+        std::mem::swap(&mut w, &mut h);
+    }
+    Some((m["name"].as_str()?.to_owned(), w, h))
+}
+
+/// Same shape, at most `height` tall, even sides for the encoder.
+fn fit(w: u32, h: u32, height: u32) -> (u32, u32) {
+    let scale = (height as f64 / h as f64).min(1.0);
+    let even = |v: u32| ((v as f64 * scale) as u32 / 2 * 2).max(2);
+    (even(w), even(h))
 }
 
 /// System audio (what you hear) as s16le 48 kHz stereo on stdout.
@@ -326,6 +405,14 @@ mod tests {
             assert!(joined.contains("zerolatency"));
             assert!(joined.contains("-bf 0"));
             assert!(joined.contains("2000k"));
+            assert!(joined.contains("-f flv -flush_packets 1"));
         }
+    }
+
+    #[test]
+    fn fits_the_screen_to_the_quality() {
+        assert_eq!(fit(2560, 1600, 1080), (1728, 1080));
+        assert_eq!(fit(1280, 720, 1080), (1280, 720));
+        assert_eq!(fit(1001, 777, 500), (644, 500));
     }
 }

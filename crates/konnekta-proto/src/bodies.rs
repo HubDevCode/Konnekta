@@ -242,6 +242,14 @@ pub struct MousepadBody {
         skip_serializing_if = "Option::is_none"
     )]
     pub abs_y: Option<f64>,
+    /// Konnekta extension: three-finger swipe, `left` / `right` (switch
+    /// workspace) or `up` / `down` (overview).
+    #[serde(
+        rename = "konnektaSwipe",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub swipe: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -398,6 +406,12 @@ pub struct StreamMessage {
     pub params: StreamParams,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// With a stop: what this computer still needs for the stream
+    /// (program or module names) and the commands that install it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub missing: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fix: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

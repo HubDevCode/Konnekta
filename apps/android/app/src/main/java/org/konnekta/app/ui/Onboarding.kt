@@ -106,7 +106,7 @@ fun OnboardingScreen(onDone: () -> Unit) {
                     Text("Tutto pronto", style = MaterialTheme.typography.headlineMedium)
                     Text(if (paired.isEmpty()) "Puoi associare un computer quando vuoi dalla scheda Computer."
                     else "${paired.joinToString { it.optString("name") }} è collegato. Trovi tutto nelle schede in basso: " +
-                        "Attività, Invia, Controllo e Computer.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        "Controllo, Invia e Computer (scorri di lato per cambiare scheda).", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     ActionCard(Icons.Filled.Computer, name, "Questo telefono") {}
                 }
             }

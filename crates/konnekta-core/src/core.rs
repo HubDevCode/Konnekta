@@ -1578,7 +1578,11 @@ impl Inner {
         if !self.config.read().unwrap().sync_permissions {
             return;
         }
-        let theirs_at = packet.body.get("changedAt").and_then(|v| v.as_i64()).unwrap_or(0);
+        let theirs_at = packet
+            .body
+            .get("changedAt")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
         // Names this version does not know are skipped.
         let theirs: BTreeSet<Permission> = packet
             .body
@@ -1861,6 +1865,60 @@ impl Inner {
         Ok(key)
     }
 
+    /// A device paired again under a new identity (app reinstalled, data
+    /// cleared) shows up with the same name and type as the old entry. The
+    /// new pairing — confirmed with the key like any other — replaces the old
+    /// entry when that one is offline, and keeps its permissions, plugin
+    /// choices and extra addresses, so the list shows one device, not two.
+    fn replace_predecessor(&self, handle: &DeviceHandle) {
+        let norm = |s: &str| s.trim().to_lowercase();
+        let new_id = handle.id();
+        let old = {
+            let trust = self.trust.lock().unwrap();
+            let links = self.links.lock().unwrap();
+            trust
+                .all()
+                .filter(|d| {
+                    d.device_id != new_id
+                        && norm(&d.name) == norm(handle.name())
+                        && d.device_type == handle.identity.device_type
+                        && d.protocol == handle.protocol
+                        && !links.get(&d.device_id).is_some_and(|l| l.pair.is_paired())
+                })
+                .max_by_key(|d| d.paired_at)
+                .cloned()
+        };
+        let Some(old) = old else { return };
+        let now = konnekta_proto::packet::now_millis();
+        {
+            let mut trust = self.trust.lock().unwrap();
+            trust.update(new_id, |d| {
+                d.permissions = old.permissions.clone();
+                // Newer than the fresh device's defaults: the sync sends it ours.
+                d.permissions_changed_at = now;
+                d.disabled_plugins = old.disabled_plugins.clone();
+                d.extra_addresses = old.extra_addresses.clone();
+            });
+            trust.remove(&old.device_id);
+        }
+        if let Some(entry) = self.links.lock().unwrap().remove(&old.device_id) {
+            for t in entry.tasks {
+                t.abort();
+            }
+        }
+        tracing::info!(old = %old.device_id, new = %new_id, name = %old.name, "paired device replaced its old entry");
+        let _ = self.events.send(Event::Unpaired {
+            device_id: old.device_id.clone(),
+        });
+        let _ = self.events.send(Event::SecurityWarning {
+            device_id: Some(new_id.to_owned()),
+            message: format!(
+                "{} was paired again (new app identity): it replaced the old entry and kept its permissions.",
+                old.name
+            ),
+        });
+    }
+
     fn pin(&self, handle: &DeviceHandle) {
         self.trust.lock().unwrap().insert(TrustedDevice {
             device_id: handle.id().to_owned(),
@@ -1912,6 +1970,7 @@ impl Inner {
         }
         self.guard.lock().unwrap().clear(id);
         tracing::info!(device = %handle.name(), "paired");
+        self.replace_predecessor(&handle);
         let _ = self.events.send(Event::Paired {
             device_id: id.to_owned(),
         });

@@ -7,7 +7,6 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -63,7 +62,8 @@ pub trait MixerBackend: Send + Sync {
 }
 
 #[cfg(feature = "desktop")]
-pub fn native() -> Arc<dyn MixerBackend> {
+pub fn native() -> std::sync::Arc<dyn MixerBackend> {
+    use std::sync::Arc;
     #[cfg(target_os = "linux")]
     if crate::cmd::exists("pactl") {
         return Arc::new(linux::Pactl);
@@ -193,7 +193,9 @@ pub mod linux {
         async fn set_volume(&self, kind: MixerKind, id: u32, volume: u16) -> Result<()> {
             let cmd = format!("set-{}-volume", noun(kind));
             let v = format!("{}%", volume.min(MAX_VOLUME));
-            output("pactl", &[&cmd, &id.to_string(), &v]).await.map(drop)
+            output("pactl", &[&cmd, &id.to_string(), &v])
+                .await
+                .map(drop)
         }
 
         async fn set_mute(&self, kind: MixerKind, id: u32, muted: bool) -> Result<()> {
@@ -240,7 +242,10 @@ pub mod linux {
                 "properties": {"application.name": "Firefox", "media.name": "Video"}
             });
             let a = app(&input).unwrap();
-            assert_eq!((a.id, a.volume, a.muted, a.output), (90, 100, true, Some(62)));
+            assert_eq!(
+                (a.id, a.volume, a.muted, a.output),
+                (90, 100, true, Some(62))
+            );
             assert_eq!((a.label.as_str(), a.detail.as_str()), ("Firefox", "Video"));
         }
 

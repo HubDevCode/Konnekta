@@ -58,6 +58,7 @@ import org.konnekta.app.service.STREAM_ASK
 import org.konnekta.app.service.STREAM_NAMES
 import org.konnekta.app.service.StreamRequest
 import org.konnekta.app.service.Streams
+import org.konnekta.app.state.Settings
 import org.konnekta.app.state.Store
 import kotlin.math.abs
 
@@ -223,7 +224,7 @@ fun ColumnScope.RemoteDesktopScreen(current: JSONObject?, onBack: () -> Unit) {
             Column(Modifier.fillMaxSize()) {
                 SubHeader("Desktop remoto", current.optString("name"), onBack)
                 Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) { video(Modifier.fillMaxWidth()) }
-                Hint("Tocca per cliccare · trascina per muovere · due dita per scorrere · tieni premuto per il tasto destro. " +
+                Hint("Tocca per cliccare · trascina per muovere · due dita per scorrere · tre dita di lato cambiano workspace · tieni premuto per il tasto destro. " +
                     "Ruota il telefono per vederlo più grande.")
             }
         }
@@ -234,12 +235,15 @@ private suspend fun androidx.compose.ui.input.pointer.PointerInputScope.remoteTo
     fun abs(x: Float, y: Float) = JSONObject()
         .put("konnektaAbsX", (x / size.width).coerceIn(0f, 1f).toDouble())
         .put("konnektaAbsY", (y / size.height).coerceIn(0f, 1f).toDouble())
+    val swipeMin = 60.dp.toPx()
     awaitEachGesture {
         val down = awaitFirstDown()
         val start = down.uptimeMillis
         var maxPointers = 1
         var moved = 0f
         var dragging = false
+        var swipeX = 0f
+        var swipeY = 0f
         while (true) {
             val ev = awaitPointerEvent()
             val pressed = ev.changes.filter { it.pressed }
@@ -247,19 +251,34 @@ private suspend fun androidx.compose.ui.input.pointer.PointerInputScope.remoteTo
             if (pressed.isEmpty()) break
             if (ev.type == PointerEventType.Move) {
                 val c = pressed.first()
-                moved += abs(c.position.x - c.previousPosition.x) + abs(c.position.y - c.previousPosition.y)
-                if (pressed.size >= 2) {
+                val dx = c.position.x - c.previousPosition.x
+                val dy = c.position.y - c.previousPosition.y
+                moved += abs(dx) + abs(dy)
+                ev.changes.forEach { it.consume() }
+                if (maxPointers >= 3) {
+                    swipeX += dx
+                    swipeY += dy
+                } else if (pressed.size >= 2) {
                     // Raw distance: the computer turns it into wheel steps and keeps the remainder.
-                    queue.trySend(JSONObject().put("dx", c.position.x - c.previousPosition.x).put("dy", c.position.y - c.previousPosition.y).put("scroll", true))
+                    val k = Settings.scrollSpeed.value
+                    queue.trySend(JSONObject().put("dx", dx * k).put("dy", dy * k).put("scroll", true))
                 } else if (moved > 12f) {
                     dragging = true
                     queue.trySend(abs(c.position.x, c.position.y))
                 }
-                ev.changes.forEach { it.consume() }
             }
         }
         val held = android.os.SystemClock.uptimeMillis() - start
         when {
+            maxPointers >= 3 -> {
+                // Three fingers: switch workspace (left/right) or overview (up/down).
+                val dir = when {
+                    abs(swipeX) >= abs(swipeY) && abs(swipeX) > swipeMin -> if (swipeX < 0) "left" else "right"
+                    abs(swipeY) > swipeMin -> if (swipeY < 0) "up" else "down"
+                    else -> null
+                }
+                dir?.let { queue.trySend(JSONObject().put("konnektaSwipe", it)) }
+            }
             dragging || maxPointers >= 2 -> {}
             moved < 12f && isLongPress(held) -> queue.trySend(abs(down.position.x, down.position.y).put("rightclick", true))
             moved < 12f -> queue.trySend(abs(down.position.x, down.position.y).put("singleclick", true))
