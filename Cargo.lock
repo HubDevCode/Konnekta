@@ -2552,6 +2552,7 @@ dependencies = [
  "konnekta-approve",
  "konnekta-core",
  "konnekta-crypto",
+ "konnekta-media",
  "konnekta-platform",
  "konnekta-plugins",
  "libc",
@@ -2616,6 +2617,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "konnekta-core",
+ "konnekta-media",
  "konnekta-platform",
  "konnekta-plugins",
  "serde_json",

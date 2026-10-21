@@ -16,6 +16,7 @@ pub mod frame;
 pub mod jitter;
 pub mod pipeline;
 pub mod sender;
+pub mod setup;
 pub mod virtual_devices;
 
 pub use abr::{AdaptiveBitrate, Quality};

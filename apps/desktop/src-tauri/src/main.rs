@@ -23,6 +23,16 @@ async fn api(state: State<'_, AppState>, method: String, params: Value) -> Resul
         .map_err(|e| format!("{e:#}"))
 }
 
+/// Setup assistant: what the media features still need on this computer.
+#[tauri::command]
+async fn setup_check() -> Value {
+    tokio::task::spawn_blocking(konnekta_media::setup::check)
+        .await
+        .ok()
+        .and_then(|r| serde_json::to_value(r).ok())
+        .unwrap_or_default()
+}
+
 #[tauri::command]
 async fn pick_files(app: AppHandle) -> Vec<String> {
     app.dialog()
@@ -142,7 +152,7 @@ fn main() {
                 api.prevent_close();
             }
         })
-        .invoke_handler(tauri::generate_handler![api, pick_files, pick_folder])
+        .invoke_handler(tauri::generate_handler![api, setup_check, pick_files, pick_folder])
         .run(tauri::generate_context!())
         .expect("error while running Konnekta");
 }

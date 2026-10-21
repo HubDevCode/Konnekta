@@ -113,6 +113,13 @@ enum Cmd {
     Events,
     /// Status for a Waybar `custom` module (JSON lines, keeps running).
     Waybar,
+    /// Check what the media features need on this computer and print the
+    /// commands that install it (nothing is run).
+    Setup {
+        /// Print the report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Approve sudo / polkit with the phone's fingerprint.
     #[cfg(unix)]
     Approve {
@@ -302,6 +309,35 @@ fn print(v: &Value) {
     }
 }
 
+fn setup_report(json: bool) {
+    use konnekta_media::setup::{self, Status};
+    let r = setup::check();
+    if json {
+        println!("{}", serde_json::to_string_pretty(&r).unwrap_or_default());
+        return;
+    }
+    for f in &r.features {
+        println!("{} {}", if f.ok { "✓" } else { "✗" }, f.id);
+        for q in f.requirements.iter().filter(|q| q.status != Status::Ok) {
+            let state = match q.status {
+                Status::Missing => "missing",
+                Status::NotLoaded => "not loaded",
+                Status::Unsupported => "unsupported",
+                Status::Ok => "ok",
+            };
+            println!("    {} ({state}): {}", q.id, q.purpose);
+        }
+    }
+    if r.all_commands.is_empty() {
+        println!("\nEverything is ready.");
+    } else {
+        println!("\nRun these commands (as yourself; sudo asks for the password):\n");
+        for c in &r.all_commands {
+            println!("  {c}");
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -335,6 +371,10 @@ async fn main() -> Result<()> {
     if let Cmd::Waybar = cli.cmd {
         return waybar::run(dir).await;
     }
+    if let Cmd::Setup { json } = cli.cmd {
+        setup_report(json);
+        return Ok(());
+    }
     // Runs as root through sudo: it finds the user's daemon by uid itself.
     #[cfg(unix)]
     if let Cmd::Approve { cmd } = cli.cmd {
@@ -342,7 +382,7 @@ async fn main() -> Result<()> {
     }
     let mut c = ipc::Client::connect(&ipc::endpoint(&dir)).await?;
     match cli.cmd {
-        Cmd::Daemon { .. } | Cmd::Waybar => unreachable!(),
+        Cmd::Daemon { .. } | Cmd::Waybar | Cmd::Setup { .. } => unreachable!(),
         #[cfg(unix)]
         Cmd::Approve { .. } => unreachable!(),
         Cmd::Info => print(&c.call("info", Value::Null).await?),

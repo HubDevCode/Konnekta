@@ -106,3 +106,9 @@ nav button { display: flex; align-items: center; gap: 10px; }
 .dev-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dev .badge { flex: none; }
 .devices { grid-template-columns: 320px 1fr; }
+.setup-item { padding: 12px 0; border-bottom: 1px solid var(--border); }
+.setup-item:last-child { border-bottom: 0; }
+.setup-req { margin: 8px 0 0 30px; }
+.cmds { display: flex; gap: 8px; align-items: flex-start; margin-top: 6px; }
+.cmds pre { flex: 1; margin: 0; padding: 10px 12px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; font: 12px/1.5 ui-monospace, "JetBrains Mono", monospace; white-space: pre-wrap; word-break: break-all; user-select: text; }
+code { font: 12px ui-monospace, monospace; background: var(--panel-2); padding: 1px 6px; border-radius: 6px; }

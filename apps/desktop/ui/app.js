@@ -54,6 +54,7 @@ const MATERIAL = {
   ring: 'M0 15h2V9H0v6zm3 2h2V7H3v10zm19-8v6h2V9h-2zm-3 8h2V7h-2v10zM16.5 3h-9C6.67 3 6 3.67 6 4.5v15c0 .83.67 1.5 1.5 1.5h9c.83 0 1.5-.67 1.5-1.5v-15c0-.83-.67-1.5-1.5-1.5zM16 19H8V5h8v14z',
   call: 'M20.01 15.38c-1.23 0-2.42-.2-3.53-.56-.35-.12-.74-.03-1.01.24l-1.57 1.97c-2.83-1.35-5.48-3.9-6.89-6.83l1.95-1.66c.27-.28.35-.67.24-1.02-.37-1.11-.56-2.3-.56-3.53 0-.54-.45-.99-.99-.99H4.19C3.65 3 3 3.24 3 3.99 3 13.28 10.73 21 20.01 21c.71 0 .99-.63.99-1.18v-3.45c0-.54-.45-.99-.99-.99z',
   battery: 'M15.67 4H14V2h-4v2H8.33C7.6 4 7 4.6 7 5.33v15.33C7 21.4 7.6 22 8.33 22h7.33c.74 0 1.34-.6 1.34-1.33V5.33C17 4.6 16.4 4 15.67 4z',
+  build: 'M22.7 19l-9.1-9.1c.9-2.3.4-5-1.5-6.9-2-2-5-2.4-7.4-1.3L9 6 6 9 1.6 4.7C.4 7.1.9 10.1 2.9 12.1c1.9 1.9 4.6 2.4 6.9 1.5l9.1 9.1c.4.4 1 .4 1.4 0l2.3-2.3c.5-.4.5-1.1.1-1.4z',
   volume: 'M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z',
 };
 function icon(name, size = 18) {
@@ -294,6 +295,7 @@ const views = {
   commands: renderCommands,
   deck: renderDeck,
   plugins: renderPlugins,
+  setup: renderSetup,
   settings: renderSettings,
   security: renderSecurity,
 };
@@ -846,6 +848,57 @@ async function renderPlugins() {
     h('div', { class: 'card' }, plugins.map((p) => h('div', { class: 'perm' },
       h('div', {}, h('div', { style: 'font-weight:600' }, p.name), h('div', { class: 'small muted' }, p.description, interopNote(p.interop))),
       sw(p.enabled, (v) => run(api('setPluginEnabled', { plugin: p.id, enabled: v })))))));
+}
+
+// --- setup assistant ---------------------------------------------------------------
+
+const SETUP_FEATURES = {
+  microphone: ['mic', 'Microfono del telefono', 'Usa il telefono come microfono del computer'],
+  webcam: ['videocam', 'Webcam del telefono', 'Usa la fotocamera del telefono come webcam'],
+  phoneScreen: ['smartphone', 'Schermo del telefono', 'Guarda lo schermo del telefono sul computer'],
+  desktop: ['screen', 'Desktop remoto', 'Mostra lo schermo del computer sul telefono'],
+  systemAudio: ['headphones', 'Audio del computer', 'Ascolta sul telefono ciò che suona il computer'],
+  phoneAudio: ['speaker', 'Audio del telefono', 'Ascolta sul computer ciò che suona il telefono'],
+  media: ['volume', 'Controllo dei lettori', 'Play, pausa e brani dal telefono'],
+  mixer: ['volume', 'Mixer audio', 'Volumi di uscite, ingressi e app dal telefono'],
+};
+const SETUP_STATUS = {
+  ok: ['ok', 'pronto'], missing: ['warn', 'da installare'], notLoaded: ['warn', 'installato, non attivo'],
+  unsupported: ['warn', 'non disponibile qui'],
+};
+
+function commandBlock(cmds) {
+  const text = cmds.join('\n');
+  return h('div', { class: 'cmds' },
+    h('pre', {}, text),
+    btn('Copia', () => run(navigator.clipboard.writeText(text), 'Comandi copiati'), 'small'));
+}
+
+async function renderSetup() {
+  const r = await invoke('setup_check');
+  const distro = { arch: 'Arch Linux', debian: 'Debian / Ubuntu', fedora: 'Fedora', opensuse: 'openSUSE' }[r.distro];
+  const missing = (r.features || []).filter((f) => !f.ok);
+  return h('div', {}, h('h1', {}, 'Configurazione'),
+    h('p', { class: 'small muted' }, 'Alcune funzioni usano programmi del sistema. Konnekta non li installa da solo: qui trovi cosa manca e i comandi da incollare nel terminale',
+      distro ? ` (scritti per ${distro}).` : '.'),
+    h('div', { class: 'row', style: 'margin-bottom:14px' },
+      missing.length ? h('span', { class: 'badge warn' }, `${missing.length} funzioni da completare`) : h('span', { class: 'badge ok' }, 'Tutto pronto'),
+      btn('Ricontrolla', () => render(), 'small')),
+    r.allCommands?.length ? h('div', { class: 'card', style: 'margin-bottom:14px' },
+      h('h2', { style: 'margin-top:0' }, 'Tutti i comandi'),
+      h('p', { class: 'small muted' }, 'Eseguili come utente normale: sudo chiede la password. Poi premi Ricontrolla; non serve riavviare Konnekta.'),
+      commandBlock(r.allCommands)) : null,
+    h('div', { class: 'card' }, (r.features || []).map((f) => {
+      const [ic, title, sub] = SETUP_FEATURES[f.id] || ['extension', f.id, ''];
+      const bad = f.requirements.filter((q) => q.status !== 'ok');
+      return h('div', { class: 'setup-item' },
+        h('div', { class: 'row' }, icon(ic),
+          h('div', { class: 'grow' }, h('div', { style: 'font-weight:600' }, title), h('div', { class: 'small muted' }, sub)),
+          h('span', { class: `badge ${f.ok ? 'ok' : 'warn'}` }, f.ok ? 'pronto' : 'da completare')),
+        bad.map((q) => h('div', { class: 'setup-req' },
+          h('div', { class: 'small' }, h('code', {}, q.id), ` — ${q.purpose} `, h('span', { class: `badge ${SETUP_STATUS[q.status][0]}` }, SETUP_STATUS[q.status][1])),
+          q.commands.length ? commandBlock(q.commands) : null)));
+    })));
 }
 
 // --- settings ---------------------------------------------------------------------

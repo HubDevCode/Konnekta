@@ -11,6 +11,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 konnekta-core.workspace = true
 konnekta-plugins.workspace = true
+konnekta-media.workspace = true
 konnekta-platform = { workspace = true, features = ["desktop"] }
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-dialog = "2"
