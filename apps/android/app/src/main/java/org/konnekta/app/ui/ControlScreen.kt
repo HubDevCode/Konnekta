@@ -153,23 +153,24 @@ fun ControlScreen(current: JSONObject?, open: (Route) -> Unit) {
         }
         /** A stream: highlighted while it runs, tap to stop. */
         fun stream(icon: ImageVector, title: String, subtitle: String, plugin: String, enabled: Boolean,
-                   trailing: (@Composable () -> Unit)? = null, onClick: () -> Unit) =
-            Fn(icon, title, if (on(plugin)) "Dal vivo · tocca per fermare" else subtitle, enabled || on(plugin), on(plugin), trailing, onClick)
+                   trailing: (@Composable () -> Unit)? = null, longClick: (() -> Unit)? = null, onClick: () -> Unit) =
+            Fn(icon, title, if (on(plugin)) "Dal vivo · tocca per fermare" else subtitle, enabled || on(plugin), on(plugin),
+                trailing = trailing, onLongClick = longClick, onClick = onClick)
         if (!online) Hint("$name non è raggiungibile: i comandi si attivano quando si collega.")
 
         FnSections("control", listOf(FnSection("toPc", "Al computer", listOf(
             stream(Icons.Filled.Mic, "Microfono", "Il telefono diventa il microfono di $name", "microphone", can(Types.MICROPHONE)) {
                 toggle("microphone")
             },
-            stream(Icons.Filled.Videocam, "Webcam", "La fotocamera ${if (front) "anteriore" else "posteriore"} come webcam", "camera",
-                can(Types.CAMERA),
+            stream(Icons.Filled.Videocam, "Webcam", "La fotocamera ${if (front) "anteriore" else "posteriore"} come webcam · tieni premuto per l'anteprima", "camera",
+                can(Types.CAMERA), longClick = { open(Route.Camera) },
                 trailing = {
                     TextButton(onClick = {
                         front = !front
                         prefs.edit().putBoolean("cameraFront", front).apply()
                     }, enabled = !on("camera")) { Text(if (front) "Anteriore" else "Posteriore") }
                 },
-            ) { toggle("camera", JSONObject().put("facing", if (front) "front" else "back")) },
+            ) { toggle("camera", CameraSettings.params(ctx)) },
             stream(Icons.Filled.ScreenShare, "Schermo del telefono",
                 if (screenAudio) "Schermo e audio del telefono sul computer" else "Lo schermo del telefono sul computer",
                 "phonescreen", can(Types.PHONE_SCREEN),

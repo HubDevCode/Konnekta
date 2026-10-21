@@ -92,6 +92,10 @@ object Streams {
             field = v
             desktopDecoders.values.forEach { it.surfaceChanged() }
         }
+    /** Webcam page: the camera also draws here while it streams. */
+    @Volatile
+    var cameraPreview: Surface? = null
+
     /** Size of the computer's screen as decoded (for the touch mapping). */
     val desktopSize = MutableStateFlow<Pair<Int, Int>?>(null)
 
@@ -388,6 +392,8 @@ object Streams {
         private val thread = HandlerThread("konnekta-cam").apply { start() }
         private val handler = Handler(thread.looper)
         private var device: CameraDevice? = null
+        /** The webcam page's preview, if open when the stream started. */
+        private val preview = cameraPreview?.takeIf { it.isValid }
 
         init {
             val cm = ctx.getSystemService(CameraManager::class.java)
@@ -416,12 +422,13 @@ object Streams {
                     }
                     try {
                         @Suppress("DEPRECATION")
-                        d.createCaptureSession(listOf(input), object : CameraCaptureSession.StateCallback() {
+                        d.createCaptureSession(listOfNotNull(input, preview), object : CameraCaptureSession.StateCallback() {
                             override fun onConfigured(s: CameraCaptureSession) {
                                 if (!running) return
                                 runCatching {
                                     val req = d.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
                                         addTarget(input)
+                                        preview?.let { p -> addTarget(p) }
                                         set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, Range(fps, fps))
                                     }.build()
                                     s.setRepeatingRequest(req, null, handler)
@@ -619,6 +626,8 @@ object Streams {
                 sps?.let { setByteBuffer("csd-0", java.nio.ByteBuffer.wrap(it)) }
                 pps?.let { setByteBuffer("csd-1", java.nio.ByteBuffer.wrap(it)) }
                 setInteger(MediaFormat.KEY_PRIORITY, 0) // real time
+                // Room for a detailed keyframe: a picture that does not fit is lost.
+                setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 4 * 1024 * 1024)
                 if (android.os.Build.VERSION.SDK_INT >= 30) setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
             }
             val names = buildList {

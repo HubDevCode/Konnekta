@@ -243,6 +243,10 @@ impl VirtualCamera {
             "nobuffer",
             "-flags",
             "low_delay",
+            // Raw H.264 has no clock: stamp each picture when it arrives
+            // (otherwise ffmpeg assumes 25 fps and falls behind).
+            "-use_wallclock_as_timestamps",
+            "1",
             "-f",
             "h264",
             "-i",
@@ -257,10 +261,12 @@ impl VirtualCamera {
                 "no v4l2loopback device found. Install v4l2loopback and run: \
                  sudo modprobe v4l2loopback card_label=\"Konnekta Camera\" exclusive_caps=1",
             )?;
+            let _ = fps;
             args.extend(
                 [
-                    "-r",
-                    &fps.to_string(),
+                    // Each picture out as soon as it is decoded.
+                    "-fps_mode",
+                    "passthrough",
                     "-pix_fmt",
                     "yuv420p",
                     "-f",
@@ -340,6 +346,10 @@ pub fn screen_viewer(title: &str) -> Result<crate::pipeline::ProcessPipeline> {
         "-framedrop",
         "-sync",
         "ext",
+        // Raw H.264 has no clock: without this ffplay paces at 25 fps and
+        // the delay grows; with it every picture shows when decoded.
+        "-vf",
+        "setpts=0",
         "-window_title",
         title,
         "-f",

@@ -511,6 +511,70 @@ async fn desktop_interoperates_with_mobile_bridge() {
     );
 }
 
+/// The whole remote desktop path on this machine: real screen capture,
+/// encoder, FLV, frames over the paired TLS channel to a phone; what arrives
+/// is written as Annex B for ffmpeg to check.
+/// `KONNEKTA_DUMP=/tmp/x.h264 cargo test -p konnekta-plugins --test e2e -- --ignored live_remote_desktop --nocapture`
+#[tokio::test]
+#[ignore]
+async fn live_remote_desktop() {
+    let (desk, phone, mut pev, _pdir) = desktop_and_bridge_phone().await;
+    let (did, pid) = (
+        desk.k.device_id().to_string(),
+        phone.device_id().to_string(),
+    );
+    desk.k
+        .set_permission(&pid, Permission::Desktop, true)
+        .unwrap();
+    phone
+        .set_permission(&did, Permission::Desktop, true)
+        .unwrap();
+    let h = phone.device_handle(&did).unwrap();
+    h.send(Packet::new(
+        types::DESKTOP,
+        json!({ "action": "request", "session": "live", "params": { "height": 1080 } }),
+    ))
+    .await
+    .unwrap();
+    let offer = bridge_packet(&mut pev, "desktop").await;
+    let port = offer["body"]["port"].as_u64().expect("offer with port") as u16;
+    let mut ch = h.connect_channel(port).await.unwrap();
+    let t0 = std::time::Instant::now();
+    let (mut n, mut bytes, mut dump) = (0usize, 0usize, Vec::new());
+    let mut last = t0;
+    let mut worst = Duration::ZERO;
+    while t0.elapsed() < Duration::from_secs(8) {
+        let f = tokio::time::timeout(
+            Duration::from_secs(5),
+            konnekta_media::frame::read_frame(&mut ch),
+        )
+        .await
+        .expect("no frame for 3 s")
+        .unwrap()
+        .expect("stream ended");
+        if f.kind != konnekta_media::FrameKind::Video {
+            continue;
+        }
+        n += 1;
+        bytes += f.data.len();
+        dump.extend_from_slice(&f.data);
+        if n == 1 {
+            println!("first picture after {:?}", t0.elapsed());
+        } else {
+            worst = worst.max(last.elapsed());
+        }
+        last = std::time::Instant::now();
+    }
+    println!(
+        "{n} frames, {} kbit/s, longest gap {worst:?}",
+        bytes * 8 / 5000
+    );
+    if let Ok(path) = std::env::var("KONNEKTA_DUMP") {
+        std::fs::write(path, &dump).unwrap();
+    }
+    assert!(n > 10);
+}
+
 /// A desktop node and a phone running the mobile bridge, paired.
 async fn desktop_and_bridge_phone() -> (
     Node,

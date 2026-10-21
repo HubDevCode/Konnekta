@@ -23,7 +23,7 @@ use std::time::Duration;
 use tokio::runtime::Runtime;
 
 enum Stream {
-    Writer(FrameSender),
+    Writer(Arc<FrameSender>),
     Reader(Arc<Mutex<mpsc::Receiver<Frame>>>),
     Pending,
 }
@@ -173,7 +173,7 @@ impl Handle {
         write: bool,
     ) {
         let s = if write {
-            Stream::Writer(FrameSender::new(ch, 30))
+            Stream::Writer(Arc::new(FrameSender::new(ch, 8)))
         } else {
             // A short queue: when the app falls behind, reading pauses and
             // TCP slows the sender down. Frames are never dropped here (a
@@ -395,16 +395,28 @@ pub unsafe extern "C" fn konnekta_stream_write(
     } else {
         unsafe { std::slice::from_raw_parts(data, len) }.to_vec()
     };
-    let streams = h.streams.lock().unwrap();
-    match streams.get(&channel) {
-        Some(Stream::Writer(w)) if !w.is_closed() => {
-            let _guard = h.rt.enter();
-            let mut f = Frame::new(kind, pts_us, bytes);
-            f.flags = flags;
-            if w.push(f) { 0 } else { 1 }
+    let w = match h.streams.lock().unwrap().get(&channel) {
+        Some(Stream::Writer(w)) if !w.is_closed() => w.clone(),
+        Some(Stream::Pending) => return 1,
+        _ => return -1,
+    };
+    let mut f = Frame::new(kind, pts_us, bytes);
+    f.flags = flags;
+    if kind == FrameKind::Video {
+        // Video waits for room (the encoder's thread slows down and the
+        // encoder skips pictures by itself): a dropped picture would break
+        // the image until the next keyframe. The map lock is not held here.
+        match h
+            .rt
+            .block_on(async { tokio::time::timeout(Duration::from_secs(2), w.send(f)).await })
+        {
+            Ok(true) => 0,
+            Ok(false) => -1,
+            Err(_) => 1,
         }
-        Some(Stream::Pending) => 1,
-        _ => -1,
+    } else {
+        let _guard = h.rt.enter();
+        if w.push(f) { 0 } else { 1 }
     }
 }
 

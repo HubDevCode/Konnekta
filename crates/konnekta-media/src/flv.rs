@@ -227,12 +227,15 @@ mod tests {
         let mut r = FlvReader::new(p.stdout.take().unwrap());
         let t0 = std::time::Instant::now();
         let (mut n, mut bytes) = (0, 0);
+        let mut dump = Vec::new();
         while t0.elapsed().as_secs() < 4 {
             match tokio::time::timeout(std::time::Duration::from_secs(5), r.next()).await {
                 Ok(Ok(Some(FlvVideo::Config(c)))) => {
+                    dump.extend_from_slice(&c);
                     println!("{:>5} ms config {} B", t0.elapsed().as_millis(), c.len())
                 }
                 Ok(Ok(Some(FlvVideo::Picture { data, key }))) => {
+                    dump.extend_from_slice(&data);
                     n += 1;
                     bytes += data.len();
                     if key || n <= 3 {
@@ -251,6 +254,9 @@ mod tests {
         }
         println!("{n} pictures, {} kbit/s", bytes * 8 / 4000);
         assert!(n > 0);
+        if let Ok(path) = std::env::var("KONNEKTA_DUMP") {
+            std::fs::write(path, &dump).unwrap();
+        }
     }
 
     #[tokio::test]

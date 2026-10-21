@@ -3,6 +3,7 @@ package org.konnekta.app.ui
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -160,16 +161,16 @@ fun ActionCard(
     enabled: Boolean = true,
     highlight: Boolean = false,
     trailing: @Composable (() -> Unit)? = null,
+    onLongClick: (() -> Unit)? = null,
     onClick: () -> Unit,
 ) {
     val scheme = MaterialTheme.colorScheme
     Surface(
-        onClick = onClick,
-        enabled = enabled,
         shape = RoundedCornerShape(14.dp),
         color = if (highlight) scheme.primaryContainer else scheme.surfaceContainerLow,
         border = BorderStroke(1.dp, LocalStatus.current.border),
-        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).clip(RoundedCornerShape(14.dp))
+            .combinedClickable(enabled = enabled, onLongClick = onLongClick, onClick = onClick),
     ) {
         Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
             Icon(icon, null, tint = if (enabled) scheme.primary else scheme.onSurfaceVariant.copy(alpha = .5f))
@@ -244,6 +245,8 @@ data class Fn(
     val enabled: Boolean = true,
     val highlight: Boolean = false,
     val trailing: (@Composable () -> Unit)? = null,
+    /** Long press: a page with the feature's details (e.g. the webcam preview). */
+    val onLongClick: (() -> Unit)? = null,
     val onClick: () -> Unit,
 ) {
     /** Stable id for the saved order: the title, which never names a device. */
@@ -339,7 +342,7 @@ fun CustomizeButton(screen: String) {
 fun FnList(items: List<Fn>) {
     val grid by Store.grid.collectAsState()
     if (!grid) {
-        items.forEach { ActionCard(it.icon, it.title, it.subtitle, it.enabled, it.highlight, it.trailing, it.onClick) }
+        items.forEach { ActionCard(it.icon, it.title, it.subtitle, it.enabled, it.highlight, it.trailing, it.onLongClick, it.onClick) }
         return
     }
     items.chunked(2).forEach { row ->
@@ -354,12 +357,11 @@ fun FnList(items: List<Fn>) {
 private fun FnTile(f: Fn, modifier: Modifier) {
     val scheme = MaterialTheme.colorScheme
     Surface(
-        onClick = f.onClick,
-        enabled = f.enabled,
         shape = RoundedCornerShape(14.dp),
         color = if (f.highlight) scheme.primaryContainer else scheme.surfaceContainerLow,
         border = BorderStroke(1.dp, LocalStatus.current.border),
-        modifier = modifier.padding(vertical = 4.dp),
+        modifier = modifier.padding(vertical = 4.dp).clip(RoundedCornerShape(14.dp))
+            .combinedClickable(enabled = f.enabled, onLongClick = f.onLongClick, onClick = f.onClick),
     ) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Icon(f.icon, null, tint = if (f.enabled) scheme.primary else scheme.onSurfaceVariant.copy(alpha = .5f))

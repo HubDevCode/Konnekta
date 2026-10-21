@@ -153,6 +153,7 @@ sealed interface Route {
     data object Browse : Route
     data object Desktop : Route
     data object Settings : Route
+    data object Camera : Route
     data class Device(val id: String) : Route
 }
 
@@ -217,6 +218,7 @@ private fun App() {
                 Route.Browse -> BrowseScreen(current, back)
                 Route.Desktop -> RemoteDesktopScreen(current, back)
                 Route.Settings -> SettingsScreen(back)
+                Route.Camera -> CameraScreen(current, back)
                 is Route.Device -> DeviceScreen(r.id, back)
             }
         }
