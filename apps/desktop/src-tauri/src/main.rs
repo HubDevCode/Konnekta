@@ -74,6 +74,14 @@ async fn start_core() -> anyhow::Result<Konnekta> {
 }
 
 fn main() {
+    // WebKitGTK's DMA-BUF renderer kills the window with a Wayland protocol
+    // error on some drivers (seen on NVIDIA + Hyprland). The user can still
+    // opt back in by setting the variable.
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+        // SAFETY: still single-threaded, before any runtime or GTK starts.
+        unsafe { std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1") };
+    }
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),

@@ -98,7 +98,19 @@ impl PeerExpectation {
 #[derive(Debug)]
 struct Verifier {
     expect: PeerExpectation,
+    /// Our own certificate: seeing it means we dialed ourselves (NAT, a stale
+    /// address), which is not an attack and must not raise a pin warning.
+    own_cert: Vec<u8>,
     algs: WebPkiSupportedAlgorithms,
+}
+
+impl Verifier {
+    fn check(&self, presented: &[u8]) -> std::result::Result<(), Error> {
+        if presented == self.own_cert.as_slice() {
+            return Err(Error::General("connection to ourselves".into()));
+        }
+        self.expect.check(presented)
+    }
 }
 
 impl ServerCertVerifier for Verifier {
@@ -113,7 +125,7 @@ impl ServerCertVerifier for Verifier {
         if !intermediates.is_empty() {
             return Err(Error::InvalidCertificate(CertificateError::BadEncoding));
         }
-        self.expect.check(end_entity.as_ref())?;
+        self.check(end_entity.as_ref())?;
         Ok(ServerCertVerified::assertion())
     }
 
@@ -162,7 +174,7 @@ impl ClientCertVerifier for Verifier {
         if !intermediates.is_empty() {
             return Err(Error::InvalidCertificate(CertificateError::BadEncoding));
         }
-        self.expect.check(end_entity.as_ref())?;
+        self.check(end_entity.as_ref())?;
         Ok(ClientCertVerified::assertion())
     }
 
@@ -207,6 +219,7 @@ pub fn client_config(local: &LocalIdentity, expect: PeerExpectation) -> Result<A
     let provider = provider();
     let verifier = Arc::new(Verifier {
         expect,
+        own_cert: local.cert_der.clone(),
         algs: provider.signature_verification_algorithms,
     });
     let cfg = ClientConfig::builder_with_provider(provider)
@@ -225,6 +238,7 @@ pub fn server_config(local: &LocalIdentity, expect: PeerExpectation) -> Result<A
     let provider = provider();
     let verifier = Arc::new(Verifier {
         expect,
+        own_cert: local.cert_der.clone(),
         algs: provider.signature_verification_algorithms,
     });
     let cfg = ServerConfig::builder_with_provider(provider)
@@ -304,6 +318,20 @@ mod tests {
         assert!(!handshake(&a, unpaired(&a), &b, unpaired(&a)).await);
     }
 
+    #[test]
+    fn own_certificate_is_a_self_connection_not_a_pin_mismatch() {
+        let (a, b) = ids();
+        let v = Verifier {
+            expect: pinned(&b),
+            own_cert: a.cert_der.clone(),
+            algs: provider().signature_verification_algorithms,
+        };
+        let e = v.check(&a.cert_der).unwrap_err();
+        assert_eq!(e, Error::General("connection to ourselves".into()));
+        assert!(!e.to_string().contains("certificate"));
+        assert!(v.check(&b.cert_der).is_ok());
+    }
+
     #[tokio::test]
     async fn mitm_with_same_device_id_is_rejected_when_pinned() {
         let (a, b) = ids();
@@ -324,6 +352,7 @@ mod tests {
             .dangerous()
             .with_custom_certificate_verifier(Arc::new(Verifier {
                 expect: pinned(&a),
+                own_cert: Vec::new(),
                 algs: provider().signature_verification_algorithms,
             }))
             .with_no_client_auth();
