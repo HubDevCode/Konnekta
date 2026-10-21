@@ -73,28 +73,29 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev
       - run: cargo build -p konnekta-desktop
 
-  mobile:
+  android:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+          targets: aarch64-linux-android,x86_64-linux-android
       - uses: Swatinem/rust-cache@v2
-      - uses: subosito/flutter-action@v2
+      - uses: actions/setup-java@v4
         with:
-          channel: stable
-          cache: true
-      - name: Flutter analyze
-        working-directory: apps/mobile
-        run: |
-          flutter pub get
-          flutter analyze --no-fatal-infos
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.8.2"
       - uses: nttld/setup-ndk@v1
         id: ndk
         with:
-          ndk-version: r26d
-      - name: Cross-compile core for Android
+          ndk-version: r28c
+      - run: cargo install cargo-ndk --locked
+      # Core with cargo-ndk, then the APK and the app's unit tests.
+      - name: Build
         env:
           ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
-        run: apps/mobile/scripts/build_rust.sh android
+          GRADLE: gradle
+        run: scripts/build-android.sh debug

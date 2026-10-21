@@ -13,7 +13,7 @@ Crea una **release in bozza** su GitHub e allega:
 | Linux | AppImage, .deb, .rpm (Tauri) · `konnekta-cli-*-x86_64-unknown-linux-gnu.tar.gz` |
 | Windows | MSI, setup NSIS · CLI `.zip` |
 | macOS | `.app`/`.dmg` per Apple Silicon e Intel · CLI `.tar.gz` |
-| Android | APK per `arm64-v8a`, `armeabi-v7a`, `x86_64` |
+| Android | un APK (app nativa `apps/android`) con il core per `arm64-v8a` e `x86_64` |
 | iOS | `.ipa` non firmato |
 
 Dopo la verifica, pubblica la bozza dalla pagina Releases.
@@ -25,7 +25,7 @@ Dopo la verifica, pubblica la bozza dalla pagina Releases.
 | macOS | `APPLE_CERTIFICATE` (p12 base64), `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID` | firma e notarizzazione automatiche tramite tauri-action |
 | Windows | configurare `bundle.windows.certificateThumbprint` o `signCommand` in `tauri.conf.json` | senza firma SmartScreen mostra un avviso |
 | Aggiornamenti Tauri | `TAURI_SIGNING_PRIVATE_KEY` | solo se si abilita l'updater |
-| Android | aggiungere a `android/app/build.gradle(.kts)` un `signingConfig` che legga `key.properties` e salvare keystore e password come secret | senza configurazione l'APK è firmato con la chiave di debug di Flutter |
+| Android | salvare come secret `ANDROID_KEYSTORE_BASE64` (keystore in base64), `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`; `apps/android/app/build.gradle.kts` li legge da `KONNEKTA_KEYSTORE*` | senza secret l'APK è firmato con la chiave di debug: si installa, ma gli aggiornamenti firmati poi con la chiave vera richiedono di disinstallare |
 | iOS | account Apple Developer, profilo di provisioning e `flutter build ipa` | la CI produce una build non firmata |
 
 ## Linux senza interfaccia

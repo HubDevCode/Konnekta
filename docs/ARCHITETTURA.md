@@ -13,7 +13,7 @@
                  ▼                                                               ▼
      konnekta-plugins (desktop)                                       plugin "ponte" (mobile)
      ping, battery, clipboard, share, mpris,                          inoltrano i pacchetti autorizzati
-     mousepad, presenter, runcommand, notifications,                  all'app Flutter via FFI
+     mousepad, presenter, runcommand, notifications,                  alle app mobili via FFI
      telephony, findmyphone, deck, dnd, screenshot,                            │
      microphone, camera, phonescreen, desktop, systemaudio                     ▼
                  │                                                   Dart ⇄ Kotlin / Swift

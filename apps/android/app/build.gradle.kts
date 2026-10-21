@@ -19,13 +19,41 @@ android {
 
     buildFeatures { compose = true }
 
+    // One APK per ABI as well as the universal one: smaller downloads for phones.
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "x86_64")
+            isUniversalApk = true
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
 
+    // Release key from the environment (CI secrets, see docs/RILASCIO.md);
+    // without it the release APK is signed with the debug key so it still installs.
+    val keystore = System.getenv("KONNEKTA_KEYSTORE")?.let(::file)?.takeIf { it.exists() }
+    signingConfigs {
+        if (keystore != null) create("release") {
+            storeFile = keystore
+            storePassword = System.getenv("KONNEKTA_KEYSTORE_PASSWORD")
+            keyAlias = System.getenv("KONNEKTA_KEY_ALIAS")
+            keyPassword = System.getenv("KONNEKTA_KEY_PASSWORD")
+        }
+    }
+
     buildTypes {
-        release { isMinifyEnabled = false }
+        release {
+            // R8 drops the unused icons and code (the debug APK is ~120 MB).
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
+        }
     }
 
     testOptions { unitTests.isReturnDefaultValues = true }

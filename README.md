@@ -12,7 +12,7 @@ ha nomi e formati di Konnekta.
 
 | | Windows | macOS | Linux | Android | iOS |
 |---|:-:|:-:|:-:|:-:|:-:|
-| App | Tauri (MSI/NSIS) | Tauri (.app/.dmg) | Tauri (AppImage/deb/rpm) + CLI | nativa Kotlin (in sviluppo) | nativa SwiftUI (in sviluppo) |
+| App | Tauri (MSI/NSIS) | Tauri (.app/.dmg) | Tauri (AppImage/deb/rpm) + CLI | nativa Kotlin/Compose | Flutter (la nativa SwiftUI è in sviluppo) |
 
 ## Funzioni
 
@@ -72,7 +72,8 @@ crates/
 apps/
   konnekta-cli       daemon + riga di comando (`konnekta`)
   desktop            app Tauri 2 (UI in italiano, icona nel vassoio)
-  mobile             app Flutter provvisoria (sarà sostituita dalle app native)
+  android            app Android nativa (Kotlin/Compose, core via JNA)
+  mobile             app Flutter, ormai solo per iOS (sarà sostituita da SwiftUI)
 docs/                architettura, protocollo, sicurezza, piattaforme, rilascio, piano
 ```
 
