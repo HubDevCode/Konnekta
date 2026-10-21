@@ -54,7 +54,7 @@ class KonnektaService : Service() {
         private const val N_APPROVE = 4
         private const val N_PAIR = 5
         private const val N_SHARE = 6
-        private const val N_PHOTO = 7
+        const val N_PHOTO = 7
         const val ACTION_STOP_RING = "org.konnekta.app.STOP_RING"
 
         /** Pairing request waiting for the user: {deviceId, deviceName, verificationKey, confirm}. */
@@ -66,7 +66,10 @@ class KonnektaService : Service() {
 
         const val ACTION_REFRESH = "org.konnekta.app.REFRESH"
         private const val ACTION_ACCEPT_STREAM = "org.konnekta.app.ACCEPT_STREAM"
-        private const val N_STREAM = 8
+        const val N_STREAM = 8
+        private const val ACTION_DECLINE_STREAM = "org.konnekta.app.DECLINE_STREAM"
+        private const val ACTION_DECLINE_PHOTO = "org.konnekta.app.DECLINE_PHOTO"
+        private const val ACTION_PAIR_ANSWER = "org.konnekta.app.PAIR_ANSWER"
 
         /**
          * The user accepted a stream request (the app is on screen, so the
@@ -146,6 +149,24 @@ class KonnektaService : Service() {
         if (intent?.action == ACTION_STOP_RING) stopRing()
         if (intent?.action == ACTION_REFRESH) restartFeatures()
         if (intent?.action == ACTION_ACCEPT_STREAM) onAcceptStream(intent)
+        if (intent?.action == ACTION_DECLINE_STREAM) {
+            Streams.pending.value.firstOrNull { it.deviceId == intent.getStringExtra("device") && it.plugin == intent.getStringExtra("plugin") }
+                ?.let(Streams::decline)
+        }
+        if (intent?.action == ACTION_DECLINE_PHOTO) {
+            val dev = intent.getStringExtra("device").orEmpty()
+            Store.dismissKind("photo")
+            nm.cancel(N_PHOTO)
+            transfers.execute { runCatching { KonnektaApp.core?.sendPacket(dev, Types.PHOTO, JSONObject().put("cancelled", true)) } }
+        }
+        if (intent?.action == ACTION_PAIR_ANSWER) {
+            val dev = intent.getStringExtra("device").orEmpty()
+            val key = intent.getStringExtra("key").orEmpty()
+            val method = if (intent.getBooleanExtra("accept", false)) "acceptPair" else "rejectPair"
+            pairPrompt.value = null
+            nm.cancel(N_PAIR)
+            transfers.execute { runCatching { KonnektaApp.core?.call(method, JSONObject().put("deviceId", dev).put("key", key)) } }
+        }
         return START_STICKY
     }
 
@@ -171,6 +192,7 @@ class KonnektaService : Service() {
         KonnektaApp.core = core
         refreshDevices(core)
         Streams.onChanged = { main.post { updateForeground() } }
+        Streams.onRequestsChanged = { if (Streams.pending.value.isEmpty()) nm.cancel(N_STREAM) }
         main.post {
             registerReceiver(battery, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
             restartFeatures()
@@ -345,7 +367,11 @@ class KonnektaService : Service() {
     private fun onStreamPacket(core: Core, deviceId: String, type: String, body: JSONObject) {
         val plugin = Streams.TYPES.entries.firstOrNull { it.value == type }?.key ?: return
         val r = Streams.onPacket(this, core, deviceId, name(core, deviceId), plugin, body) ?: return
-        notify(N_STREAM, "${r.deviceName} chiede ${STREAM_ASK[plugin]}", "Tocca per decidere")
+        val accept = appAction(80, Intent(this, MainActivity::class.java).setAction(MainActivity.ACTION_ACCEPT_STREAM)
+            .putExtra("device", r.deviceId).putExtra("plugin", r.plugin))
+        val deny = serviceAction(81, ACTION_DECLINE_STREAM) { it.putExtra("device", r.deviceId).putExtra("plugin", r.plugin) }
+        notify(N_STREAM, "${r.deviceName} chiede ${STREAM_ASK[plugin]}", "Accetta o nega, oppure tocca per decidere nell'app",
+            actions = listOf("Accetta" to accept, "Nega" to deny))
     }
 
     // --- photo / scan / QR on request -----------------------------------------
@@ -364,7 +390,9 @@ class KonnektaService : Service() {
             .putExtra(org.konnekta.app.ui.PhotoActivity.EXTRA_DEVICE, deviceId)
             .putExtra(org.konnekta.app.ui.PhotoActivity.EXTRA_MODE, mode)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        notify(N_PHOTO, "$from chiede $what", "Tocca per aprire la fotocamera", open)
+        val deny = serviceAction(70, ACTION_DECLINE_PHOTO) { it.putExtra("device", deviceId) }
+        notify(N_PHOTO, "$from chiede $what", "Tocca per aprire la fotocamera", open,
+            actions = listOf("Apri fotocamera" to appAction(71, Intent(open)), "Nega" to deny))
     }
 
     // --- files and links -------------------------------------------------------
@@ -467,10 +495,16 @@ class KonnektaService : Service() {
 
     private fun showPair(e: JSONObject, confirm: Boolean) {
         pairPrompt.value = JSONObject(e.toString()).put("confirm", confirm)
+        val id = e.optString("deviceId")
+        val key = e.optString("verificationKey")
+        fun answer(code: Int, accept: Boolean) = serviceAction(code, ACTION_PAIR_ANSWER) {
+            it.putExtra("device", id).putExtra("key", key).putExtra("accept", accept)
+        }
         notify(
             N_PAIR,
             if (confirm) "Conferma l'associazione" else "Richiesta di associazione",
-            "${e.optString("deviceName")}: confronta il codice ${formatKey(e.optString("verificationKey"))}",
+            "${e.optString("deviceName")}: il computer deve mostrare ${formatKey(key)}",
+            actions = listOf("Associa" to answer(50, true), "Rifiuta" to answer(51, false)),
         )
     }
 
@@ -539,19 +573,30 @@ class KonnektaService : Service() {
         this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE,
     )
 
-    private fun notify(id: Int, title: String, text: String, open: Intent? = null) {
+    private fun notify(id: Int, title: String, text: String, open: Intent? = null, actions: List<Pair<String, PendingIntent>> = emptyList()) {
         val tap = open?.let {
             PendingIntent.getActivity(this, id, it, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         } ?: openApp()
-        val n: Notification = NotificationCompat.Builder(this, KonnektaApp.CH_ALERTS)
+        val b = NotificationCompat.Builder(this, KonnektaApp.CH_ALERTS)
             .setSmallIcon(R.drawable.ic_stat)
             .setContentTitle(title)
             .setContentText(text)
             .setContentIntent(tap)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setAutoCancel(true)
-            .build()
-        nm.notify(id, n)
+        actions.forEach { (label, pi) -> b.addAction(0, label, pi) }
+        nm.notify(id, b.build())
     }
+
+    /** Notification button handled by the service itself (no app on screen). */
+    private fun serviceAction(code: Int, action: String, extras: (Intent) -> Unit): PendingIntent =
+        PendingIntent.getService(this, code, Intent(this, KonnektaService::class.java).setAction(action).also(extras),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+
+    /** Notification button that opens the app (Android permissions, screen-capture consent). */
+    private fun appAction(code: Int, i: Intent): PendingIntent =
+        PendingIntent.getActivity(this, code, i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
 
     override fun onDestroy() {
         running = false

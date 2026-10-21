@@ -70,6 +70,10 @@ object Streams {
     val pending = MutableStateFlow<List<StreamRequest>>(emptyList())
     val live = MutableStateFlow<Map<String, LiveStream>>(emptyMap())
 
+    /** Called when a request was accepted or declined (the service clears its notification). */
+    @Volatile
+    var onRequestsChanged: (() -> Unit)? = null
+
     /** Called after a stream started or ended (the service adjusts its foreground types). */
     @Volatile
     var onChanged: (() -> Unit)? = null
@@ -124,6 +128,7 @@ object Streams {
 
     fun decline(r: StreamRequest) {
         pending.update { l -> l.filterNot { it.key == r.key } }
+        onRequestsChanged?.invoke()
         Thread { send(r.deviceId, r.plugin, JSONObject().put("action", "stop").put("session", r.session).put("reason", "rifiutato sul telefono")) }.start()
     }
 
@@ -149,6 +154,7 @@ object Streams {
     /** Run on a background thread; [projection] only for the screen. */
     fun accept(ctx: Context, core: Core, r: StreamRequest, projection: MediaProjection? = null) {
         pending.update { l -> l.filterNot { it.key == r.key } }
+        onRequestsChanged?.invoke()
         stop(r.deviceId, r.plugin, notifyPeer = false)
         val ch = try {
             core.callObject("streamListen", JSONObject().put("deviceId", r.deviceId))
@@ -179,7 +185,7 @@ object Streams {
                 }
                 else -> {
                     val p = projection ?: return
-                    val prod = ScreenProducer(ctx, core, channel, p, r.params.optInt("height", 1280).coerceIn(480, 1920), ended)
+                    val prod = ScreenProducer(ctx, core, channel, p, r.params.optInt("height", 1600).coerceIn(480, 1920), ended)
                     prod to JSONObject().put("codec", "h264").put("width", prod.width).put("height", prod.height).put("fps", 30)
                 }
             }
@@ -299,7 +305,9 @@ object Streams {
         init {
             val f = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height).apply {
                 setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
-                setInteger(MediaFormat.KEY_BIT_RATE, (width * height * fps / 8).coerceIn(1_000_000, 8_000_000))
+                // ~0.15 bit per pixel: sharp text and motion without saturating Wi-Fi.
+                setInteger(MediaFormat.KEY_BIT_RATE, (width.toLong() * height * fps * 15 / 100).toInt().coerceIn(3_000_000, 12_000_000))
+                setInteger(MediaFormat.KEY_PRIORITY, 0) // real time
                 setInteger(MediaFormat.KEY_FRAME_RATE, fps)
                 setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 2)
                 // Screen content: keep sending frames when nothing moves.

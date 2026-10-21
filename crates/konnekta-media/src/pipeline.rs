@@ -39,8 +39,51 @@ impl ProcessPipeline {
 
 /// Command line producing a low-latency H.264 elementary stream of the
 /// primary screen on stdout.
+/// Hardware H.264 encoder usable by ffmpeg, checked once: NVENC when an
+/// NVIDIA GPU is present. `KONNEKTA_ENCODER=x264` forces the software one.
+fn nvenc() -> bool {
+    static NVENC: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *NVENC.get_or_init(|| {
+        if std::env::var("KONNEKTA_ENCODER").is_ok_and(|e| e == "x264") {
+            return false;
+        }
+        let gpu = cfg!(windows) || std::path::Path::new("/dev/nvidia0").exists();
+        gpu && std::process::Command::new("ffmpeg")
+            .args(["-hide_banner", "-encoders"])
+            .output()
+            .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains("h264_nvenc"))
+    })
+}
+
+/// Scale to the quality's height, never above the screen's own.
+fn scale_filter(height: u32) -> String {
+    format!("scale=-2:'min(ih,{height})'")
+}
+
 pub fn screen_capture_command(q: Quality) -> Result<(String, Vec<String>)> {
     let fps = q.fps.to_string();
+    let rate = format!("{}k", q.bitrate_kbps);
+    let gop = (q.fps * 2).to_string();
+    // ffmpeg options of the encoder: NVENC ultra-low-latency, or x264 at a
+    // constant quality capped by the bitrate (sharp text, no CBR mush).
+    let codec_opts: Vec<(&str, String)> = if nvenc() {
+        vec![
+            ("preset", "p1".into()),
+            ("tune", "ull".into()),
+            ("rc", "cbr".into()),
+            ("b", rate.clone()),
+            ("zerolatency", "1".into()),
+        ]
+    } else {
+        vec![
+            ("preset", "veryfast".into()),
+            ("tune", "zerolatency".into()),
+            ("crf", "23".into()),
+            ("maxrate", rate.clone()),
+            ("bufsize", format!("{}k", q.bitrate_kbps / 2)),
+        ]
+    };
+    let codec = if nvenc() { "h264_nvenc" } else { "libx264" };
     let enc = |input: Vec<&str>| -> Vec<String> {
         let mut a: Vec<String> = vec![
             "-loglevel".into(),
@@ -49,28 +92,23 @@ pub fn screen_capture_command(q: Quality) -> Result<(String, Vec<String>)> {
             "nobuffer".into(),
         ];
         a.extend(input.into_iter().map(String::from));
+        a.extend([
+            "-vf".into(),
+            scale_filter(q.height),
+            "-c:v".into(),
+            codec.into(),
+        ]);
+        for (k, v) in &codec_opts {
+            a.extend([format!("-{k}"), v.clone()]);
+        }
         a.extend(
             [
-                "-vf",
-                &format!("scale=-2:{}", q.height),
-                "-c:v",
-                "libx264",
-                "-preset",
-                "ultrafast",
-                "-tune",
-                "zerolatency",
                 "-pix_fmt",
                 "yuv420p",
                 "-bf",
                 "0",
                 "-g",
-                &(q.fps * 2).to_string(),
-                "-b:v",
-                &format!("{}k", q.bitrate_kbps),
-                "-maxrate",
-                &format!("{}k", q.bitrate_kbps),
-                "-bufsize",
-                &format!("{}k", q.bitrate_kbps / 2),
+                &gop,
                 "-bsf:v",
                 "dump_extra",
                 "-f",
@@ -86,29 +124,21 @@ pub fn screen_capture_command(q: Quality) -> Result<(String, Vec<String>)> {
     {
         if std::env::var_os("WAYLAND_DISPLAY").is_some() {
             if which("wf-recorder") {
-                return Ok((
-                    "wf-recorder".into(),
-                    [
-                        "-y",
-                        "-m",
-                        "h264",
-                        "-c",
-                        "libx264",
-                        "-r",
-                        &fps,
-                        "-p",
-                        "preset=ultrafast",
-                        "-p",
-                        "tune=zerolatency",
-                        "-p",
-                        &format!("b={}k", q.bitrate_kbps),
-                        "-f",
-                        "/dev/stdout",
-                    ]
-                    .into_iter()
-                    .map(String::from)
-                    .collect(),
-                ));
+                let mut a: Vec<String> =
+                    ["-y", "-m", "h264", "-c", codec, "-x", "yuv420p", "-r", &fps]
+                        .into_iter()
+                        .map(String::from)
+                        .collect();
+                a.extend(["-F".into(), scale_filter(q.height)]);
+                for (k, v) in codec_opts
+                    .iter()
+                    .cloned()
+                    .chain([("g", gop.clone()), ("bf", "0".into())])
+                {
+                    a.extend(["-p".into(), format!("{k}={v}")]);
+                }
+                a.extend(["-f".into(), "/dev/stdout".into()]);
+                return Ok(("wf-recorder".into(), a));
             }
             if std::env::var_os("DISPLAY").is_none() {
                 bail!(

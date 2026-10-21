@@ -15,6 +15,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Computer
+import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LinkOff
 import androidx.compose.material.icons.filled.Notifications
@@ -133,6 +134,7 @@ fun ComputersScreen(devices: List<JSONObject>, open: (Route) -> Unit) {
             }
         }
         item { SectionTitle("Impostazioni") }
+        item { LayoutSetting() }
         item { NotificationsSetting() }
         item { PhoneFeatures() }
         item {
@@ -183,6 +185,18 @@ fun AvailableCard(d: JSONObject, onClick: () -> Unit) {
             }
         }
     }
+}
+
+/** Features one per line, or two per row. */
+@Composable
+private fun LayoutSetting() {
+    val ctx = LocalContext.current
+    val grid by Store.grid.collectAsState()
+    ActionCard(
+        Icons.Filled.GridView, "Funzioni in griglia",
+        if (grid) "Due per riga, più compatte" else "Una per riga, con la descrizione completa",
+        trailing = { Switch(grid, { Store.setGrid(ctx, it) }) },
+    ) { Store.setGrid(ctx, !grid) }
 }
 
 @Composable

@@ -234,6 +234,11 @@ impl VirtualCamera {
         let mut args: Vec<String> = [
             "-loglevel",
             "error",
+            // Start at once: no seconds spent probing the stream.
+            "-probesize",
+            "32",
+            "-analyzeduration",
+            "0",
             "-fflags",
             "nobuffer",
             "-flags",
@@ -323,11 +328,18 @@ pub fn screen_viewer(title: &str) -> Result<crate::pipeline::ProcessPipeline> {
     let args: Vec<String> = [
         "-loglevel",
         "error",
+        // Start at once and never queue: show the newest frame.
+        "-probesize",
+        "32",
+        "-analyzeduration",
+        "0",
         "-fflags",
         "nobuffer",
         "-flags",
         "low_delay",
         "-framedrop",
+        "-sync",
+        "ext",
         "-window_title",
         title,
         "-f",

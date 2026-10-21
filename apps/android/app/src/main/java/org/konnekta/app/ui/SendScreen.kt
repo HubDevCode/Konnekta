@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -77,25 +78,48 @@ fun SendScreen(current: JSONObject?, open: (Route) -> Unit) {
                 style = MaterialTheme.typography.bodyMedium,
             )
         }
-        ActionCard(Icons.Filled.ContentPasteGo, "Invia appunti", "Incollali sul computer", enabled = online, highlight = online) {
-            val text = ui.clipboard()
-            if (text.isNullOrEmpty()) ui.toast("Gli appunti sono vuoti")
-            else scope.launch {
-                core(ui.toast) { it.sendPacket(id!!, Types.CLIPBOARD, JSONObject().put("content", text)) }?.let { ui.toast("Appunti inviati") }
-            }
-        }
+        FnList(listOf(
+            Fn(Icons.Filled.ContentPasteGo, "Invia appunti", "Incollali sul computer", enabled = online, highlight = online) {
+                val text = ui.clipboard()
+                if (text.isNullOrEmpty()) ui.toast("Gli appunti sono vuoti")
+                else scope.launch {
+                    core(ui.toast) { it.sendPacket(id!!, Types.CLIPBOARD, JSONObject().put("content", text)) }?.let { ui.toast("Appunti inviati") }
+                }
+            },
+            Fn(Icons.Filled.NotificationsActive, "Ping", "Fai comparire un avviso sul computer", enabled = online) {
+                scope.launch { send(ui.toast, id!!, Types.PING, JSONObject().put("message", "Ping dal telefono")) }
+            },
+        ))
         SectionTitle("File")
-        ActionCard(Icons.Filled.UploadFile, "Invia file", "Scegli dei file su questo telefono", enabled = online) {
-            pick.launch(arrayOf("*/*"))
-        }
-        ActionCard(Icons.Filled.FolderOpen, "Prendi file", "Sfoglia le cartelle condivise del computer",
-            enabled = online && current?.supports(Types.BROWSE_REQUEST) == true) { open(Route.Browse) }
-        SectionTitle("Altro")
-        ActionCard(Icons.Filled.NotificationsActive, "Ping", "Fai comparire un avviso sul computer", enabled = online) {
-            scope.launch { send(ui.toast, id!!, Types.PING, JSONObject().put("message", "Ping dal telefono")) }
-        }
+        FnList(listOf(
+            Fn(Icons.Filled.UploadFile, "Invia file", "Scegli dei file su questo telefono", enabled = online) { pick.launch(arrayOf("*/*")) },
+            Fn(Icons.Filled.FolderOpen, "Prendi file", "Sfoglia le cartelle condivise del computer",
+                enabled = online && current?.supports(Types.BROWSE_REQUEST) == true) { open(Route.Browse) },
+        ))
         Hint("Per inviare testo, link o foto da un'altra app, sceglili e tocca Condividi › Konnekta.")
+        Received()
     }
+}
+
+/** What the computers sent: transfers in progress, files, links, texts. */
+@Composable
+private fun Received() {
+    val items by Store.inbox.collectAsState()
+    val transfers by Store.transfers.collectAsState()
+    val shown = items.filter { it.kind !in setOf("photo", "ring") }
+    if (shown.isEmpty() && transfers.isEmpty()) return
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        SectionTitle("Ricevuti")
+        Spacer(Modifier.weight(1f))
+        if (shown.isNotEmpty()) androidx.compose.material3.TextButton(onClick = { Store.inbox.value = items.filter { it.kind in setOf("photo", "ring") } }) {
+            Text("Svuota")
+        }
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        transfers.values.forEach { label -> SmallCard("In corso", MaterialTheme.colorScheme.secondary, label, "", null) }
+        shown.forEach { InboxCard(it) }
+    }
+    Spacer(Modifier.height(16.dp))
 }
 
 /** Transfers outlive the screen: they run in the app scope. */

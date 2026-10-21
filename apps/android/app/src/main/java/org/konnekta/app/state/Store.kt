@@ -58,11 +58,21 @@ object Store {
     /** Transfers in progress: id -> label. */
     val transfers = MutableStateFlow<Map<Long, String>>(emptyMap())
 
+    /** Features shown two per row instead of one per line (setting). */
+    val grid = MutableStateFlow(false)
+
     private const val PREFS = "konnekta"
     private const val MAX_INBOX = 100
 
     fun load(ctx: Context) {
-        _selected.value = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString("selected", null)
+        val p = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        _selected.value = p.getString("selected", null)
+        grid.value = p.getBoolean("grid", false)
+    }
+
+    fun setGrid(ctx: Context, on: Boolean) {
+        grid.value = on
+        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("grid", on).apply()
     }
 
     fun select(ctx: Context, id: String?) {

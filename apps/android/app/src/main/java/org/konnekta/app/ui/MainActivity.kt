@@ -83,6 +83,7 @@ class MainActivity : ComponentActivity() {
         Store.load(this)
         KonnektaService.start(this)
         val ui = Ui(::toast, ::clipboardText)
+        handle(intent)
         setContent {
             KonnektaTheme {
                 CompositionLocalProvider(LocalUi provides ui) { App() }
@@ -91,6 +92,24 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        handle(intent)
+    }
+
+    /** "Accetta" in a stream-request notification opens the app to finish the start. */
+    private fun handle(i: android.content.Intent?) {
+        if (i?.action == ACTION_ACCEPT_STREAM) {
+            val dev = i.getStringExtra("device") ?: return
+            val plugin = i.getStringExtra("plugin") ?: return
+            NotificationAccept.stream.value = dev to plugin
+        }
+    }
+
+    companion object {
+        const val ACTION_ACCEPT_STREAM = "org.konnekta.app.ACCEPT_STREAM_UI"
+    }
 
     /** In Presentation the volume keys change slide (up = next, down = previous). */
     override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
@@ -113,9 +132,8 @@ class MainActivity : ComponentActivity() {
 }
 
 enum class Tab(val label: String, val icon: ImageVector) {
-    Inbox("Attività", Icons.Filled.Inbox),
-    Send("Invia", Icons.AutoMirrored.Filled.Send),
     Control("Controllo", Icons.Filled.Tune),
+    Send("Invia", Icons.AutoMirrored.Filled.Send),
     Computers("Computer", Icons.Filled.Devices),
 }
 
@@ -136,9 +154,7 @@ private fun App() {
     val ui = LocalUi.current
     val devices by Store.devices.collectAsState()
     val selected by Store.selected.collectAsState()
-    val inbox by Store.inbox.collectAsState()
     val prompt by KonnektaService.pairPrompt.collectAsState()
-    var tab by rememberSaveable { mutableStateOf(Tab.Inbox) }
     var route by remember { mutableStateOf<Route?>(null) }
 
     // Keep the device list fresh while the app is open.
@@ -185,34 +201,36 @@ private fun App() {
         return
     }
 
+    RequestDialogs()
+
+    // Tabs follow the swipe; tapping a tab scrolls the pager.
+    val pager = androidx.compose.foundation.pager.rememberPagerState(pageCount = { Tab.entries.size })
+    val scope = rememberCoroutineScope()
     Scaffold(
         bottomBar = {
             NavigationBar {
                 Tab.entries.forEach { t ->
                     NavigationBarItem(
-                        selected = tab == t,
-                        onClick = { tab = t },
-                        icon = {
-                            if (t == Tab.Inbox && inbox.isNotEmpty()) {
-                                BadgedBox(badge = { Badge { Text(inbox.size.coerceAtMost(99).toString()) } }) { Icon(t.icon, null) }
-                            } else {
-                                Icon(t.icon, null)
-                            }
-                        },
+                        selected = pager.currentPage == t.ordinal,
+                        onClick = { scope.launch { pager.animateScrollToPage(t.ordinal) } },
+                        icon = { Icon(t.icon, null) },
                         label = { Text(t.label) },
                     )
                 }
             }
         },
     ) { pad ->
-        Column(Modifier.fillMaxSize().padding(pad).padding(horizontal = 16.dp)) {
-            Row(Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 4.dp)) { ScopeChip(devices, current) }
+        Column(Modifier.fillMaxSize().padding(pad)) {
+            Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 4.dp)) { ScopeChip(devices, current) }
             val open = { r: Route -> route = r }
-            when (tab) {
-                Tab.Inbox -> InboxScreen(current, inbox, open)
-                Tab.Send -> SendScreen(current, open)
-                Tab.Control -> ControlScreen(current, open)
-                Tab.Computers -> ComputersScreen(devices, open)
+            androidx.compose.foundation.pager.HorizontalPager(pager, Modifier.fillMaxSize(), beyondViewportPageCount = 1) { page ->
+                Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+                    when (Tab.entries[page]) {
+                        Tab.Control -> ControlScreen(current, open)
+                        Tab.Send -> SendScreen(current, open)
+                        Tab.Computers -> ComputersScreen(devices, open)
+                    }
+                }
             }
         }
     }

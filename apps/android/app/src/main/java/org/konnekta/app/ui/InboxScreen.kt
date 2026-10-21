@@ -52,114 +52,6 @@ import java.text.DateFormat
 import java.util.Date
 
 @Composable
-fun InboxScreen(current: JSONObject?, items: List<InboxItem>, open: (Route) -> Unit) {
-    val ctx = LocalContext.current
-    val ui = LocalUi.current
-    val scope = rememberCoroutineScope()
-    val approval by PendingApprovals.current.collectAsState()
-    val media by Store.pcMedia.collectAsState()
-    val transfers by Store.transfers.collectAsState()
-    val ring = items.firstOrNull { it.kind == "ring" }
-    val photo = items.firstOrNull { it.kind == "photo" }
-    val rest = items.filter { it.kind != "ring" && it.kind != "photo" }
-    val playing = current?.let { media[it.optString("id")] }?.takeIf { it.optString("title").isNotEmpty() }
-    val streamAsks by org.konnekta.app.service.Streams.pending.collectAsState()
-    val streamsLive by org.konnekta.app.service.Streams.live.collectAsState()
-    val urgent = listOfNotNull(approval, ring, photo).size + streamAsks.size
-
-    LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        item {
-            val n = urgent + rest.size
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 6.dp)) {
-                StatusDot(urgent == 0)
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    when {
-                        urgent > 0 -> if (urgent == 1) "1 richiesta ti aspetta" else "$urgent richieste ti aspettano"
-                        n == 0 -> "Niente di nuovo"
-                        else -> "$n elementi"
-                    },
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-            }
-        }
-        approval?.let { a ->
-            item {
-                MasterTile(
-                    label = if (a.kind == "enroll") "Registrazione" else "Da approvare",
-                    meta = a.body.optString("service"),
-                    title = if (a.kind == "enroll") "Registrare il telefono per sudo" else "Approva ${a.body.optString("service")}",
-                    text = "${a.body.optString("user")} su ${a.body.optString("host")} · ${a.deviceName}",
-                    color = LocalStatus.current.warn,
-                ) {
-                    Button(onClick = {
-                        ctx.startActivity(Intent(ctx, ApproveActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                    }) { Text("Rivedi") }
-                }
-            }
-        }
-        ring?.let { r ->
-            item {
-                MasterTile("Suoneria", r.deviceName, r.title, "Il telefono sta suonando a tutto volume.", LocalStatus.current.danger) {
-                    Button(onClick = { KonnektaService.stopRinging(ctx) }) { Text("L'ho trovato") }
-                }
-            }
-        }
-        items(streamAsks, key = { "ask" + it.key }) { StreamRequestTile(it) }
-        items(streamsLive.values.toList(), key = { "live" + it.key }) { LiveStreamCard(it) }
-        photo?.let { p ->
-            item {
-                MasterTile("Fotocamera", p.deviceName, p.title, "La foto o il testo vanno solo a ${p.deviceName}.", MaterialTheme.colorScheme.secondary) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = {
-                            Store.dismiss(p.id)
-                            scope.launch { send(ui.toast, p.deviceId, Types.PHOTO, JSONObject().put("cancelled", true)) }
-                        }) { Text("Non ora") }
-                        Button(onClick = {
-                            ctx.startActivity(Intent(ctx, PhotoActivity::class.java)
-                                .putExtra(PhotoActivity.EXTRA_DEVICE, p.deviceId)
-                                .putExtra(PhotoActivity.EXTRA_MODE, p.target ?: "photo"))
-                        }) { Text("Apri fotocamera") }
-                    }
-                }
-            }
-        }
-        if (transfers.isNotEmpty()) {
-            items(transfers.values.toList()) { label -> SmallCard("In corso", MaterialTheme.colorScheme.secondary, label, "", null) }
-        }
-        playing?.let { m ->
-            item {
-                val id = current!!.optString("id")
-                val isPlaying = m.optBoolean("isPlaying")
-                SmallCard(
-                    if (isPlaying) "In riproduzione" else "In pausa",
-                    LocalStatus.current.ok,
-                    m.optString("title"),
-                    listOf(m.optString("artist"), m.optString("player")).filter { it.isNotEmpty() }.joinToString(" · "),
-                    onClick = { open(Route.Media) },
-                ) {
-                    FilledTonalIconButton(onClick = {
-                        scope.launch { send(ui.toast, id, Types.MEDIA_REQUEST, JSONObject().put("action", "PlayPause").apply {
-                            m.optString("player").takeIf { it.isNotEmpty() }?.let { put("player", it) }
-                        }) }
-                    }) { Icon(if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow, null) }
-                }
-            }
-        }
-        items(rest, key = { it.id }) { it -> InboxCard(it) }
-        if (rest.isEmpty() && urgent == 0 && playing == null && streamsLive.isEmpty()) {
-            item {
-                Hint(
-                    if (current == null) "Associa un computer dalla scheda Computer per iniziare."
-                    else "Qui compaiono appunti, file e link che arrivano da ${current.optString("name")}, e le richieste che hanno bisogno di te.",
-                    Modifier.padding(top = 24.dp),
-                )
-            }
-        }
-    }
-}
-
-@Composable
 private fun MasterTile(label: String, meta: String, title: String, text: String, color: Color, action: @Composable () -> Unit) {
     Surface(
         shape = RoundedCornerShape(16.dp),
@@ -184,7 +76,7 @@ private fun MasterTile(label: String, meta: String, title: String, text: String,
 }
 
 @Composable
-private fun SmallCard(
+fun SmallCard(
     label: String,
     color: Color,
     title: String,
@@ -215,7 +107,7 @@ private fun SmallCard(
 }
 
 @Composable
-private fun InboxCard(item: InboxItem) {
+fun InboxCard(item: InboxItem) {
     val ctx = LocalContext.current
     val ui = LocalUi.current
     val s = LocalStatus.current

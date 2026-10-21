@@ -62,6 +62,8 @@ import androidx.compose.material.icons.filled.Work
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.Headphones
+import androidx.compose.material.icons.filled.Keyboard
+import androidx.compose.material.icons.filled.KeyboardHide
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.ScreenShare
 import androidx.compose.material.icons.filled.DesktopWindows
@@ -142,73 +144,67 @@ fun ControlScreen(current: JSONObject?, open: (Route) -> Unit) {
             if (on(plugin)) Thread { Streams.stop(id, plugin) }.start()
             else start(Streams.newRequest(id, name, plugin, params))
         }
+        /** A stream: highlighted while it runs, tap to stop. */
+        fun stream(icon: ImageVector, title: String, subtitle: String, plugin: String, enabled: Boolean,
+                   trailing: (@Composable () -> Unit)? = null, onClick: () -> Unit) =
+            Fn(icon, title, if (on(plugin)) "Dal vivo · tocca per fermare" else subtitle, enabled || on(plugin), on(plugin), trailing, onClick)
         if (!online) Hint("$name non è raggiungibile: i comandi si attivano quando si collega.")
 
         SectionTitle("Al computer")
-        StreamCard(Icons.Filled.Mic, "Microfono", "Il telefono diventa il microfono di $name", on("microphone"), can(Types.MICROPHONE)) {
-            toggle("microphone")
-        }
-        StreamCard(Icons.Filled.Videocam, "Webcam", "La fotocamera ${if (front) "anteriore" else "posteriore"} come webcam",
-            on("camera"), can(Types.CAMERA),
-            extra = {
-                TextButton(onClick = {
-                    front = !front
-                    prefs.edit().putBoolean("cameraFront", front).apply()
-                }, enabled = !on("camera")) { Text(if (front) "Anteriore" else "Posteriore") }
+        FnList(listOf(
+            stream(Icons.Filled.Mic, "Microfono", "Il telefono diventa il microfono di $name", "microphone", can(Types.MICROPHONE)) {
+                toggle("microphone")
             },
-        ) { toggle("camera", JSONObject().put("facing", if (front) "front" else "back")) }
-        StreamCard(Icons.Filled.ScreenShare, "Schermo del telefono", if (screenAudio) "Schermo e audio del telefono sul computer" else "Lo schermo del telefono sul computer",
-            on("phonescreen"), can(Types.PHONE_SCREEN),
-            extra = {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("audio", style = MaterialTheme.typography.labelSmall)
-                    androidx.compose.material3.Switch(screenAudio, {
-                        screenAudio = it
-                        prefs.edit().putBoolean("screenAudio", it).apply()
-                    }, enabled = !on("phonescreen"), modifier = Modifier.padding(start = 4.dp))
-                }
-            },
-        ) { toggle("phonescreen", JSONObject().put("withAudio", screenAudio)) }
-        StreamCard(Icons.Filled.Headphones, "Audio del telefono", "Musica, video e giochi del telefono dalle casse di $name",
-            on("phoneaudio") && !on("phonescreen"), can(Types.PHONE_AUDIO) && android.os.Build.VERSION.SDK_INT >= 29) {
-            toggle("phoneaudio")
-        }
+            stream(Icons.Filled.Videocam, "Webcam", "La fotocamera ${if (front) "anteriore" else "posteriore"} come webcam", "camera",
+                can(Types.CAMERA),
+                trailing = {
+                    TextButton(onClick = {
+                        front = !front
+                        prefs.edit().putBoolean("cameraFront", front).apply()
+                    }, enabled = !on("camera")) { Text(if (front) "Anteriore" else "Posteriore") }
+                },
+            ) { toggle("camera", JSONObject().put("facing", if (front) "front" else "back")) },
+            stream(Icons.Filled.ScreenShare, "Schermo del telefono",
+                if (screenAudio) "Schermo e audio del telefono sul computer" else "Lo schermo del telefono sul computer",
+                "phonescreen", can(Types.PHONE_SCREEN),
+                trailing = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("audio", style = MaterialTheme.typography.labelSmall)
+                        androidx.compose.material3.Switch(screenAudio, {
+                            screenAudio = it
+                            prefs.edit().putBoolean("screenAudio", it).apply()
+                        }, enabled = !on("phonescreen"), modifier = Modifier.padding(start = 4.dp))
+                    }
+                },
+            ) { toggle("phonescreen", JSONObject().put("withAudio", screenAudio)) },
+            Fn(Icons.Filled.Headphones, "Audio del telefono",
+                if (on("phoneaudio") && !on("phonescreen")) "Dal vivo · tocca per fermare" else "Musica, video e giochi del telefono dalle casse di $name",
+                enabled = can(Types.PHONE_AUDIO) && android.os.Build.VERSION.SDK_INT >= 29,
+                highlight = on("phoneaudio") && !on("phonescreen")) { toggle("phoneaudio") },
+        ))
 
         SectionTitle("Dal computer")
-        ActionCard(Icons.Filled.DesktopWindows, "Desktop remoto", "Vedi e controlla lo schermo del computer", enabled = can(Types.DESKTOP)) { open(Route.Desktop) }
-        StreamCard(Icons.Filled.Speaker, "Audio del computer", "Ascolta sul telefono l'audio di $name", on("systemaudio"), can(Types.SYSTEM_AUDIO)) {
-            if (on("systemaudio")) Thread { Streams.stop(id, "systemaudio") }.start() else Streams.request(id, "systemaudio")
-        }
+        FnList(listOf(
+            Fn(Icons.Filled.DesktopWindows, "Desktop remoto", "Vedi e controlla lo schermo del computer", can(Types.DESKTOP)) { open(Route.Desktop) },
+            stream(Icons.Filled.Speaker, "Audio del computer", "Ascolta sul telefono l'audio di $name", "systemaudio", can(Types.SYSTEM_AUDIO)) {
+                if (on("systemaudio")) Thread { Streams.stop(id, "systemaudio") }.start() else Streams.request(id, "systemaudio")
+            },
+        ))
 
         SectionTitle("Comandi")
-        ActionCard(Icons.Filled.MusicNote, "Media", "Musica e video in riproduzione, volume", enabled = can(Types.MEDIA_REQUEST)) { open(Route.Media) }
-        ActionCard(Icons.Filled.TouchApp, "Touchpad e tastiera", "Muovi il puntatore e scrivi sul computer", enabled = can(Types.INPUT)) { open(Route.Touchpad) }
-        ActionCard(Icons.Filled.Slideshow, "Presentazione", "Avanti e indietro (anche con i tasti del volume), puntatore laser", enabled = can(Types.PRESENTER)) { open(Route.Presenter) }
+        FnList(listOf(
+            Fn(Icons.Filled.MusicNote, "Media e audio", "Riproduzione, volume, uscite e ingressi audio", can(Types.MEDIA_REQUEST)) { open(Route.Media) },
+            Fn(Icons.Filled.TouchApp, "Touchpad e tastiera", "Muovi il puntatore e scrivi sul computer", can(Types.INPUT)) { open(Route.Touchpad) },
+            Fn(Icons.Filled.Slideshow, "Presentazione", "Avanti e indietro (anche con i tasti del volume), puntatore laser", can(Types.PRESENTER)) { open(Route.Presenter) },
+        ))
 
         SectionTitle("Automazioni")
-        ActionCard(Icons.Filled.Dashboard, "Mobile Deck", "I pulsanti configurati sul computer", enabled = can(Types.DECK_REQUEST)) { open(Route.Deck) }
-        ActionCard(Icons.Filled.Terminal, "Comandi personalizzati", "Avvia i comandi configurati sul computer", enabled = can(Types.COMMANDS_REQUEST)) { open(Route.Commands) }
+        FnList(listOf(
+            Fn(Icons.Filled.Dashboard, "Mobile Deck", "I pulsanti configurati sul computer", can(Types.DECK_REQUEST)) { open(Route.Deck) },
+            Fn(Icons.Filled.Terminal, "Comandi personalizzati", "Avvia i comandi configurati sul computer", can(Types.COMMANDS_REQUEST)) { open(Route.Commands) },
+        ))
         Hint("Le voci spente richiedono il permesso corrispondente sul computer (Dispositivi › Permessi).")
     }
-}
-
-/** A stream that can be on or off: highlighted while it runs, tap to stop. */
-@Composable
-private fun StreamCard(
-    icon: ImageVector,
-    title: String,
-    subtitle: String,
-    on: Boolean,
-    enabled: Boolean,
-    extra: (@Composable () -> Unit)? = null,
-    onClick: () -> Unit,
-) {
-    ActionCard(
-        icon, title, if (on) "Dal vivo · tocca per fermare" else subtitle,
-        enabled = enabled || on, highlight = on,
-        trailing = extra,
-        onClick = onClick,
-    )
 }
 
 // --- media ---------------------------------------------------------------------
@@ -337,6 +333,7 @@ fun ColumnScope.TouchpadScreen(current: JSONObject?, onBack: () -> Unit) {
         }
     }
     var locked by remember { mutableStateOf(setOf<Mod>()) }
+    var showKeys by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(true) }
     fun mods(b: JSONObject) = b.apply { locked.forEach { put(it.field, true) } }
     fun emit(b: JSONObject) { queue.trySend(b) }
     fun special(code: Int) = emit(mods(JSONObject().put("specialKey", code)))
@@ -414,10 +411,27 @@ fun ColumnScope.TouchpadScreen(current: JSONObject?, onBack: () -> Unit) {
 
     androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth().weight(1f)) {
         if (maxWidth > maxHeight) {
-            // Landscape: the whole left side is the touchpad, keys in a column on the right.
+            // Landscape: the touchpad on the left, keys in a column on the right that can be hidden.
             Row(Modifier.fillMaxSize().padding(vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                pad(Modifier.weight(1f).fillMaxSize())
-                Column(Modifier.width(320.dp).fillMaxSize().verticalScroll(rememberScrollState())) {
+                Box(Modifier.weight(1f).fillMaxSize()) {
+                    pad(Modifier.fillMaxSize())
+                    Surface(
+                        onClick = { showKeys = !showKeys },
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                        modifier = Modifier.align(Alignment.TopEnd).padding(8.dp),
+                    ) {
+                        Icon(if (showKeys) Icons.Filled.KeyboardHide else Icons.Filled.Keyboard,
+                            if (showKeys) "Nascondi i tasti" else "Mostra i tasti", Modifier.padding(10.dp))
+                    }
+                    if (!showKeys) Surface(
+                        onClick = onBack,
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                        modifier = Modifier.align(Alignment.TopStart).padding(8.dp),
+                    ) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Indietro", Modifier.padding(10.dp)) }
+                }
+                if (showKeys) Column(Modifier.width(320.dp).fillMaxSize().verticalScroll(rememberScrollState())) {
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 8.dp)) {
                         BackButton(onBack)
                         Text("Touchpad · $name", style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)

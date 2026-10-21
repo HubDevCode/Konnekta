@@ -347,7 +347,8 @@ impl StreamPlugin {
             .iter()
             .rposition(|q| params.height == 0 || q.height <= params.height)
             .unwrap_or(0);
-        let start = max_level.min(2);
+        // Start sharp (1080p30 on a LAN); congestion steps it down.
+        let start = max_level.min(3);
         let mut abr = AdaptiveBitrate::new(DEFAULT_LADDER, start, max_level);
         loop {
             let q = abr.current();

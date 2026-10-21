@@ -46,6 +46,7 @@ class PhotoActivity : ComponentActivity() {
             if (ok && file.length() > 0) deliver() else answer(JSONObject().put("cancelled", true))
             file.parentFile?.deleteRecursively()
             Store.dismissKind("photo")
+            getSystemService(android.app.NotificationManager::class.java).cancel(org.konnekta.app.service.KonnektaService.N_PHOTO)
             finish()
         }
     }

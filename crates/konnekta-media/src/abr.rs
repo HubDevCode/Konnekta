@@ -13,29 +13,29 @@ pub struct Quality {
 
 pub const DEFAULT_LADDER: &[Quality] = &[
     Quality {
-        height: 360,
-        fps: 15,
-        bitrate_kbps: 400,
-    },
-    Quality {
         height: 480,
         fps: 24,
-        bitrate_kbps: 900,
+        bitrate_kbps: 1500,
     },
     Quality {
         height: 720,
         fps: 30,
-        bitrate_kbps: 2000,
+        bitrate_kbps: 3500,
+    },
+    Quality {
+        height: 900,
+        fps: 30,
+        bitrate_kbps: 6000,
     },
     Quality {
         height: 1080,
         fps: 30,
-        bitrate_kbps: 4500,
+        bitrate_kbps: 8000,
     },
     Quality {
         height: 1080,
         fps: 60,
-        bitrate_kbps: 8000,
+        bitrate_kbps: 12000,
     },
 ];
 
@@ -68,7 +68,7 @@ impl AdaptiveBitrate {
             stable_since: now,
             last_change: now - Duration::from_secs(60),
             up_after: Duration::from_secs(8),
-            min_interval: Duration::from_secs(2),
+            min_interval: Duration::from_secs(5),
         }
     }
 
@@ -82,12 +82,14 @@ impl AdaptiveBitrate {
 
     /// Feed a measurement; returns the new quality if it changed.
     pub fn update(&mut self, s: NetworkSample, now: Instant) -> Option<Quality> {
-        let congested = s.dropped > 0 || s.queue_delay > Duration::from_millis(150);
+        // Each change restarts the capture (a visible pause), so only real,
+        // sustained congestion counts: a keyframe burst is not one.
+        let congested = s.dropped > 3 || s.queue_delay > Duration::from_millis(300);
         if congested {
             self.stable_since = now;
             if self.level > 0 && now.duration_since(self.last_change) >= self.min_interval {
                 // Severe congestion: drop two steps.
-                let step = if s.queue_delay > Duration::from_millis(500) || s.dropped > 10 {
+                let step = if s.queue_delay > Duration::from_millis(800) || s.dropped > 15 {
                     2
                 } else {
                     1
@@ -125,20 +127,31 @@ mod tests {
         let t0 = Instant::now();
         let mut abr = AdaptiveBitrate::new(DEFAULT_LADDER, 3, 4);
         assert_eq!(abr.current().height, 1080);
-        let q = abr.update(
-            NetworkSample {
-                queue_delay: Duration::from_millis(200),
-                dropped: 0,
-            },
-            t0,
-        );
-        assert_eq!(q.unwrap().height, 720);
-        // Within min_interval: no further change.
+        // A short burst is not congestion.
         assert!(
             abr.update(
                 NetworkSample {
                     queue_delay: Duration::from_millis(200),
-                    dropped: 1
+                    dropped: 1,
+                },
+                t0,
+            )
+            .is_none()
+        );
+        let q = abr.update(
+            NetworkSample {
+                queue_delay: Duration::from_millis(400),
+                dropped: 0,
+            },
+            t0,
+        );
+        assert_eq!(q.unwrap().height, 900);
+        // Within min_interval: no further change.
+        assert!(
+            abr.update(
+                NetworkSample {
+                    queue_delay: Duration::from_millis(400),
+                    dropped: 5
                 },
                 t0 + Duration::from_millis(500)
             )
@@ -150,14 +163,14 @@ mod tests {
                 queue_delay: Duration::from_secs(1),
                 dropped: 20,
             },
-            t0 + Duration::from_secs(3),
+            t0 + Duration::from_secs(6),
         );
         assert_eq!(abr.level(), 0);
-        assert_eq!(q.unwrap().height, 360);
+        assert_eq!(q.unwrap().height, 480);
         // Stable for a while -> up one.
         let ok = NetworkSample::default();
-        assert!(abr.update(ok, t0 + Duration::from_secs(5)).is_none());
-        assert!(abr.update(ok, t0 + Duration::from_secs(12)).is_some());
+        assert!(abr.update(ok, t0 + Duration::from_secs(8)).is_none());
+        assert!(abr.update(ok, t0 + Duration::from_secs(15)).is_some());
         assert_eq!(abr.level(), 1);
     }
 

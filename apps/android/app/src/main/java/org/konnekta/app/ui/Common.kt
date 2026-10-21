@@ -8,7 +8,9 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -26,6 +28,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -223,3 +226,52 @@ fun Pill(text: String, color: Color) {
 
 @Composable
 fun BackButton(onBack: () -> Unit) = IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Indietro") }
+
+/** One feature button; shown as a row or as a tile depending on the setting. */
+data class Fn(
+    val icon: ImageVector,
+    val title: String,
+    val subtitle: String,
+    val enabled: Boolean = true,
+    val highlight: Boolean = false,
+    val trailing: (@Composable () -> Unit)? = null,
+    val onClick: () -> Unit,
+)
+
+/** A group of features: one per line, or two per row with the grid setting. */
+@Composable
+fun FnList(items: List<Fn>) {
+    val grid by Store.grid.collectAsState()
+    if (!grid) {
+        items.forEach { ActionCard(it.icon, it.title, it.subtitle, it.enabled, it.highlight, it.trailing, it.onClick) }
+        return
+    }
+    items.chunked(2).forEach { row ->
+        Row(Modifier.fillMaxWidth().height(androidx.compose.foundation.layout.IntrinsicSize.Max), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            row.forEach { FnTile(it, Modifier.weight(1f).fillMaxHeight()) }
+            if (row.size == 1) Spacer(Modifier.weight(1f))
+        }
+    }
+}
+
+@Composable
+private fun FnTile(f: Fn, modifier: Modifier) {
+    val scheme = MaterialTheme.colorScheme
+    Surface(
+        onClick = f.onClick,
+        enabled = f.enabled,
+        shape = RoundedCornerShape(14.dp),
+        color = if (f.highlight) scheme.primaryContainer else scheme.surfaceContainerLow,
+        border = BorderStroke(1.dp, LocalStatus.current.border),
+        modifier = modifier.padding(vertical = 4.dp),
+    ) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Icon(f.icon, null, tint = if (f.enabled) scheme.primary else scheme.onSurfaceVariant.copy(alpha = .5f))
+            Text(f.title, style = MaterialTheme.typography.titleSmall,
+                color = if (f.enabled) scheme.onSurface else scheme.onSurfaceVariant.copy(alpha = .6f))
+            Text(f.subtitle, style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant,
+                maxLines = 3, overflow = TextOverflow.Ellipsis)
+            f.trailing?.invoke()
+        }
+    }
+}
