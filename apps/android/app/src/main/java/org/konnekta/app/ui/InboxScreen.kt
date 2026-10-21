@@ -60,9 +60,10 @@ fun InboxScreen(current: JSONObject?, items: List<InboxItem>, open: (Route) -> U
     val media by Store.pcMedia.collectAsState()
     val transfers by Store.transfers.collectAsState()
     val ring = items.firstOrNull { it.kind == "ring" }
-    val rest = items.filter { it.kind != "ring" }
+    val photo = items.firstOrNull { it.kind == "photo" }
+    val rest = items.filter { it.kind != "ring" && it.kind != "photo" }
     val playing = current?.let { media[it.optString("id")] }?.takeIf { it.optString("title").isNotEmpty() }
-    val urgent = listOfNotNull(approval, ring).size
+    val urgent = listOfNotNull(approval, ring, photo).size
 
     LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item {
@@ -99,6 +100,23 @@ fun InboxScreen(current: JSONObject?, items: List<InboxItem>, open: (Route) -> U
             item {
                 MasterTile("Suoneria", r.deviceName, r.title, "Il telefono sta suonando a tutto volume.", LocalStatus.current.danger) {
                     Button(onClick = { KonnektaService.stopRinging(ctx) }) { Text("L'ho trovato") }
+                }
+            }
+        }
+        photo?.let { p ->
+            item {
+                MasterTile("Fotocamera", p.deviceName, p.title, "La foto o il testo vanno solo a ${p.deviceName}.", MaterialTheme.colorScheme.secondary) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = {
+                            Store.dismiss(p.id)
+                            scope.launch { send(ui.toast, p.deviceId, Types.PHOTO, JSONObject().put("cancelled", true)) }
+                        }) { Text("Non ora") }
+                        Button(onClick = {
+                            ctx.startActivity(Intent(ctx, PhotoActivity::class.java)
+                                .putExtra(PhotoActivity.EXTRA_DEVICE, p.deviceId)
+                                .putExtra(PhotoActivity.EXTRA_MODE, p.target ?: "photo"))
+                        }) { Text("Apri fotocamera") }
+                    }
                 }
             }
         }

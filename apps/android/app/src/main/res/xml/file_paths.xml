@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Photos taken for a computer live in the cache until they are sent. -->
+<paths>
+    <cache-path name="photo" path="photo/" />
+</paths>

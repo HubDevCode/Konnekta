@@ -54,6 +54,7 @@ class KonnektaService : Service() {
         private const val N_APPROVE = 4
         private const val N_PAIR = 5
         private const val N_SHARE = 6
+        private const val N_PHOTO = 7
         const val ACTION_STOP_RING = "org.konnekta.app.STOP_RING"
 
         /** Pairing request waiting for the user: {deviceId, deviceName, verificationKey, confirm}. */
@@ -61,6 +62,13 @@ class KonnektaService : Service() {
 
         fun start(context: Context) {
             context.startForegroundService(Intent(context, KonnektaService::class.java))
+        }
+
+        const val ACTION_REFRESH = "org.konnekta.app.REFRESH"
+
+        /** Phone permissions changed: (re)start the features that need them. */
+        fun refreshFeatures(context: Context) {
+            context.startService(Intent(context, KonnektaService::class.java).setAction(ACTION_REFRESH))
         }
 
         fun stopRinging(context: Context) {
@@ -77,6 +85,21 @@ class KonnektaService : Service() {
     private var ringtone: Ringtone? = null
     private var lastBattery: JSONObject? = null
     private val nm by lazy { getSystemService(NotificationManager::class.java) }
+    private var media: PhoneMedia? = null
+    private var calls: Calls? = null
+    private var sms: Sms? = null
+    private var dnd: Dnd? = null
+    private var shots: Screenshots? = null
+
+    /** Android integrations; each one checks its own permission. */
+    private fun restartFeatures() {
+        media?.stop(); calls?.stop(); sms?.stop(); dnd?.stop(); shots?.stop()
+        media = PhoneMedia(this).also { it.start() }
+        calls = Calls(this).also { it.start() }
+        sms = Sms(this).also { it.start() }
+        dnd = Dnd(this).also { it.start() }
+        shots = Screenshots(this).also { it.start() }
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -100,6 +123,7 @@ class KonnektaService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP_RING) stopRing()
+        if (intent?.action == ACTION_REFRESH) restartFeatures()
         return START_STICKY
     }
 
@@ -113,7 +137,7 @@ class KonnektaService : Service() {
                 .put("deviceName", deviceName())
                 .put("deviceType", "phone")
                 .put("downloadDir", dl.absolutePath)
-                .put("callControl", false)
+                .put("callControl", true)
             Core.start(cfg, File(filesDir, "konnekta").apply { mkdirs() }.absolutePath)
         } catch (e: Throwable) {
             Log.e(TAG, "core failed to start", e)
@@ -122,7 +146,10 @@ class KonnektaService : Service() {
         }
         KonnektaApp.core = core
         refreshDevices(core)
-        main.post { registerReceiver(battery, IntentFilter(Intent.ACTION_BATTERY_CHANGED)) }
+        main.post {
+            registerReceiver(battery, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+            restartFeatures()
+        }
         while (running) {
             val e = core.nextEvent(500) ?: continue
             try {
@@ -150,7 +177,10 @@ class KonnektaService : Service() {
                 nm.cancel(N_PAIR)
             }
             "unpaired" -> ApproveKeys(this).remove(e.optString("deviceId"))
-            "deviceConnected" -> lastBattery?.let { b -> sendToAll(core, Types.BATTERY, b) }
+            "deviceConnected" -> {
+                lastBattery?.let { b -> sendToAll(core, Types.BATTERY, b) }
+                dnd?.sendState(e.optString("deviceId"))
+            }
         }
         when (e.optString("event")) {
             "deviceConnected", "deviceDisconnected", "deviceUpdated", "paired", "unpaired", "pairRejected" -> refreshDevices(core)
@@ -218,7 +248,35 @@ class KonnektaService : Service() {
                 NotificationForwarder.reply(body.optString("requestReplyId"), body.optString("message"))
             Types.NOTIFICATION_ACTION ->
                 NotificationForwarder.action(body.optString("key"), body.optString("action"))
+            Types.MEDIA_REQUEST -> media?.handle(deviceId, body)
+            Types.CALL_MUTE -> main.post { calls?.muteRinger() }
+            Types.CALL_ACTION -> main.post { calls?.action(body.optString("action")) }
+            Types.SMS_CONVERSATIONS_REQUEST -> sms?.conversations(deviceId)
+            Types.SMS_THREAD_REQUEST -> sms?.thread(deviceId, body)
+            Types.SMS_SEND -> sms?.send(body)
+            Types.DND -> main.post { dnd?.apply(body) }
+            Types.SCREENSHOT -> shots?.configure(deviceId, body)
+            Types.PHOTO_REQUEST -> onPhotoRequest(core, deviceId, body.optString("mode", "photo"))
         }
+    }
+
+    // --- photo / scan / QR on request -----------------------------------------
+
+    private fun onPhotoRequest(core: Core, deviceId: String, mode: String) {
+        val what = when (mode) {
+            "scan" -> "di scansionare un testo"
+            "qr" -> "di leggere un codice QR"
+            else -> "una foto"
+        }
+        val from = name(core, deviceId)
+        Store.dismissKind("photo")
+        Store.item(deviceId, "photo", "$from chiede $what", target = mode)
+        // Android does not let a background service open the camera: ask with a notification.
+        val open = Intent(this, org.konnekta.app.ui.PhotoActivity::class.java)
+            .putExtra(org.konnekta.app.ui.PhotoActivity.EXTRA_DEVICE, deviceId)
+            .putExtra(org.konnekta.app.ui.PhotoActivity.EXTRA_MODE, mode)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        notify(N_PHOTO, "$from chiede $what", "Tocca per aprire la fotocamera", open)
     }
 
     // --- files and links -------------------------------------------------------
@@ -410,6 +468,7 @@ class KonnektaService : Service() {
     override fun onDestroy() {
         running = false
         stopRing()
+        media?.stop(); calls?.stop(); sms?.stop(); dnd?.stop(); shots?.stop()
         runCatching { unregisterReceiver(battery) }
         multicast?.release()
         io.shutdown()

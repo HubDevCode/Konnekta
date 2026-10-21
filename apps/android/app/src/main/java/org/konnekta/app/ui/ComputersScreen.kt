@@ -49,7 +49,18 @@ import androidx.lifecycle.LifecycleEventObserver
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONObject
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material.icons.filled.Call
+import androidx.compose.material.icons.filled.DoNotDisturbOn
+import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.Screenshot
+import androidx.compose.material.icons.filled.Sms
+import org.konnekta.app.service.Calls
+import org.konnekta.app.service.Dnd
 import org.konnekta.app.service.KonnektaService
+import org.konnekta.app.service.Screenshots
+import org.konnekta.app.service.Sms
 import org.konnekta.app.service.NotificationForwarder
 import org.konnekta.app.state.Store
 
@@ -156,6 +167,7 @@ fun ComputersScreen(devices: List<JSONObject>, open: (Route) -> Unit) {
         }
         item { SectionTitle("Impostazioni") }
         item { NotificationsSetting() }
+        item { PhoneFeatures() }
         item {
             ActionCard(Icons.Filled.Info, "Informazioni", me?.let { "Konnekta ${it.optString("version", "0.1")} · ${it.optString("deviceId").take(8)}" } ?: "Konnekta") {}
         }
@@ -178,6 +190,56 @@ private fun NotificationsSetting() {
         if (on) "Attivo: i computer con il permesso Notifiche le ricevono" else "Mostra sul computer le notifiche del telefono",
         trailing = { Switch(on, { ctx.startActivity(NotificationForwarder.settingsIntent()) }) },
     ) { ctx.startActivity(NotificationForwarder.settingsIntent()) }
+}
+
+/**
+ * Android permissions behind each phone feature. The computer still needs
+ * its own Konnekta permission (Calls, SMS…) on top of these.
+ */
+@Composable
+private fun PhoneFeatures() {
+    val ctx = LocalContext.current
+    var tick by remember { mutableStateOf(0) }
+    val owner = LocalLifecycleOwner.current
+    DisposableEffect(owner) {
+        val obs = LifecycleEventObserver { _, e -> if (e == Lifecycle.Event.ON_RESUME) tick++ }
+        owner.lifecycle.addObserver(obs)
+        onDispose { owner.lifecycle.removeObserver(obs) }
+    }
+    val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+        tick++
+        KonnektaService.refreshFeatures(ctx)
+    }
+    fun has(vararg p: String) = p.all { ctx.checkSelfPermission(it) == android.content.pm.PackageManager.PERMISSION_GRANTED }
+    @Suppress("UNUSED_EXPRESSION") tick
+    val listener = NotificationForwarder.enabled(ctx)
+    Column {
+        Feature(Icons.Filled.MusicNote, "Media del telefono", "Controlla dal computer la musica del telefono (usa l'inoltro notifiche)", listener) {
+            ctx.startActivity(NotificationForwarder.settingsIntent())
+        }
+        Feature(Icons.Filled.Call, "Chiamate", "Chi chiama, rispondi o rifiuta dal computer", has(*Calls.PERMISSIONS)) { ask.launch(Calls.PERMISSIONS) }
+        Feature(Icons.Filled.Sms, "SMS", "Leggi e invia messaggi dal computer", has(*Sms.PERMISSIONS)) { ask.launch(Sms.PERMISSIONS) }
+        Feature(Icons.Filled.Screenshot, "Screenshot sul computer", "Ogni screenshot del telefono arriva sul computer", has(Screenshots.PERMISSION)) {
+            ask.launch(arrayOf(Screenshots.PERMISSION))
+        }
+        Feature(Icons.Filled.DoNotDisturbOn, "Non disturbare dal computer", "Il computer può attivarlo anche sul telefono", Dnd.hasAccess(ctx)) {
+            ctx.startActivity(Dnd.accessIntent())
+        }
+    }
+    // Restart the phone features only when a grant actually changed.
+    val state = listOf(listener, has(*Calls.PERMISSIONS), has(*Sms.PERMISSIONS), has(Screenshots.PERMISSION), Dnd.hasAccess(ctx))
+    var seen by remember { mutableStateOf(state) }
+    LaunchedEffect(state) {
+        if (state != seen) {
+            seen = state
+            KonnektaService.refreshFeatures(ctx)
+        }
+    }
+}
+
+@Composable
+private fun Feature(icon: androidx.compose.ui.graphics.vector.ImageVector, title: String, subtitle: String, on: Boolean, grant: () -> Unit) {
+    ActionCard(icon, title, subtitle, trailing = { Switch(on, { if (!on) grant() }) }) { if (!on) grant() }
 }
 
 /** One paired computer: state, what it may do with this phone, unpair. */
