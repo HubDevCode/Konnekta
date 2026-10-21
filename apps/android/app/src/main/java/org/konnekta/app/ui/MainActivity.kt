@@ -107,6 +107,7 @@ sealed interface Route {
     data object Commands : Route
     data object Deck : Route
     data object Browse : Route
+    data object Desktop : Route
     data class Device(val id: String) : Route
 }
 
@@ -152,6 +153,7 @@ private fun App() {
                 Route.Commands -> CommandsScreen(current, back)
                 Route.Deck -> DeckScreen(current, back)
                 Route.Browse -> BrowseScreen(current, back)
+                Route.Desktop -> RemoteDesktopScreen(current, back)
                 is Route.Device -> DeviceScreen(r.id, back)
             }
         }

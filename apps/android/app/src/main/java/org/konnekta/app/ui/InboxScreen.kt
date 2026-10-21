@@ -63,7 +63,9 @@ fun InboxScreen(current: JSONObject?, items: List<InboxItem>, open: (Route) -> U
     val photo = items.firstOrNull { it.kind == "photo" }
     val rest = items.filter { it.kind != "ring" && it.kind != "photo" }
     val playing = current?.let { media[it.optString("id")] }?.takeIf { it.optString("title").isNotEmpty() }
-    val urgent = listOfNotNull(approval, ring, photo).size
+    val streamAsks by org.konnekta.app.service.Streams.pending.collectAsState()
+    val streamsLive by org.konnekta.app.service.Streams.live.collectAsState()
+    val urgent = listOfNotNull(approval, ring, photo).size + streamAsks.size
 
     LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item {
@@ -103,6 +105,8 @@ fun InboxScreen(current: JSONObject?, items: List<InboxItem>, open: (Route) -> U
                 }
             }
         }
+        items(streamAsks, key = { "ask" + it.key }) { StreamRequestTile(it) }
+        items(streamsLive.values.toList(), key = { "live" + it.key }) { LiveStreamCard(it) }
         photo?.let { p ->
             item {
                 MasterTile("Fotocamera", p.deviceName, p.title, "La foto o il testo vanno solo a ${p.deviceName}.", MaterialTheme.colorScheme.secondary) {
@@ -143,7 +147,7 @@ fun InboxScreen(current: JSONObject?, items: List<InboxItem>, open: (Route) -> U
             }
         }
         items(rest, key = { it.id }) { it -> InboxCard(it) }
-        if (rest.isEmpty() && urgent == 0 && playing == null) {
+        if (rest.isEmpty() && urgent == 0 && playing == null && streamsLive.isEmpty()) {
             item {
                 Hint(
                     if (current == null) "Associa un computer dalla scheda Computer per iniziare."

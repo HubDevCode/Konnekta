@@ -15,6 +15,8 @@ internal interface KonnektaLib : Library {
     fun konnekta_start(configJson: String, dataDir: String): Pointer?
     fun konnekta_call(h: Pointer, method: String, paramsJson: String): Pointer?
     fun konnekta_next_event(h: Pointer, timeoutMs: Int): Pointer?
+    fun konnekta_stream_write(h: Pointer, channel: Long, kind: Byte, flags: Byte, ptsUs: Long, data: ByteArray, len: Long): Int
+    fun konnekta_stream_read(h: Pointer, channel: Long, buf: ByteArray, cap: Long, meta: ByteArray, ptsUs: LongArray, timeoutMs: Int): Long
     fun konnekta_free_string(s: Pointer)
     fun konnekta_stop(h: Pointer)
 }
@@ -81,12 +83,39 @@ class Core private constructor(private val handle: Pointer) {
         call("sendPacket", JSONObject().put("deviceId", deviceId).put("type", type).put("body", body))
     }
 
+    /**
+     * Write one frame on a stream channel (see [Frame]): 0 sent, 1 dropped
+     * (peer not connected yet, or too slow), -1 channel gone.
+     */
+    fun streamWrite(channel: Long, kind: Int, flags: Int, ptsUs: Long, data: ByteArray, len: Int = data.size): Int = lock.read {
+        if (stopped) return -1
+        lib.konnekta_stream_write(handle, channel, kind.toByte(), flags.toByte(), ptsUs, data, len.toLong())
+    }
+
+    /**
+     * Read the next frame into [buf]: its length, 0 on timeout, -1 when the
+     * channel closed. [meta] gets kind and flags, [pts] the timestamp.
+     */
+    fun streamRead(channel: Long, buf: ByteArray, meta: ByteArray, pts: LongArray, timeoutMs: Int): Int = lock.read {
+        if (stopped) return -1
+        lib.konnekta_stream_read(handle, channel, buf, buf.size.toLong(), meta, pts, timeoutMs).toInt()
+    }
+
     fun stop() = lock.write {
         if (!stopped) {
             stopped = true
             lib.konnekta_stop(handle)
         }
     }
+}
+
+/** Stream frame kinds and flags (crates/konnekta-ffi/include/konnekta.h). */
+object Frame {
+    const val AUDIO = 1
+    const val VIDEO = 2
+    const val CONTROL = 3
+    const val KEYFRAME = 1
+    const val CONFIG = 2
 }
 
 /** Packet types used by the app (same names as crates/konnekta-proto/src/types.rs). */
@@ -123,4 +152,9 @@ object Types {
     const val SCREENSHOT = "konnekta.screenshot"
     const val PHOTO = "konnekta.photo"
     const val PHOTO_REQUEST = "konnekta.photo.request"
+    const val MICROPHONE = "konnekta.microphone"
+    const val CAMERA = "konnekta.camera"
+    const val PHONE_SCREEN = "konnekta.phonescreen"
+    const val DESKTOP = "konnekta.desktop"
+    const val SYSTEM_AUDIO = "konnekta.systemaudio"
 }

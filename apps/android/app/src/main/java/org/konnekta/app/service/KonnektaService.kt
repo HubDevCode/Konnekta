@@ -65,6 +65,20 @@ class KonnektaService : Service() {
         }
 
         const val ACTION_REFRESH = "org.konnekta.app.REFRESH"
+        private const val ACTION_ACCEPT_STREAM = "org.konnekta.app.ACCEPT_STREAM"
+        private const val N_STREAM = 8
+
+        /**
+         * The user accepted a stream request (the app is on screen, so the
+         * service may add the microphone / camera / screen capture types).
+         */
+        fun acceptStream(context: Context, r: StreamRequest, projection: Intent? = null, resultCode: Int = 0) {
+            context.startForegroundService(
+                Intent(context, KonnektaService::class.java).setAction(ACTION_ACCEPT_STREAM)
+                    .putExtra("device", r.deviceId).putExtra("plugin", r.plugin)
+                    .putExtra("projection", projection).putExtra("resultCode", resultCode),
+            )
+        }
 
         /** Phone permissions changed: (re)start the features that need them. */
         fun refreshFeatures(context: Context) {
@@ -124,6 +138,7 @@ class KonnektaService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP_RING) stopRing()
         if (intent?.action == ACTION_REFRESH) restartFeatures()
+        if (intent?.action == ACTION_ACCEPT_STREAM) onAcceptStream(intent)
         return START_STICKY
     }
 
@@ -146,6 +161,7 @@ class KonnektaService : Service() {
         }
         KonnektaApp.core = core
         refreshDevices(core)
+        Streams.onChanged = { main.post { updateForeground() } }
         main.post {
             registerReceiver(battery, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
             restartFeatures()
@@ -177,6 +193,7 @@ class KonnektaService : Service() {
                 nm.cancel(N_PAIR)
             }
             "unpaired" -> ApproveKeys(this).remove(e.optString("deviceId"))
+            "deviceDisconnected" -> Streams.stopAllFor(e.optString("deviceId"))
             "deviceConnected" -> {
                 lastBattery?.let { b -> sendToAll(core, Types.BATTERY, b) }
                 dnd?.sendState(e.optString("deviceId"))
@@ -257,7 +274,62 @@ class KonnektaService : Service() {
             Types.DND -> main.post { dnd?.apply(body) }
             Types.SCREENSHOT -> shots?.configure(deviceId, body)
             Types.PHOTO_REQUEST -> onPhotoRequest(core, deviceId, body.optString("mode", "photo"))
+            Types.MICROPHONE, Types.CAMERA, Types.PHONE_SCREEN, Types.DESKTOP, Types.SYSTEM_AUDIO ->
+                onStreamPacket(core, deviceId, type, body)
         }
+    }
+
+    // --- streams ---------------------------------------------------------------
+
+    private fun foregroundTypes(extra: String? = null): Int {
+        var t = ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+        val plugins = Streams.live.value.values.filter { it.outgoing }.map { it.plugin } + listOfNotNull(extra)
+        if ("microphone" in plugins) t = t or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+        if ("camera" in plugins) t = t or ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
+        if ("phonescreen" in plugins) t = t or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+        return t
+    }
+
+    private fun serviceNotification(): Notification = NotificationCompat.Builder(this, KonnektaApp.CH_SERVICE)
+        .setSmallIcon(R.drawable.ic_stat)
+        .setContentTitle("Konnekta")
+        .setContentText(
+            Streams.live.value.values.filter { it.outgoing }.takeIf { it.isNotEmpty() }
+                ?.joinToString(prefix = "In uso: ") { STREAM_NAMES[it.plugin] ?: it.plugin } ?: "Pronto a collegarsi ai tuoi computer",
+        )
+        .setContentIntent(openApp())
+        .setOngoing(true)
+        .build()
+
+    /** Keep the foreground types and the notification in step with the streams. */
+    private fun updateForeground() {
+        runCatching { ServiceCompat.startForeground(this, N_SERVICE, serviceNotification(), foregroundTypes()) }
+            .onFailure { Log.w(TAG, "foreground update failed", it) }
+    }
+
+    private fun onAcceptStream(i: Intent) {
+        val r = Streams.pending.value.firstOrNull { it.deviceId == i.getStringExtra("device") && it.plugin == i.getStringExtra("plugin") } ?: return
+        nm.cancel(N_STREAM)
+        try {
+            ServiceCompat.startForeground(this, N_SERVICE, serviceNotification(), foregroundTypes(r.plugin))
+        } catch (e: Exception) {
+            Log.w(TAG, "cannot add ${r.plugin} to the foreground service", e)
+            Streams.decline(r)
+            return
+        }
+        @Suppress("DEPRECATION")
+        val data: Intent? = if (Build.VERSION.SDK_INT >= 33) i.getParcelableExtra("projection", Intent::class.java) else i.getParcelableExtra("projection")
+        val projection = data?.let {
+            getSystemService(android.media.projection.MediaProjectionManager::class.java).getMediaProjection(i.getIntExtra("resultCode", 0), it)
+        }
+        val core = KonnektaApp.core ?: return
+        transfers.execute { Streams.accept(this, core, r, projection) }
+    }
+
+    private fun onStreamPacket(core: Core, deviceId: String, type: String, body: JSONObject) {
+        val plugin = Streams.TYPES.entries.firstOrNull { it.value == type }?.key ?: return
+        val r = Streams.onPacket(this, core, deviceId, name(core, deviceId), plugin, body) ?: return
+        notify(N_STREAM, "${r.deviceName} chiede ${STREAM_ASK[plugin]}", "Tocca per decidere")
     }
 
     // --- photo / scan / QR on request -----------------------------------------
@@ -469,6 +541,7 @@ class KonnektaService : Service() {
         running = false
         stopRing()
         media?.stop(); calls?.stop(); sms?.stop(); dnd?.stop(); shots?.stop()
+        Streams.stopAll()
         runCatching { unregisterReceiver(battery) }
         multicast?.release()
         io.shutdown()
@@ -476,6 +549,12 @@ class KonnektaService : Service() {
         super.onDestroy()
     }
 }
+
+val STREAM_NAMES = mapOf(
+    "microphone" to "microfono", "camera" to "fotocamera", "phonescreen" to "schermo",
+    "desktop" to "desktop remoto", "systemaudio" to "audio del computer",
+)
+val STREAM_ASK = mapOf("microphone" to "il microfono", "camera" to "la fotocamera come webcam", "phonescreen" to "lo schermo del telefono")
 
 /** "5EE6825F974ED59A" -> "5EE6 825F 974E D59A". */
 fun formatKey(k: String): String = k.chunked(4).joinToString(" ")

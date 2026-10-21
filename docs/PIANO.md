@@ -47,12 +47,16 @@ un'opzione gradita.
 ## Fase 3 — App
 
 - Desktop Tauri: vista Chat, conferma pairing a 16 caratteri, nuove impostazioni.
-- [~] Android nativo (Kotlin/Compose) con il core Rust tramite l'ABI C (JNA), non UniFFI: una sola ABI per Android e iOS.
-  Fatto (21/10/2026): `apps/android` compila (`scripts/build-android.sh`), APK con core arm64/x86_64; servizio in primo piano,
-  pairing con codice di 16 caratteri, permessi, ping, appunti, trova telefono, batteria, approvazione sudo con impronta
-  (Keystore P-256 + BiometricPrompt, stessi vettori del lato Rust). Provato su emulatore (Android 36) con un daemon desktop:
-  scoperta, pairing avviato dal telefono (ora mostra subito il codice), ping nei due sensi, trova telefono, appunti,
-  batteria. Da fare: approvazione sudo su dispositivo reale, testo/file condivisi (`share`), notifiche, media, touchpad,
-  Deck, Chat, Sfoglia PC, SMS, foto, flussi; etichette dei permessi in italiano (oggi arrivano in inglese dal core).
+- [x] Android nativo (Kotlin/Compose) con il core Rust tramite l'ABI C (JNA), non UniFFI: una sola ABI per Android e iOS.
+  Organizzazione come Flux: Attività (richieste urgenti, appunti/file/link ricevuti, flussi dal vivo), Invia, Controllo,
+  Computer, con il selettore del computer in alto. Stessa palette dell'app desktop (`ui/Theme.kt` ↔ `styles.css`).
+  Funzioni: pairing con codice in 4 blocchi, permessi in italiano, ping, appunti, trova telefono, batteria, sudo con
+  impronta, file e testo nei due sensi (anche Condividi › Konnekta), Sfoglia PC, media del PC e del telefono, touchpad e
+  tastiera, presentazione, comandi, Mobile Deck, notifiche con risposta/azioni, chiamate, SMS, Non disturbare,
+  foto/scanner/QR (ML Kit offline), screenshot, microfono/webcam/schermo del telefono su richiesta (accettati
+  dall'utente), desktop remoto e audio del computer sul telefono.
+  Provato su emulatore (21/10/2026): tutto ciò in cui il telefono si collega al computer. Da provare su telefono vero:
+  i flussi e i file dal telefono al computer (l'emulatore è dietro NAT: il computer non raggiunge le sue porte),
+  approvazione sudo, media del telefono. Da fare: rimozione dell'app Flutter (`apps/mobile`), ora sostituita.
 - iOS nativo (SwiftUI) con core via UniFFI; build verificata in CI (macOS).
 - CI/CD aggiornata; rimozione dell'app Flutter.

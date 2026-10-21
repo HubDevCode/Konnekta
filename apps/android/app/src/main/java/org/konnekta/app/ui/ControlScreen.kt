@@ -58,6 +58,8 @@ import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.Work
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Dashboard
+import androidx.compose.material.icons.filled.DesktopWindows
+import androidx.compose.material.icons.filled.Speaker
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -106,6 +108,7 @@ import kotlinx.coroutines.launch
 import org.json.JSONObject
 import org.konnekta.app.KonnektaApp
 import org.konnekta.app.core.Types
+import org.konnekta.app.service.Streams
 import org.konnekta.app.state.Store
 import org.konnekta.app.state.supports
 import kotlin.math.abs
@@ -124,6 +127,16 @@ fun ControlScreen(current: JSONObject?, open: (Route) -> Unit) {
         ActionCard(Icons.Filled.MusicNote, "Media", "Musica e video in riproduzione, volume", enabled = can(Types.MEDIA_REQUEST)) { open(Route.Media) }
         ActionCard(Icons.Filled.TouchApp, "Touchpad e tastiera", "Muovi il puntatore e scrivi sul computer", enabled = can(Types.INPUT)) { open(Route.Touchpad) }
         ActionCard(Icons.Filled.Slideshow, "Presentazione", "Avanti, indietro e puntatore laser", enabled = can(Types.PRESENTER)) { open(Route.Presenter) }
+        ActionCard(Icons.Filled.DesktopWindows, "Desktop remoto", "Vedi e controlla lo schermo del computer", enabled = can(Types.DESKTOP)) { open(Route.Desktop) }
+        val live by Streams.live.collectAsState()
+        val audioOn = live.containsKey("systemaudio/${current.optString("id")}")
+        ActionCard(
+            Icons.Filled.Speaker, "Audio del computer", if (audioOn) "In ascolto sul telefono: tocca per fermare" else "Ascolta sul telefono l'audio del computer",
+            enabled = can(Types.SYSTEM_AUDIO), highlight = audioOn,
+        ) {
+            val id = current.optString("id")
+            if (audioOn) Thread { Streams.stop(id, "systemaudio") }.start() else Streams.request(id, "systemaudio")
+        }
         SectionTitle("Automazioni")
         ActionCard(Icons.Filled.Dashboard, "Mobile Deck", "I pulsanti configurati sul computer", enabled = can(Types.DECK_REQUEST)) { open(Route.Deck) }
         ActionCard(Icons.Filled.Terminal, "Comandi", "Avvia i comandi personalizzati del computer", enabled = can(Types.COMMANDS_REQUEST)) { open(Route.Commands) }

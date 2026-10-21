@@ -1,5 +1,7 @@
 package org.konnekta.app.ui
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
 import android.widget.Toast
@@ -59,8 +61,22 @@ class PhotoActivity : ComponentActivity() {
         }
         val dir = File(cacheDir, "photo/${System.nanoTime()}").apply { mkdirs() }
         file = File(dir, "foto-${System.currentTimeMillis()}.jpg")
-        val uri: Uri = FileProvider.getUriForFile(this, "$packageName.files", file)
-        take.launch(uri)
+        // The app declares CAMERA (webcam), so Android requires it for the system camera too.
+        if (checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) launchCamera()
+        else askCamera.launch(Manifest.permission.CAMERA)
+    }
+
+    private val askCamera = registerForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+        if (ok) {
+            launchCamera()
+        } else {
+            toast("Serve il permesso della fotocamera")
+            finish()
+        }
+    }
+
+    private fun launchCamera() {
+        take.launch(FileProvider.getUriForFile(this, "$packageName.files", file))
     }
 
     override fun onDestroy() {
