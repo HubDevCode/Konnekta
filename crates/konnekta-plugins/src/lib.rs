@@ -19,6 +19,7 @@ pub mod finddevice;
 pub mod hyprland;
 pub mod input;
 pub mod media;
+pub mod mixer;
 pub mod notifications;
 pub mod photo;
 pub mod ping;
@@ -43,6 +44,7 @@ pub fn all(platform: Platform) -> Vec<Arc<dyn Plugin>> {
         Arc::new(clipboard::ClipboardPlugin::new(platform.clone())),
         share::SharePlugin::new(platform.clone()),
         Arc::new(media::MediaPlugin::new(platform.clone())),
+        Arc::new(mixer::MixerPlugin::new(platform.clone())),
         Arc::new(input::InputPlugin::new(platform.clone())),
         Arc::new(presenter::PresenterPlugin::new(platform.clone())),
         commands,

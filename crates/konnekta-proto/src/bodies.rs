@@ -161,6 +161,31 @@ pub struct MprisRequestBody {
     pub set_position: Option<i64>,
 }
 
+/// Change one mixer channel and/or ask for the mixer state.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MixerRequestBody {
+    /// Send the state now and push changes for a while.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subscribe: Option<bool>,
+    /// Channel kind: `output`, `input` or `app`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<u32>,
+    /// Percent, 0..=150.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub volume: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mute: Option<bool>,
+    /// Make this output / input the system default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub make_default: Option<bool>,
+    /// Move this app to another output.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<u32>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct MousepadBody {
     #[serde(default, skip_serializing_if = "Option::is_none")]

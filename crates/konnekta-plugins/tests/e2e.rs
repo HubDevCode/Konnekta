@@ -227,6 +227,63 @@ async fn deck_press_from_phone_runs_macro() {
 }
 
 #[tokio::test]
+async fn phone_drives_the_computer_mixer() {
+    let (a, b) = paired_pair().await;
+    let (aid, bid) = (a.k.device_id().to_string(), b.k.device_id().to_string());
+    let h = b.k.device_handle(&aid).unwrap();
+    let mute_player = || {
+        h.send(Packet::new(
+            types::MIXER_REQUEST,
+            json!({ "kind": "app", "id": 3, "mute": true, "output": 1 }),
+        ))
+    };
+    // Media control is granted by default; once revoked the computer ignores the phone.
+    a.k.set_permission(&bid, Permission::MediaControl, false)
+        .unwrap();
+    mute_player().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!a.mock.calls().iter().any(|c| c.starts_with("mixer.")));
+
+    a.k.set_permission(&bid, Permission::MediaControl, true)
+        .unwrap();
+    mute_player().await.unwrap();
+    eventually(|| {
+        let c = a.mock.calls();
+        c.iter().any(|c| c == "mixer.mute:App:3:true") && c.iter().any(|c| c == "mixer.move:3:1")
+    })
+    .await;
+    // The phone gets the state back after the change.
+    let mut got = None;
+    for _ in 0..300 {
+        got = b.k.plugin_action(Some(&aid), "mixer", "remoteState", json!(null))
+            .await
+            .ok()
+            .filter(|v| !v.is_null());
+        if got.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    let state = got.expect("mixer state never arrived");
+    assert_eq!(state["outputs"][0]["label"], "Speakers");
+    assert_eq!(state["apps"][0]["output"], 1);
+
+    // Volumes are capped; outputs cannot be "moved".
+    h.send(Packet::new(
+        types::MIXER_REQUEST,
+        json!({ "kind": "output", "id": 1, "volume": 400, "makeDefault": true }),
+    ))
+    .await
+    .unwrap();
+    eventually(|| {
+        let c = a.mock.calls();
+        c.iter().any(|c| c == "mixer.volume:Output:1:150")
+            && c.iter().any(|c| c == "mixer.default:Output:1")
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn screenshots_are_saved_deduplicated_and_copied() {
     let (mut a, b) = paired_pair().await;
     let aid = a.k.device_id().to_string();

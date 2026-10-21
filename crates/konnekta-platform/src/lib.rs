@@ -12,6 +12,7 @@ pub mod input;
 pub mod keys;
 pub mod launcher;
 pub mod media;
+pub mod mixer;
 pub mod mock;
 pub mod notify;
 
@@ -23,6 +24,7 @@ pub use input::{ButtonAction, InputBackend, MouseButton};
 pub use keys::{Key, Modifiers, SpecialKey, parse_shortcut};
 pub use launcher::{CommandOutput, LauncherBackend};
 pub use media::{MediaAction, MediaBackend, MediaStatus};
+pub use mixer::{MixerBackend, MixerChannel, MixerKind, MixerState};
 pub use notify::{DesktopNotification, NotifierBackend};
 
 /// Bundle of all backends handed to plugins.
@@ -31,6 +33,7 @@ pub struct Platform {
     pub clipboard: Arc<dyn ClipboardBackend>,
     pub input: Arc<dyn InputBackend>,
     pub media: Arc<dyn MediaBackend>,
+    pub mixer: Arc<dyn MixerBackend>,
     pub notifier: Arc<dyn NotifierBackend>,
     pub dnd: Arc<dyn DndBackend>,
     pub launcher: Arc<dyn LauncherBackend>,
@@ -44,6 +47,7 @@ impl Platform {
         Self {
             clipboard: clipboard::native(),
             media: media::native(input.clone()),
+            mixer: mixer::native(),
             input,
             notifier: Arc::new(notify::NativeNotifier),
             dnd: dnd::native(),
@@ -58,6 +62,7 @@ impl Platform {
             clipboard: m.clone(),
             input: m.clone(),
             media: m.clone(),
+            mixer: m.clone(),
             notifier: m.clone(),
             dnd: m.clone(),
             launcher: Arc::new(launcher::NativeLauncher),

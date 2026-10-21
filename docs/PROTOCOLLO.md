@@ -74,13 +74,19 @@ Tutti i tipi sono nel namespace `konnekta.`:
 | Base | `ping`, `battery`, `finddevice` |
 | Appunti | `clipboard`, `clipboard.initial`, `clipboard.image` |
 | File | `share`, `share.update`, `browse`, `browse.request`, `screenshot`, `photo`, `photo.request`, `app.update` |
-| Controllo | `media`, `media.request`, `input`, `input.echo`, `input.state`, `presenter`, `commands`, `commands.request`, `command.state`, `deck`, `deck.request` |
+| Controllo | `media`, `media.request`, `mixer`, `mixer.request`, `input`, `input.echo`, `input.state`, `presenter`, `commands`, `commands.request`, `command.state`, `deck`, `deck.request` |
 | Telefono | `notification` (+ `.request`, `.reply`, `.action`), `call`, `call.mute`, `call.action`, `sms.messages`, `sms.send`, `sms.conversations.request`, `sms.thread.request`, `dnd` |
 | Sicurezza | `approve`, `approve.request` |
-| Flussi | `microphone`, `camera`, `desktop`, `systemaudio`, `phonescreen` |
+| Flussi | `microphone`, `camera`, `desktop`, `systemaudio`, `phonescreen`, `phoneaudio` |
 
 Campi dei trasferimenti: ripresa con offset e `konnektaSha256`; `konnektaAbsX/Y` nel touchpad
 (desktop remoto); `konnektaKey` nel presentatore.
+
+Mixer: `mixer.request` porta `subscribe` e/o una modifica a un canale (`kind`: `output`, `input`
+o `app`; `id`; `volume` 0–150; `mute`; `makeDefault`; `output` per spostare un'app). Il computer
+risponde con `mixer` (`outputs`, `inputs`, `apps`, ognuno `{id, label, detail, volume, muted,
+isDefault, output, icon}`) e invia le variazioni per 60 s dall'ultima richiesta. Permesso:
+controllo multimediale.
 
 ### Frame dei flussi
 

@@ -276,6 +276,7 @@ class KonnektaService : Service() {
                 body.keys().forEach { k -> if (k != "playerList") merged.put(k, body.get(k)) }
                 Store.put(Store.pcMedia, deviceId, merged)
             }
+            Types.MIXER -> Store.put(Store.pcMixer, deviceId, body)
             Types.COMMANDS -> {
                 val list = runCatching { JSONObject(body.optString("commandList", "{}")) }.getOrDefault(JSONObject())
                 Store.put(Store.commands, deviceId, list.keys().asSequence().associateWith { list.getJSONObject(it) })

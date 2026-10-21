@@ -110,6 +110,13 @@ pub fn mobile(pending: Arc<PendingPayloads>, call_control: bool) -> Vec<Arc<dyn 
             [MEDIA_REQUEST, MEDIA]
         ),
         bridge!(
+            "mixer",
+            "Audio mixer",
+            MediaControl,
+            [MIXER],
+            [MIXER_REQUEST]
+        ),
+        bridge!(
             "input",
             "Remote input",
             RemoteInput,

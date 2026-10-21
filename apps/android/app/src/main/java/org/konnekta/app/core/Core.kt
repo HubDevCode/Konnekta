@@ -131,6 +131,8 @@ object Types {
     const val BROWSE_REQUEST = "konnekta.browse.request"
     const val MEDIA = "konnekta.media"
     const val MEDIA_REQUEST = "konnekta.media.request"
+    const val MIXER = "konnekta.mixer"
+    const val MIXER_REQUEST = "konnekta.mixer.request"
     const val INPUT = "konnekta.input"
     const val PRESENTER = "konnekta.presenter"
     const val COMMANDS = "konnekta.commands"

@@ -113,6 +113,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.channels.Channel
+import androidx.compose.material.icons.filled.Apps
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.IconButton
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 import org.konnekta.app.KonnektaApp
@@ -223,7 +229,11 @@ fun MediaScreen(current: JSONObject?, onBack: () -> Unit) {
     fun req(b: JSONObject) = scope.launch { send(ui.toast, id, Types.MEDIA_REQUEST, b.apply { active?.let { put("player", it) } }) }
     LaunchedEffect(id) { req(JSONObject().put("requestPlayerList", true).put("requestNowPlaying", true).put("requestVolume", true)) }
 
+    val mixer by Store.pcMixer.collectAsState()
+    val mix = mixer[id]
+
     SubHeader("Media", current.optString("name"), onBack)
+    Column(Modifier.verticalScroll(rememberScrollState())) {
     if (list.size > 1) {
         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 8.dp)) {
             items(list) { p ->
@@ -264,13 +274,133 @@ fun MediaScreen(current: JSONObject?, onBack: () -> Unit) {
         }
         BigButton(Icons.Filled.SkipNext, Modifier.weight(1f)) { req(JSONObject().put("action", "Next")) }
     }
-    if (m.has("volume")) {
+    // The mixer shows the default output too: one volume control is enough.
+    if (m.has("volume") && mix == null) {
         var vol by remember(m.optInt("volume")) { mutableFloatStateOf(m.optInt("volume").toFloat()) }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.AutoMirrored.Filled.VolumeDown, null)
             Slider(vol, { vol = it }, Modifier.weight(1f), valueRange = 0f..100f,
                 onValueChangeFinished = { req(JSONObject().put("setVolume", vol.toInt())) })
             Icon(Icons.AutoMirrored.Filled.VolumeUp, null)
+        }
+    }
+    MixerSection(id, mix)
+    }
+}
+
+// --- mixer -----------------------------------------------------------------------
+
+/** Outputs, inputs and apps of the computer, kept fresh while on screen. */
+@Composable
+private fun MixerSection(id: String, mix: JSONObject?) {
+    val ui = LocalUi.current
+    val scope = rememberCoroutineScope()
+    fun req(b: JSONObject) = scope.launch { send(ui.toast, id, Types.MIXER_REQUEST, b) }
+    // The computer pushes changes for a minute after each request: renew it.
+    LaunchedEffect(id) {
+        while (true) {
+            req(JSONObject().put("subscribe", true))
+            delay(45_000)
+        }
+    }
+    if (mix == null) {
+        Hint("Mixer audio non disponibile su questo computer.")
+        return
+    }
+    val outputs = mix.optJSONArray("outputs")?.objects().orEmpty()
+    val inputs = mix.optJSONArray("inputs")?.objects().orEmpty()
+    val apps = mix.optJSONArray("apps")?.objects().orEmpty()
+    fun set(kind: String, ch: JSONObject, f: JSONObject.() -> Unit) =
+        req(JSONObject().put("kind", kind).put("id", ch.optInt("id")).apply(f))
+
+    if (apps.isNotEmpty()) {
+        SectionTitle("App")
+        apps.forEach { a ->
+            MixerRow(a, Icons.Filled.Apps, Icons.AutoMirrored.Filled.VolumeOff, onVolume = { v -> set("app", a) { put("volume", v) } },
+                onMute = { set("app", a) { put("mute", !a.optBoolean("muted")) } }) {
+                if (outputs.size > 1) {
+                    val on = outputs.firstOrNull { it.optInt("id") == a.optInt("output", -1) }
+                    var open by remember { mutableStateOf(false) }
+                    Box {
+                        AssistChip(onClick = { open = true }, label = {
+                            Text(on?.optString("label") ?: "Uscita", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }, leadingIcon = { Icon(Icons.Filled.Speaker, null, Modifier.size(16.dp)) })
+                        DropdownMenu(open, { open = false }) {
+                            outputs.forEach { o ->
+                                DropdownMenuItem(text = { Text(o.optString("label")) }, onClick = {
+                                    open = false
+                                    set("app", a) { put("output", o.optInt("id")) }
+                                })
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if (outputs.isNotEmpty()) {
+        SectionTitle("Uscite")
+        outputs.forEach { o ->
+            MixerRow(o, Icons.Filled.Speaker, Icons.AutoMirrored.Filled.VolumeOff, onVolume = { v -> set("output", o) { put("volume", v) } },
+                onMute = { set("output", o) { put("mute", !o.optBoolean("muted")) } }) {
+                DefaultChip(o, outputs.size) { set("output", o) { put("makeDefault", true) } }
+            }
+        }
+    }
+    if (inputs.isNotEmpty()) {
+        SectionTitle("Ingressi")
+        inputs.forEach { i ->
+            MixerRow(i, Icons.Filled.Mic, Icons.Filled.MicOff, onVolume = { v -> set("input", i) { put("volume", v) } },
+                onMute = { set("input", i) { put("mute", !i.optBoolean("muted")) } }) {
+                DefaultChip(i, inputs.size) { set("input", i) { put("makeDefault", true) } }
+            }
+        }
+    }
+    Hint("Oltre il 100% il volume viene amplificato via software e può distorcere.")
+}
+
+@Composable
+private fun DefaultChip(ch: JSONObject, count: Int, onClick: () -> Unit) {
+    when {
+        ch.optBoolean("isDefault") -> Pill("predefinito", MaterialTheme.colorScheme.primary)
+        count > 1 -> TextButton(onClick = onClick) { Text("Rendi predefinito") }
+    }
+}
+
+@Composable
+private fun MixerRow(
+    ch: JSONObject,
+    icon: ImageVector,
+    mutedIcon: ImageVector,
+    onVolume: (Int) -> Unit,
+    onMute: () -> Unit,
+    extra: @Composable () -> Unit,
+) {
+    val muted = ch.optBoolean("muted")
+    var vol by remember(ch.optInt("volume")) { mutableFloatStateOf(ch.optInt("volume").toFloat()) }
+    Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surfaceContainerLow,
+        border = BorderStroke(1.dp, LocalStatus.current.border), modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(ch.optString("label"), style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    ch.optString("detail").takeIf { it.isNotEmpty() }?.let {
+                        Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+                extra()
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onMute) {
+                    Icon(if (muted) mutedIcon else icon, if (muted) "Riattiva" else "Silenzia",
+                        tint = if (muted) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
+                }
+                Slider(vol, { vol = it }, Modifier.weight(1f), valueRange = 0f..150f, enabled = !muted,
+                    onValueChangeFinished = { onVolume(vol.toInt()) })
+                Text("${vol.toInt()}%", Modifier.width(48.dp), textAlign = TextAlign.End,
+                    style = MaterialTheme.typography.labelMedium.copy(fontFamily = FontFamily.Monospace))
+            }
         }
     }
 }

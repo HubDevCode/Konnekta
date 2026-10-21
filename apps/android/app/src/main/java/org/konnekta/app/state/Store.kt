@@ -43,6 +43,8 @@ object Store {
     /** Per computer: merged `konnekta.media` state and player list. */
     val pcMedia = MutableStateFlow<Map<String, JSONObject>>(emptyMap())
     val pcPlayers = MutableStateFlow<Map<String, List<String>>>(emptyMap())
+    /** Per computer: last `konnekta.mixer` state (outputs, inputs, apps). */
+    val pcMixer = MutableStateFlow<Map<String, JSONObject>>(emptyMap())
 
     /** Per computer: Mobile Deck layout and live button states. */
     val deckLayout = MutableStateFlow<Map<String, JSONObject>>(emptyMap())

@@ -5,6 +5,7 @@ use crate::clipboard::ClipboardBackend;
 use crate::input::{InputBackend, InputEvent};
 use crate::launcher::{CommandOutput, LauncherBackend};
 use crate::media::{MediaAction, MediaBackend, MediaStatus};
+use crate::mixer::{MixerBackend, MixerChannel, MixerKind, MixerState};
 use crate::notify::{ActionCallback, DesktopNotification, NotifierBackend};
 use anyhow::{Result, bail};
 use async_trait::async_trait;
@@ -55,6 +56,25 @@ impl MediaBackend for Unsupported {
     }
 }
 
+#[async_trait]
+impl MixerBackend for Unsupported {
+    async fn state(&self) -> Result<Option<MixerState>> {
+        Ok(None)
+    }
+    async fn set_volume(&self, _: MixerKind, _: u32, _: u16) -> Result<()> {
+        bail!("audio mixer not supported")
+    }
+    async fn set_mute(&self, _: MixerKind, _: u32, _: bool) -> Result<()> {
+        bail!("audio mixer not supported")
+    }
+    async fn set_default(&self, _: MixerKind, _: u32) -> Result<()> {
+        bail!("audio mixer not supported")
+    }
+    async fn move_app(&self, _: u32, _: u32) -> Result<()> {
+        bail!("audio mixer not supported")
+    }
+}
+
 impl NotifierBackend for Unsupported {
     fn show(&self, _: DesktopNotification, _: Option<ActionCallback>) -> Result<()> {
         Ok(())
@@ -81,6 +101,7 @@ impl MockPlatform {
             clipboard: self.clone(),
             input: self.clone(),
             media: self.clone(),
+            mixer: self.clone(),
             notifier: self.clone(),
             dnd: self.clone(),
             launcher: self.clone(),
@@ -151,6 +172,46 @@ impl MediaBackend for MockPlatform {
     async fn set_volume(&self, v: u8) -> Result<()> {
         self.push(format!("volume:{v}"));
         *self.volume.lock().unwrap() = v;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl MixerBackend for MockPlatform {
+    async fn state(&self) -> Result<Option<MixerState>> {
+        let ch = |id, label: &str| MixerChannel {
+            id,
+            label: label.into(),
+            detail: String::new(),
+            volume: 50,
+            muted: false,
+            is_default: id == 1,
+            output: None,
+            icon: None,
+        };
+        Ok(Some(MixerState {
+            outputs: vec![ch(1, "Speakers")],
+            inputs: vec![ch(2, "Microphone")],
+            apps: vec![MixerChannel {
+                output: Some(1),
+                ..ch(3, "Player")
+            }],
+        }))
+    }
+    async fn set_volume(&self, k: MixerKind, id: u32, v: u16) -> Result<()> {
+        self.push(format!("mixer.volume:{k:?}:{id}:{v}"));
+        Ok(())
+    }
+    async fn set_mute(&self, k: MixerKind, id: u32, m: bool) -> Result<()> {
+        self.push(format!("mixer.mute:{k:?}:{id}:{m}"));
+        Ok(())
+    }
+    async fn set_default(&self, k: MixerKind, id: u32) -> Result<()> {
+        self.push(format!("mixer.default:{k:?}:{id}"));
+        Ok(())
+    }
+    async fn move_app(&self, app: u32, out: u32) -> Result<()> {
+        self.push(format!("mixer.move:{app}:{out}"));
         Ok(())
     }
 }

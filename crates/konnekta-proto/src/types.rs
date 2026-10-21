@@ -34,6 +34,10 @@ pub const APP_UPDATE: &str = "konnekta.app.update";
 // --- Media and control ---------------------------------------------------------
 pub const MEDIA: &str = "konnekta.media";
 pub const MEDIA_REQUEST: &str = "konnekta.media.request";
+/// Volume of every output, input and app of the computer. Body: mixer state.
+pub const MIXER: &str = "konnekta.mixer";
+/// Body: [`crate::bodies::MixerRequestBody`].
+pub const MIXER_REQUEST: &str = "konnekta.mixer.request";
 /// Pointer, clicks, scroll and keys.
 pub const INPUT: &str = "konnekta.input";
 pub const INPUT_ECHO: &str = "konnekta.input.echo";
