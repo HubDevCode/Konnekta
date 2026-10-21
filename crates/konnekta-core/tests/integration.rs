@@ -272,6 +272,8 @@ async fn sensitive_permissions_are_enforced() {
     pair(&mut a, &mut b).await;
     let b_id = b.k.device_id().to_string();
     let a_id = a.k.device_id().to_string();
+    // Each side decides alone when permission sync is off.
+    b.k.update_config(|c| c.sync_permissions = false).unwrap();
 
     assert!(
         a.k.plugin_action(Some(&b_id), "commands", "run", Value::Null)

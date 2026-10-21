@@ -646,6 +646,7 @@ impl Konnekta {
             } else {
                 d.permissions.remove(&perm);
             }
+            d.permissions_changed_at = konnekta_proto::packet::now_millis();
         });
         if !ok {
             bail!("device not paired");
@@ -654,6 +655,7 @@ impl Konnekta {
             e.denied.remove(&perm);
         }
         self.inner.emit_updated(id);
+        self.inner.send_permissions(id);
         Ok(())
     }
 
@@ -1314,6 +1316,7 @@ impl Inner {
     }
 
     async fn notify_plugins_connected(&self, handle: &DeviceHandle) {
+        self.send_permissions(handle.id());
         let disabled_global = self.config.read().unwrap().disabled_plugins.clone();
         let disabled_dev = self
             .trust
@@ -1506,6 +1509,10 @@ impl Inner {
             }
             return;
         }
+        if packet.packet_type == types::PERMISSIONS {
+            self.on_permissions(device_id, &packet);
+            return;
+        }
         let disabled_global = self.config.read().unwrap().disabled_plugins.clone();
         let (perms, disabled_dev) = {
             let trust = self.trust.lock().unwrap();
@@ -1530,6 +1537,110 @@ impl Inner {
             if let Err(e) = p.handle_packet(&handle, packet.clone()).await {
                 tracing::warn!(plugin = info.id, "packet handling failed: {e:#}");
             }
+        }
+    }
+
+    // --- permission sync ---------------------------------------------------------
+    //
+    // Both devices of a pair keep one permission set: a change on either side
+    // is sent to the other, and on connect the most recent change wins. Only
+    // paired, trusted devices on the native protocol take part.
+
+    /// Send our permission set for `id` (no-op when sync is off or the
+    /// device is not connected).
+    fn send_permissions(&self, id: &str) {
+        if !self.config.read().unwrap().sync_permissions {
+            return;
+        }
+        let Some(d) = self.trust.lock().unwrap().get(id).cloned() else {
+            return;
+        };
+        let links = self.links.lock().unwrap();
+        let Some(l) = links.get(id) else {
+            return;
+        };
+        if !l.pair.is_paired() || l.handle.protocol != Protocol::Konnekta {
+            return;
+        }
+        let p = Packet::new(
+            types::PERMISSIONS,
+            serde_json::json!({
+                "permissions": d.permissions,
+                "changedAt": d.permissions_changed_at,
+            }),
+        );
+        if l.handle.tx.try_send(p).is_err() {
+            tracing::warn!(device = %id, "could not send the permission set");
+        }
+    }
+
+    fn on_permissions(&self, id: &str, packet: &Packet) {
+        if !self.config.read().unwrap().sync_permissions {
+            return;
+        }
+        let theirs_at = packet.body.get("changedAt").and_then(|v| v.as_i64()).unwrap_or(0);
+        // Names this version does not know are skipped.
+        let theirs: BTreeSet<Permission> = packet
+            .body
+            .get("permissions")
+            .and_then(|v| v.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| serde_json::from_value(x.clone()).ok())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let Some(mine) = self.trust.lock().unwrap().get(id).cloned() else {
+            return;
+        };
+        if mine.permissions == theirs {
+            if theirs_at > mine.permissions_changed_at {
+                self.trust
+                    .lock()
+                    .unwrap()
+                    .update(id, |d| d.permissions_changed_at = theirs_at);
+            }
+            return;
+        }
+        let now = konnekta_proto::packet::now_millis();
+        let (new_set, new_at) = match (mine.permissions_changed_at, theirs_at) {
+            // Never changed on either side since pairing (or since an update
+            // that predates sync): what either device allowed is allowed.
+            (0, 0) => (&mine.permissions | &theirs, now),
+            (a, b) if b > a => (theirs, b),
+            // Ours is newer (or the same moment): the device takes ours.
+            _ => {
+                self.send_permissions(id);
+                return;
+            }
+        };
+        let granted: Vec<&'static str> = new_set
+            .difference(&mine.permissions)
+            .filter(|p| p.is_sensitive())
+            .map(|p| p.label())
+            .collect();
+        self.trust.lock().unwrap().update(id, |d| {
+            d.permissions = new_set.clone();
+            d.permissions_changed_at = new_at;
+        });
+        if let Some(e) = self.links.lock().unwrap().get_mut(id) {
+            e.denied.clear();
+        }
+        tracing::info!(device = %id, "permissions synced from the device");
+        self.emit_updated(id);
+        if !granted.is_empty() {
+            let _ = self.events.send(Event::SecurityWarning {
+                device_id: Some(id.to_owned()),
+                message: format!(
+                    "{} granted from the device: {}.",
+                    mine.name,
+                    granted.join(", ")
+                ),
+            });
+        }
+        // A merged set is new to the device too.
+        if theirs_at == 0 && mine.permissions_changed_at == 0 {
+            self.send_permissions(id);
         }
     }
 
@@ -1757,6 +1868,7 @@ impl Inner {
             device_type: handle.identity.device_type,
             certificate: TrustedDevice::encode_cert(&handle.peer_cert),
             permissions: Permission::defaults(),
+            permissions_changed_at: 0,
             disabled_plugins: BTreeSet::new(),
             paired_at: konnekta_proto::packet::now_millis(),
             last_address: Some(handle.addr.ip()),

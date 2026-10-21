@@ -71,7 +71,7 @@ Tutti i tipi sono nel namespace `konnekta.`:
 
 | Area | Tipi `konnekta.*` |
 |---|---|
-| Base | `ping`, `battery`, `finddevice` |
+| Base | `ping`, `battery`, `finddevice`, `permissions` |
 | Appunti | `clipboard`, `clipboard.initial`, `clipboard.image` |
 | File | `share`, `share.update`, `browse`, `browse.request`, `screenshot`, `photo`, `photo.request`, `app.update` |
 | Controllo | `media`, `media.request`, `mixer`, `mixer.request`, `input`, `input.echo`, `input.state`, `presenter`, `commands`, `commands.request`, `command.state`, `deck`, `deck.request` |
@@ -81,6 +81,13 @@ Tutti i tipi sono nel namespace `konnekta.`:
 
 Campi dei trasferimenti: ripresa con offset e `konnektaSha256`; `konnektaAbsX/Y` nel touchpad
 (desktop remoto); `konnektaKey` nel presentatore.
+
+Permessi: `permissions` (`{permissions: [...], changedAt}`) è gestito dal core, solo tra dispositivi
+associati e solo sul protocollo nativo. Ogni coppia ha un unico insieme di permessi: chi modifica un
+permesso invia l'insieme intero, e alla connessione vince la modifica più recente. Se nessuno dei
+due lo ha mai modificato si prende l'unione. Un permesso sensibile concesso dall'altro dispositivo
+compare come avviso di sicurezza. Si disattiva con `sync_permissions = false`: allora ogni lato
+decide da solo.
 
 Mixer: `mixer.request` porta `subscribe` e/o una modifica a un canale (`kind`: `output`, `input`
 o `app`; `id`; `volume` 0–150; `mute`; `makeDefault`; `output` per spostare un'app). Il computer

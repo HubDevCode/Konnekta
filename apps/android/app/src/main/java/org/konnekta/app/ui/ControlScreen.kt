@@ -209,7 +209,7 @@ fun ControlScreen(current: JSONObject?, open: (Route) -> Unit) {
             Fn(Icons.Filled.Dashboard, "Mobile Deck", "I pulsanti configurati sul computer", can(Types.DECK_REQUEST)) { open(Route.Deck) },
             Fn(Icons.Filled.Terminal, "Comandi personalizzati", "Avvia i comandi configurati sul computer", can(Types.COMMANDS_REQUEST)) { open(Route.Commands) },
         ))
-        Hint("Le voci spente richiedono il permesso corrispondente sul computer (Dispositivi › Permessi).")
+        Hint("Le voci spente si attivano concedendo il permesso, qui (Computer › Permessi) o sul computer: le due app restano allineate.")
     }
 }
 

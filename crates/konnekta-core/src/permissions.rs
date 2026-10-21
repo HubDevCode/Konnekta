@@ -5,6 +5,10 @@
 //! do here (and which local data may be sent to it). Sensitive capabilities
 //! (input injection, commands, camera, microphone, desktop) are never granted
 //! implicitly.
+//!
+//! With `Config::sync_permissions` (on by default) the two devices of a pair
+//! keep the same set: a grant or revoke on either side applies to both
+//! (`konnekta.permissions`, handled in the core).
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;

@@ -164,6 +164,8 @@ async fn commands_need_permission_and_run_by_key() {
         .await
         .unwrap();
     let key = r["id"].as_str().unwrap().to_owned();
+    // With permission sync off the desktop decides alone.
+    a.k.update_config(|c| c.sync_permissions = false).unwrap();
     // Phone grants itself the right to send, desktop has not granted it yet.
     b.k.set_permission(&aid, Permission::Commands, true)
         .unwrap();
@@ -227,6 +229,29 @@ async fn deck_press_from_phone_runs_macro() {
 }
 
 #[tokio::test]
+async fn permissions_stay_the_same_on_both_devices() {
+    let (a, b) = paired_pair().await;
+    let (aid, bid) = (a.k.device_id().to_string(), b.k.device_id().to_string());
+    let has = |k: &Konnekta, id: &str, p: Permission| {
+        k.device(id).map(|d| d.permissions.contains(&p)).unwrap_or(false)
+    };
+    // Granted on the phone: the computer follows, and the command runs.
+    b.k.set_permission(&aid, Permission::Commands, true).unwrap();
+    eventually(|| has(&a.k, &bid, Permission::Commands)).await;
+    // Revoked on the computer: the phone follows.
+    a.k.set_permission(&bid, Permission::Commands, false).unwrap();
+    eventually(|| !has(&b.k, &aid, Permission::Commands)).await;
+    a.k.set_permission(&bid, Permission::RemoteInput, true).unwrap();
+    eventually(|| has(&b.k, &aid, Permission::RemoteInput)).await;
+
+    // With sync off on the computer, its permissions are its own.
+    a.k.update_config(|c| c.sync_permissions = false).unwrap();
+    b.k.set_permission(&aid, Permission::Camera, true).unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!has(&a.k, &bid, Permission::Camera));
+}
+
+#[tokio::test]
 async fn phone_drives_the_computer_mixer() {
     let (a, b) = paired_pair().await;
     let (aid, bid) = (a.k.device_id().to_string(), b.k.device_id().to_string());
@@ -238,6 +263,7 @@ async fn phone_drives_the_computer_mixer() {
         ))
     };
     // Media control is granted by default; once revoked the computer ignores the phone.
+    a.k.update_config(|c| c.sync_permissions = false).unwrap();
     a.k.set_permission(&bid, Permission::MediaControl, false)
         .unwrap();
     mute_player().await.unwrap();
@@ -486,6 +512,8 @@ async fn phone_browses_computer_read_only() {
         desk.k.device_id().to_string(),
         phone.device_id().to_string(),
     );
+    // With permission sync off the computer decides alone.
+    desk.k.update_config(|c| c.sync_permissions = false).unwrap();
     phone
         .set_permission(&did, Permission::BrowseFiles, true)
         .unwrap();

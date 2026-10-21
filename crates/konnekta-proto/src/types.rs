@@ -5,6 +5,9 @@
 // --- Link ----------------------------------------------------------------------
 pub const IDENTITY: &str = "konnekta.identity";
 pub const PAIR: &str = "konnekta.pair";
+/// The permissions of a pair, kept the same on both devices (handled by the
+/// core, never by plugins). Body: `{"permissions": [...], "changedAt": ms}`.
+pub const PERMISSIONS: &str = "konnekta.permissions";
 
 // --- Basics --------------------------------------------------------------------
 pub const PING: &str = "konnekta.ping";

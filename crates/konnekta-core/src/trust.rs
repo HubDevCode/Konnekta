@@ -18,6 +18,10 @@ pub struct TrustedDevice {
     /// Pinned certificate (DER, base64).
     pub certificate: String,
     pub permissions: BTreeSet<Permission>,
+    /// Wall clock ms of the last change of `permissions` (here or synced
+    /// from the device); 0 = never changed since pairing.
+    #[serde(default)]
+    pub permissions_changed_at: i64,
     #[serde(default)]
     pub disabled_plugins: BTreeSet<String>,
     pub paired_at: i64,

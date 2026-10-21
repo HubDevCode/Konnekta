@@ -145,6 +145,9 @@ pub async fn call(k: &Konnekta, method: &str, p: Value) -> Result<Value> {
                 if let Some(a) = p.get("mdns").and_then(Value::as_bool) {
                     c.mdns = a;
                 }
+                if let Some(a) = p.get("syncPermissions").and_then(Value::as_bool) {
+                    c.sync_permissions = a;
+                }
             })?;
             Value::Null
         }

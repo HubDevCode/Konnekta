@@ -34,6 +34,11 @@ dispositivo associato.
 - **Rinnovo/revoca**: `FileKeyStore::rotate` genera una nuova identità (tutti i dispositivi
   dovranno riassociarsi); "Dissocia" revoca la fiducia e interrompe subito tutte le sessioni e
   gli stream del dispositivo. La revoca di un permesso interrompe gli stream relativi entro 1 s.
+- **Permessi sincronizzati** (predefinito): un dispositivo associato può cambiare i permessi
+  della coppia anche su questo computer. Il canale è quello autenticato del pairing, quindi solo
+  un dispositivo associato può farlo, mai un altro della rete. Ogni permesso sensibile concesso
+  dall'altro lato compare come avviso di sicurezza. Chi vuole che il computer decida da solo
+  disattiva "Sincronizza i permessi" nelle Impostazioni.
 - I log non contengono contenuti privati: gli appunti vengono registrati solo come lunghezza.
 
 ## Disconnessioni e anomalie

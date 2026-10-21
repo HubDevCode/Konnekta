@@ -909,7 +909,7 @@ async function renderSettings() {
   const [share, clip, shot, filter, dnd, pres, tel] = await Promise.all([
     get('share'), get('clipboard'), get('screenshot'), act('notifications', 'getFilter').catch(() => null), get('dnd'), get('presenter'), get('calls')]);
   const general = { deviceName: cfg.device_name, downloadDir: cfg.download_dir, announce: cfg.announce, mdns: cfg.mdns,
-    kdeConnect: !!cfg.kde_connect?.enabled, flux: !!cfg.flux?.enabled };
+    kdeConnect: !!cfg.kde_connect?.enabled, flux: !!cfg.flux?.enabled, syncPermissions: cfg.sync_permissions !== false };
   const txt = (o, k, label) => h('label', { class: 'field' }, label, h('input', { type: 'text', value: o[k] ?? '', oninput: (e) => { o[k] = e.target.value; } }));
   const chk = (o, k, label) => h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: o[k], onchange: (e) => { o[k] = e.target.checked; } }), label);
   const folder = (o, k, label) => {
@@ -929,6 +929,7 @@ async function renderSettings() {
       folder(general, 'downloadDir', 'Cartella predefinita per i file ricevuti'),
       chk(general, 'announce', 'Annuncia questo computer sulla rete locale (disattiva sulle reti pubbliche: i dispositivi associati vengono comunque contattati)'),
       chk(general, 'mdns', 'Trova i dispositivi con mDNS (_konnekta._tcp)'),
+      chk(general, 'syncPermissions', 'Sincronizza i permessi con i dispositivi: ciò che concedi o revochi sul telefono vale anche qui, e viceversa'),
       h('h3', {}, 'Ponti verso altre app (facoltativi)'),
       chk(general, 'kdeConnect', 'Accetta le app KDE Connect e GSConnect (porte 1716; solo le funzioni comuni; richiede il riavvio)'),
       chk(general, 'flux', 'Accetta le app Flux (porte 12100; solo le funzioni comuni; richiede il riavvio)')),

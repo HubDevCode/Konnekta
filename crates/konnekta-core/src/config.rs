@@ -90,6 +90,8 @@ pub struct Config {
     pub reconnect_interval_secs: u64,
     /// Globally disabled plugins (by id).
     pub disabled_plugins: BTreeSet<String>,
+    /// Keep the permissions of each pair the same on both devices.
+    pub sync_permissions: bool,
     pub limits: Limits,
 }
 
@@ -115,6 +117,7 @@ impl Default for Config {
             announce_interval_secs: 60,
             reconnect_interval_secs: 10,
             disabled_plugins: BTreeSet::new(),
+            sync_permissions: true,
             limits: Limits::default(),
         }
     }
