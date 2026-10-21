@@ -2530,15 +2530,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "konnekta-approve"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "hex",
+ "libc",
+ "ring",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "x509-parser",
+]
+
+[[package]]
 name = "konnekta-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "konnekta-approve",
  "konnekta-core",
  "konnekta-crypto",
  "konnekta-platform",
  "konnekta-plugins",
+ "libc",
  "serde",
  "serde_json",
  "tokio",
@@ -2664,14 +2680,17 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "base64 0.22.1",
  "bytes",
  "directories",
  "flate2",
  "hex",
+ "konnekta-approve",
  "konnekta-core",
  "konnekta-crypto",
  "konnekta-media",
  "konnekta-platform",
+ "ring",
  "serde",
  "serde_json",
  "sha2",

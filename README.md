@@ -40,6 +40,7 @@ ha nomi e formati di Konnekta.
 | **Non disturbare** sincronizzato con priorità configurabile | DoNotDisturb | Flux | |
 | **Screenshot automatici** → cartella + appunti, senza duplicati | Screenshots | — | |
 | **Aggiornamento dell'app Android** inviato dal computer | Files | — | l'installer di Android chiede sempre conferma |
+| **Approva `sudo` con l'impronta** del telefono | Approve (sensibile) | — | Linux; la password resta sempre disponibile |
 | **Hyprland**: tema, workspace e dispatcher nel Deck, modulo Waybar | — | — | Linux |
 
 ## Sicurezza in breve
@@ -102,6 +103,19 @@ konnekta action deck get            # qualsiasi azione di plugin
 konnekta events                     # eventi in tempo reale (JSON)
 konnekta waybar                     # stato per un modulo Waybar
 ```
+
+### Approvare `sudo` con l'impronta (Linux)
+
+```bash
+cargo build --release -p konnekta-approve
+sudo packaging/install-approve.sh          # installa l'helper in /usr/lib/konnekta
+konnekta grant Pixel approve               # permesso sensibile, una volta
+sudo konnekta approve enroll Pixel         # il telefono crea la chiave; scrivi il codice che mostra
+sudo konnekta approve enable sudo          # da ora sudo chiede prima al telefono
+konnekta approve status
+```
+
+Dettagli e rischi in [docs/SICUREZZA.md](docs/SICUREZZA.md#approvazione-di-sudo-con-limpronta).
 
 Su Linux il daemon può essere avviato con systemd: vedi `packaging/konnekta.service`.
 

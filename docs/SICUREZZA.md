@@ -59,6 +59,65 @@ permessi. Un pacchetto da un dispositivo non associato provoca la risposta `pair
 
 La CI esegue questi test su Linux, Windows e macOS e un `cargo audit` delle dipendenze.
 
+## Approvazione di `sudo` con l'impronta
+
+Il telefono può approvare `sudo` (e `polkit-1`, dove è sicuro) al posto della password. Se
+qualcosa non va, PAM chiede la password come sempre: l'approvazione non può mai rendere l'accesso
+root più facile che con la password.
+
+| Parte | Gira come | Compito |
+|---|---|---|
+| `konnekta-approve` (`/usr/lib/konnekta/`) | root, avviato da `pam_exec` | crea la richiesta, verifica la firma, decide |
+| `/etc/konnekta/approve/<utente>.pub` | file di root | la chiave pubblica P-256 del telefono: il punto di fiducia |
+| daemon Konnekta | l'utente | trasporta solo i messaggi tra helper e telefono |
+| app del telefono | — | mostra la richiesta e firma con una chiave che esce solo dall'hardware sicuro (Android Keystore, Secure Enclave), dopo l'impronta |
+
+**Come funziona.** L'helper legge gli elementi PAM, rifiuta `sshd`, i servizi non elencati
+(`sudo`, `sudo-i`, `polkit-1`) e le richieste fatte da un altro utente. Legge e controlla il file
+della chiave, poi genera un nonce casuale di 32 byte e l'ora. Si collega a
+`/run/user/<uid>/konnekta.sock` e, prima di inviare qualcosa, verifica che cartella, socket e
+processo dall'altra parte (`SO_PEERCRED`) appartengano all'utente. Il telefono firma il messaggio
+`konnekta-approve-v1` (host, utente, servizio, tty, host remoto, ora, nonce). L'helper **ricostruisce
+il messaggio dai propri campi** e verifica la firma con la chiave di root: non usa nulla di ciò
+che riceve indietro. Esce con 0 solo con una firma valida.
+
+**Controlli sul file della chiave.** Percorso fisso (nessuna opzione o variabile d'ambiente lo
+cambia). File regolare, non link simbolico, di root, non scrivibile da gruppo o altri. Ogni
+cartella fino a `/` è di root e non scrivibile da altri. Il file viene aperto con `O_NOFOLLOW` e
+deve essere lo stesso file controllato. Al massimo 16 KiB, una sola chiave EC P-256.
+
+**Registrazione** (`sudo konnekta approve enroll <telefono>`). Il telefono crea una nuova chiave
+che richiede l'impronta e firma il messaggio `konnekta-approve-enroll-v1`. Il comando verifica la
+firma con la nuova chiave e chiede di **scrivere il codice che il telefono mostra**: i primi 8
+byte dello SHA-256 della chiave, che non vengono mai stampati nel terminale. Solo allora root
+scrive il file. `sudo konnekta approve enable sudo` aggiunge la riga PAM, con una copia di
+sicurezza in `/etc/konnekta/pam-backup/`, e rifiuta un helper che non sia di root in una cartella
+di root.
+
+| Attaccante | Può | Non può |
+|---|---|---|
+| Rete | bloccare o ritardare: PAM chiede la password | leggere o modificare i messaggi (TLS con pinning), creare una firma valida |
+| Codice che gira come l'utente | sostituire il daemon, fermare l'approvazione, mandare richieste vere al telefono | firmare, cambiare il file della chiave senza una registrazione o un `sudo` dell'utente, puntare l'helper a un'altra chiave, riusare una vecchia firma |
+| Chi ha il telefono bloccato o sbloccato | rifiutare le richieste | approvare senza l'impronta |
+
+**Rischi aperti.**
+- *Approvazione per abitudine*: codice che gira come l'utente può avviare `sudo` e aspettare.
+  Approva solo subito dopo aver scritto tu il comando, e controlla terminale e servizio mostrati.
+- *Registrazione in una sessione compromessa*: codice dell'utente può digitare nel terminale il
+  codice di una propria chiave (tastiera virtuale). Registra il telefono solo in una sessione di
+  cui ti fidi.
+- *Nessuna attestazione della chiave*: il computer si fida che il telefono abbia creato la chiave
+  con l'impronta obbligatoria; un'app modificata potrebbe non farlo.
+- *polkit*: polkit non dice quale utente chiede, quindi `polkit-1` è permesso solo se
+  `polkit-agent-helper-1` è setuid. Con polkit ≥ 126, che lo esegue come servizio di sistema (per
+  esempio su Arch), `enable polkit-1` viene rifiutato.
+- Solo utenti locali (`/etc/passwd`); Linux per ora.
+
+Test: `crates/konnekta-approve` (formato dei messaggi, nessun valore può aggiungere righe, file
+non sicuri rifiutati, nomi utente, chi può chiedere) e `konnekta-plugins` `e2e` `approve::*`
+(helper vero e daemon vero con un telefono simulato: approvazione, rifiuto, firma falsa, nessuna
+chiave, registrazione con codice giusto e sbagliato).
+
 ## Limiti noti
 
 - Il primo contatto si basa sulla verifica visiva del codice da parte dell'utente: se l'utente

@@ -656,3 +656,336 @@ async fn phone_camera_scan_and_photo_only_when_asked() {
     wait(&mut desk.ev, |e| matches!(e, Event::Plugin { plugin, kind, .. } if plugin == "photo" && kind == "received")).await;
     assert_eq!(std::fs::read(dl.join("IMG_1.jpg")).unwrap(), jpeg);
 }
+
+/// The full fingerprint approval, as root would run it but without root:
+/// the real PAM helper logic talks to the real daemon over its IPC socket,
+/// and a simulated phone signs with a P-256 key.
+#[cfg(unix)]
+mod approve {
+    use super::*;
+    use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD as B64;
+    use konnekta_approve::helper::{Outcome, PamEnv, Settings, run};
+    use konnekta_approve::key::{KeyFile, PublicKey};
+    use konnekta_approve::message::Approval;
+    use ring::rand::SystemRandom;
+    use ring::signature::{ECDSA_P256_SHA256_ASN1_SIGNING, EcdsaKeyPair, KeyPair};
+
+    const P256_SPKI_PREFIX: [u8; 26] = [
+        0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, 0x06, 0x08,
+        0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07, 0x03, 0x42, 0x00,
+    ];
+
+    fn phone_key() -> EcdsaKeyPair {
+        let rng = SystemRandom::new();
+        let pkcs8 = EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_ASN1_SIGNING, &rng).unwrap();
+        EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_ASN1_SIGNING, pkcs8.as_ref(), &rng).unwrap()
+    }
+
+    #[derive(Clone, Copy)]
+    enum Phone {
+        Approve,
+        Deny,
+        /// Signs the request with another nonce (a forged or replayed answer).
+        SignOther,
+        Silent,
+    }
+
+    struct Setup {
+        _desk: Node,
+        _phone: Konnekta,
+        _dirs: tempfile::TempDir,
+        settings: Settings,
+        env: PamEnv,
+        pev: broadcast::Receiver<Event>,
+        phone_handle: konnekta_core::DeviceHandle,
+        key: EcdsaKeyPair,
+    }
+
+    async fn setup(enroll: bool) -> Setup {
+        let (desk, phone, pev, pdir) = desktop_and_bridge_phone().await;
+        let (did, pid) = (
+            desk.k.device_id().to_string(),
+            phone.device_id().to_string(),
+        );
+        phone
+            .set_permission(&did, Permission::Approve, true)
+            .unwrap();
+        desk.k
+            .set_permission(&pid, Permission::Approve, true)
+            .unwrap();
+        let dirs = tempfile::tempdir().unwrap();
+        let sock = dirs.path().join("run/konnekta.sock");
+        std::fs::create_dir_all(sock.parent().unwrap()).unwrap();
+        std::fs::set_permissions(
+            sock.parent().unwrap(),
+            std::os::unix::fs::PermissionsExt::from_mode(0o700),
+        )
+        .unwrap();
+        tokio::spawn(konnekta_core::ipc::listen(sock.clone(), desk.k.clone()));
+        eventually(|| sock.exists()).await;
+        let key = phone_key();
+        let key_dir = dirs.path().join("etc/approve");
+        std::fs::create_dir_all(dirs.path().join("etc")).unwrap();
+        std::fs::set_permissions(
+            dirs.path().join("etc"),
+            std::os::unix::fs::PermissionsExt::from_mode(0o755),
+        )
+        .unwrap();
+        std::fs::set_permissions(
+            dirs.path(),
+            std::os::unix::fs::PermissionsExt::from_mode(0o755),
+        )
+        .unwrap();
+        let uid = unsafe { libc_getuid() };
+        if enroll {
+            let spki = [&P256_SPKI_PREFIX[..], key.public_key().as_ref()].concat();
+            let kf = KeyFile {
+                device_id: pid.clone(),
+                device_name: "Phone".into(),
+                enrolled: 1,
+                key: PublicKey::from_spki_der(&spki).unwrap(),
+            };
+            konnekta_approve::keyfile::write(&key_dir, "tester", &kf).unwrap();
+        }
+        let settings = Settings {
+            key_dir,
+            key_owner: uid,
+            socket: Box::new(move |_| sock.clone()),
+            host: "testhost".into(),
+            lookup_uid: Box::new(move |u| (u == "tester").then_some(uid)),
+        };
+        let env = PamEnv {
+            user: "tester".into(),
+            service: "sudo".into(),
+            tty: "/dev/pts/7".into(),
+            pam_type: "auth".into(),
+            real_uid: uid,
+            ..Default::default()
+        };
+        let phone_handle = phone.device_handle(&did).unwrap();
+        drop(pdir);
+        Setup {
+            _desk: desk,
+            _phone: phone,
+            _dirs: dirs,
+            settings,
+            env,
+            pev,
+            phone_handle,
+            key,
+        }
+    }
+
+    unsafe extern "C" {
+        #[link_name = "getuid"]
+        fn libc_getuid() -> u32;
+    }
+
+    /// Run the helper (blocking, like pam_exec) while the phone answers.
+    async fn approve_with(
+        phone: Phone,
+        s: Setup,
+    ) -> (Outcome, Vec<String>, Option<serde_json::Value>) {
+        let Setup {
+            settings,
+            env,
+            mut pev,
+            phone_handle,
+            key,
+            _desk,
+            _phone,
+            _dirs,
+        } = s;
+        let helper = tokio::task::spawn_blocking(move || {
+            let mut said = Vec::new();
+            let o = run(&env, &settings, &mut |l| said.push(l.to_owned()));
+            (o, said)
+        });
+        let request =
+            tokio::time::timeout(Duration::from_secs(5), bridge_packet(&mut pev, "approve"))
+                .await
+                .ok();
+        if let Some(r) = &request {
+            let b = &r["body"];
+            let mut a = Approval {
+                host: b["host"].as_str().unwrap().into(),
+                user: b["user"].as_str().unwrap().into(),
+                service: b["service"].as_str().unwrap().into(),
+                tty: b["tty"].as_str().unwrap().into(),
+                rhost: b["rhost"].as_str().unwrap().into(),
+                time: b["time"].as_u64().unwrap(),
+                nonce: b["nonce"].as_str().unwrap().into(),
+            };
+            let id = b["id"].as_str().unwrap();
+            let answer = match phone {
+                Phone::Approve | Phone::SignOther => {
+                    if matches!(phone, Phone::SignOther) {
+                        a.nonce = "0".repeat(64);
+                    }
+                    let sig = key
+                        .sign(&SystemRandom::new(), &a.message().unwrap())
+                        .unwrap();
+                    Some(
+                        json!({ "id": id, "result": "approved", "signature": B64.encode(sig.as_ref()) }),
+                    )
+                }
+                Phone::Deny => Some(json!({ "id": id, "result": "denied" })),
+                Phone::Silent => None,
+            };
+            if let Some(body) = answer {
+                phone_handle
+                    .send(Packet::new(types::APPROVE, body))
+                    .await
+                    .unwrap();
+            }
+        }
+        let (o, said) = helper.await.unwrap();
+        (o, said, request.map(|r| r["body"].clone()))
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn fingerprint_approves_sudo() {
+        let (o, said, req) = approve_with(Phone::Approve, setup(true).await).await;
+        assert_eq!(o, Outcome::Approved);
+        let req = req.unwrap();
+        assert_eq!(
+            (
+                req["service"].as_str(),
+                req["user"].as_str(),
+                req["host"].as_str()
+            ),
+            (Some("sudo"), Some("tester"), Some("testhost"))
+        );
+        assert_eq!(req["nonce"].as_str().unwrap().len(), 64);
+        assert_eq!(
+            said,
+            [
+                "Approva su Phone per il terminale /dev/pts/7, oppure attendi la richiesta della password."
+            ]
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn denial_and_forged_signatures_fall_back_to_password() {
+        let (o, _, _) = approve_with(Phone::Deny, setup(true).await).await;
+        assert!(
+            matches!(o, Outcome::Fallback(ref m) if m.contains("denied")),
+            "{o:?}"
+        );
+        let (o, _, _) = approve_with(Phone::SignOther, setup(true).await).await;
+        assert_eq!(o, Outcome::Fallback("bad signature".into()));
+    }
+
+    /// The phone side of an enrollment: new key, signature over the
+    /// enrollment message. Returns the key and the code the phone shows.
+    async fn phone_enrolls(
+        pev: &mut broadcast::Receiver<Event>,
+        h: &konnekta_core::DeviceHandle,
+    ) -> (EcdsaKeyPair, String) {
+        use sha2::{Digest, Sha256};
+        let r = bridge_packet(pev, "approve").await;
+        let b = &r["body"];
+        assert_eq!(b["kind"], "enroll");
+        let key = phone_key();
+        let spki = [&P256_SPKI_PREFIX[..], key.public_key().as_ref()].concat();
+        let m = konnekta_approve::message::Enrollment {
+            host: b["host"].as_str().unwrap().into(),
+            user: b["user"].as_str().unwrap().into(),
+            key: hex::encode(Sha256::digest(&spki)),
+            time: b["time"].as_u64().unwrap(),
+            nonce: b["nonce"].as_str().unwrap().into(),
+        };
+        let sig = key
+            .sign(&SystemRandom::new(), &m.message().unwrap())
+            .unwrap();
+        h.send(Packet::new(
+            types::APPROVE,
+            json!({ "id": b["id"], "result": "approved", "publicKey": B64.encode(&spki), "signature": B64.encode(sig.as_ref()) }),
+        ))
+        .await
+        .unwrap();
+        let code = hex::encode_upper(&Sha256::digest(&spki)[..8]);
+        (key, code)
+    }
+
+    fn enroll_settings(s: &Setup, uid: u32) -> konnekta_approve::enroll::Settings {
+        konnekta_approve::enroll::Settings {
+            key_dir: s.settings.key_dir.clone(),
+            socket: (s.settings.socket)(uid),
+            user: "tester".into(),
+            uid,
+            host: "testhost".into(),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn enroll_then_approve_with_the_new_key() {
+        let mut s = setup(false).await;
+        let uid = unsafe { libc_getuid() };
+        let es = enroll_settings(&s, uid);
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        let job = tokio::task::spawn_blocking(move || {
+            let mut said = Vec::new();
+            // A user who types nothing more ends the enrollment (no hang).
+            let mut ask = |_: &str| {
+                rx.recv_timeout(Duration::from_secs(5))
+                    .map_err(std::io::Error::other)
+            };
+            let r = konnekta_approve::enroll::run(&es, "Phone", &mut ask, &mut |l| {
+                said.push(l.to_owned())
+            });
+            (r, said)
+        });
+        let (key, code) = phone_enrolls(&mut s.pev, &s.phone_handle).await;
+        // The user types the code from the phone screen, with spaces.
+        tx.send("0000 0000 0000 0000\n".into()).unwrap();
+        tx.send(format!("{} {}\n", code[..8].to_lowercase(), &code[8..]))
+            .unwrap();
+        let (r, said) = job.await.unwrap();
+        let path = r.unwrap();
+        assert!(said.iter().any(|l| l.contains("non corrisponde")));
+        assert!(
+            !said.iter().any(|l| l.contains(&code)),
+            "the code is never printed"
+        );
+        let stored = konnekta_approve::keyfile::read(&path, uid).unwrap();
+        assert_eq!(stored.device_name, "Phone");
+
+        // The enrolled key now approves sudo; the old test key is not used.
+        s.key = key;
+        let (o, _, _) = approve_with(Phone::Approve, s).await;
+        assert_eq!(o, Outcome::Approved);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn wrong_code_saves_nothing() {
+        let mut s = setup(false).await;
+        let uid = unsafe { libc_getuid() };
+        let es = enroll_settings(&s, uid);
+        let key_dir = es.key_dir.clone();
+        let job = tokio::task::spawn_blocking(move || {
+            konnekta_approve::enroll::run(
+                &es,
+                "Phone",
+                &mut |_| Ok("DEAD BEEF DEAD BEEF\n".into()),
+                &mut |_| {},
+            )
+        });
+        phone_enrolls(&mut s.pev, &s.phone_handle).await;
+        assert!(
+            job.await
+                .unwrap()
+                .unwrap_err()
+                .contains("non corrispondono")
+        );
+        assert!(!key_dir.join("tester.pub").exists());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn no_enrolled_key_asks_nothing() {
+        let (o, said, req) = approve_with(Phone::Silent, setup(false).await).await;
+        assert_eq!(o, Outcome::Fallback("no key enrolled".into()));
+        assert!(said.is_empty() && req.is_none(), "the phone is never asked");
+    }
+}

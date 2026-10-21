@@ -155,6 +155,13 @@ pub fn mobile(pending: Arc<PendingPayloads>, call_control: bool) -> Vec<Arc<dyn 
             [PHOTO_REQUEST],
             [PHOTO]
         ),
+        bridge!(
+            "approve",
+            "Fingerprint approval",
+            Approve,
+            [APPROVE_REQUEST],
+            [APPROVE]
+        ),
         bridge!("appupdate", "App update", Files, [APP_UPDATE], []),
         bridge!(
             "finddevice",

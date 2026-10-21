@@ -6,6 +6,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+konnekta-approve.workspace = true
 konnekta-core.workspace = true
 konnekta-platform.workspace = true
 konnekta-media.workspace = true
@@ -26,3 +27,5 @@ flate2 = "1"
 [dev-dependencies]
 tempfile.workspace = true
 konnekta-crypto.workspace = true
+ring = "0.17"
+base64.workspace = true

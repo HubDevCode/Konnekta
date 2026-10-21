@@ -12,6 +12,8 @@ macro_rules! println {
     }};
 }
 
+#[cfg(unix)]
+mod approve;
 mod waybar;
 
 use anyhow::{Context, Result, bail};
@@ -111,6 +113,12 @@ enum Cmd {
     Events,
     /// Status for a Waybar `custom` module (JSON lines, keeps running).
     Waybar,
+    /// Approve sudo / polkit with the phone's fingerprint.
+    #[cfg(unix)]
+    Approve {
+        #[command(subcommand)]
+        cmd: approve::ApproveCmd,
+    },
 }
 
 fn data_dir(cli: &Cli) -> PathBuf {
@@ -327,9 +335,16 @@ async fn main() -> Result<()> {
     if let Cmd::Waybar = cli.cmd {
         return waybar::run(dir).await;
     }
+    // Runs as root through sudo: it finds the user's daemon by uid itself.
+    #[cfg(unix)]
+    if let Cmd::Approve { cmd } = cli.cmd {
+        return tokio::task::spawn_blocking(move || approve::run(cmd)).await?;
+    }
     let mut c = ipc::Client::connect(&ipc::endpoint(&dir)).await?;
     match cli.cmd {
         Cmd::Daemon { .. } | Cmd::Waybar => unreachable!(),
+        #[cfg(unix)]
+        Cmd::Approve { .. } => unreachable!(),
         Cmd::Info => print(&c.call("info", Value::Null).await?),
         Cmd::Devices => print_devices(&c.call("devices", Value::Null).await?),
         Cmd::Connect { address } => {

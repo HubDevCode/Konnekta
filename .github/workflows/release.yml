@@ -99,6 +99,9 @@ jobs:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release -p konnekta-cli --target ${{ matrix.target }}
+      # PAM helper for fingerprint approval (Linux and macOS).
+      - if: runner.os != 'Windows'
+        run: cargo build --release -p konnekta-approve --target ${{ matrix.target }}
       - name: Package
         shell: bash
         run: |
@@ -106,6 +109,9 @@ jobs:
           mkdir "$name"
           cp target/${{ matrix.target }}/release/${{ matrix.bin }} "$name/"
           cp README.md LICENSE packaging/konnekta.service "$name/" 2>/dev/null || true
+          if [ "${{ runner.os }}" != "Windows" ]; then
+            cp target/${{ matrix.target }}/release/konnekta-approve packaging/install-approve.sh "$name/"
+          fi
           if [ "${{ runner.os }}" = "Windows" ]; then 7z a "$name.zip" "$name"; else tar czf "$name.tar.gz" "$name"; fi
       - name: Upload
         shell: bash

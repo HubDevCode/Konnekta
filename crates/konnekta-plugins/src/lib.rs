@@ -4,6 +4,7 @@
 //! (`PluginInfo::interop`).
 
 pub mod actions;
+pub mod approve;
 pub mod appupdate;
 pub mod battery;
 pub mod bridge;
@@ -50,6 +51,7 @@ pub fn all(platform: Platform) -> Vec<Arc<dyn Plugin>> {
         Arc::new(sms::SmsPlugin::default()),
         Arc::new(photo::PhotoPlugin::new(platform.clone())),
         Arc::new(appupdate::AppUpdatePlugin),
+        Arc::new(approve::ApprovePlugin::default()),
         Arc::new(hyprland::HyprlandPlugin),
         Arc::new(finddevice::FindDevicePlugin),
         Arc::new(deck::DeckPlugin::new(platform.clone(), executor)),

@@ -41,7 +41,7 @@ un'opzione gradita.
 - [x] Sfoglia PC dal telefono (sola lettura, cartelle consentite, file nascosti esclusi, sessione con stop).
 - [x] SMS (lettura conversazioni e invio, compatibile con `kdeconnect.sms.*`).
 - [x] Foto/scansione OCR/QR dal telefono (`photo.request` con `mode`, compatibile con KDE per le foto); aggiornamento dell'app Android inviato dal computer.
-- [ ] Approvazione `sudo`/polkit con impronta: helper PAM `konnekta-approve`, chiave pubblica del telefono di proprietà di root, firma su nonce generato dall'helper.
+- [x] Approvazione `sudo`/polkit con impronta: helper PAM `konnekta-approve`, chiave pubblica del telefono di proprietà di root, firma su nonce generato dall'helper (lato computer completo e testato; la firma sul telefono arriva con le app native).
 - [x] Hyprland: tema dai colori Hyprland e dalla palette Waybar, `workspaces`/`dispatch` per il Deck, modulo Waybar (`konnekta waybar`). Il tema va ancora applicato nell'app desktop (Fase 3).
 
 ## Fase 3 — App
