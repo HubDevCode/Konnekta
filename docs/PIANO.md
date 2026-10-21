@@ -47,6 +47,10 @@ un'opzione gradita.
 ## Fase 3 — App
 
 - Desktop Tauri: vista Chat, conferma pairing a 16 caratteri, nuove impostazioni.
-- Android nativo (Kotlin/Compose) con core via UniFFI; build verificata localmente con Android SDK.
+- [~] Android nativo (Kotlin/Compose) con il core Rust tramite l'ABI C (JNA), non UniFFI: una sola ABI per Android e iOS.
+  Fatto (21/10/2026): `apps/android` compila (`scripts/build-android.sh`), APK con core arm64/x86_64; servizio in primo piano,
+  pairing con codice di 16 caratteri, permessi, ping, appunti, trova telefono, batteria, approvazione sudo con impronta
+  (Keystore P-256 + BiometricPrompt, stessi vettori del lato Rust). Da fare: prova su emulatore/telefono (emulatore non ancora
+  installato), notifiche, file, media, touchpad, Deck, Chat, Sfoglia PC, SMS, foto, flussi.
 - iOS nativo (SwiftUI) con core via UniFFI; build verificata in CI (macOS).
 - CI/CD aggiornata; rimozione dell'app Flutter.

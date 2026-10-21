@@ -260,7 +260,8 @@ pub struct SystemAudioCapture {
 
 impl SystemAudioCapture {
     pub async fn start() -> Result<Self> {
-        let (tx, rx) = tokio::sync::mpsc::channel(32);
+        // The type is fixed here: on platforms without capture `tx` is unused.
+        let (tx, rx) = tokio::sync::mpsc::channel::<Vec<u8>>(32);
         let stop = Arc::new(AtomicBool::new(false));
         #[cfg(target_os = "linux")]
         {
@@ -298,7 +299,7 @@ impl SystemAudioCapture {
         }
         #[allow(unreachable_code)]
         {
-            let _ = tx;
+            let _ = (tx, rx, stop);
             bail!("system audio capture not supported on this platform")
         }
     }

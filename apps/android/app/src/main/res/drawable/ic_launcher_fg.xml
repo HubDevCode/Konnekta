@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Computer (blue) linked to a phone (green), inside the 72dp safe zone. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <path android:fillColor="#89B4FA" android:pathData="M30,36h34v24h-34zM34,40v16h26v-16zM40,64h14v4h-14z" />
+    <path android:fillColor="#A6E3A1" android:pathData="M68,46h12v26h-12zM71,49v18h6v-18zM64,52h4v4h-4z" />
+</vector>

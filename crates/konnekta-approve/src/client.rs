@@ -34,7 +34,7 @@ fn err<T>(m: impl Into<String>) -> Result<T, ClientError> {
     Err(ClientError(m.into()))
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 fn peer_uid(s: &UnixStream) -> Option<u32> {
     use std::os::fd::AsRawFd;
     let mut cred = libc::ucred {
@@ -56,7 +56,7 @@ fn peer_uid(s: &UnixStream) -> Option<u32> {
     (r == 0).then_some(cred.uid)
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
 fn peer_uid(s: &UnixStream) -> Option<u32> {
     use std::os::fd::AsRawFd;
     let (mut uid, mut gid) = (u32::MAX, u32::MAX);
