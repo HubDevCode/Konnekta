@@ -65,6 +65,8 @@ fun ComputersScreen(devices: List<JSONObject>, open: (Route) -> Unit) {
     val paired = devices.filter { it.optBoolean("paired") }
     val available = (devices.filter { !it.optBoolean("paired") } + nearby).distinctBy { it.optString("id") }
         .filter { id -> paired.none { it.optString("id") == id.optString("id") } }
+        // Other phones running Konnekta are not computers: nothing to pair with.
+        .filter { it.optString("deviceType") !in setOf("phone", "tablet") }
 
     fun pair(d: JSONObject) = scope.launch {
         val id = d.optString("id")
@@ -98,7 +100,7 @@ fun ComputersScreen(devices: List<JSONObject>, open: (Route) -> Unit) {
         items(paired, key = { "p" + it.optString("id") }) { d ->
             val online = d.optBoolean("connected")
             ActionCard(
-                Icons.Filled.Computer, d.optString("name"),
+                if (d.optString("deviceType") in setOf("phone", "tablet")) Icons.Filled.PhoneAndroid else Icons.Filled.Computer, d.optString("name"),
                 if (online) "Connesso · ${d.optString("address")}"
                 else "Non raggiungibile${d.optString("address").takeIf { it.isNotEmpty() }?.let { " · $it" } ?: ""}",
                 trailing = {

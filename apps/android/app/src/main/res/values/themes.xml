@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.Konnekta" parent="android:Theme.Material.NoActionBar" />
+    <!-- Window colours match the Compose palette (ui/Theme.kt): no flash on start. -->
+    <style name="Theme.Konnekta" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/konnekta_bg</item>
+    </style>
     <!-- "Share › Konnekta": only the computer chooser is visible. -->
     <style name="Theme.Konnekta.Translucent" parent="android:Theme.Translucent.NoTitleBar">
         <item name="android:windowNoTitle">true</item>

@@ -500,12 +500,23 @@ function streamsTab(d) {
     row('systemaudio', '🔈 Audio del computer sul telefono', 'Ascolta sul telefono l\'audio riprodotto da questo computer.', false));
 }
 
+// Same names as the phone app (PERMISSION_LABELS in apps/android/.../ui/Common.kt).
+const PERMISSION_LABELS = {
+  ping: 'Ping', battery: 'Stato della batteria', clipboard: 'Appunti', files: 'Trasferimento file',
+  notifications: 'Notifiche', telephony: 'Chiamate', mediaControl: 'Controllo multimediale',
+  presenter: 'Telecomando per presentazioni', remoteInput: 'Mouse e tastiera', commands: 'Esecuzione di comandi',
+  deck: 'Azioni del Mobile Deck', microphone: 'Microfono', camera: 'Fotocamera e webcam', desktop: 'Desktop remoto',
+  systemAudio: 'Audio di sistema', doNotDisturb: 'Sincronizzazione Non disturbare', screenshots: 'Screenshot',
+  findMyPhone: 'Trova il dispositivo', browseFiles: 'Sfoglia i file del computer', messages: 'SMS',
+  approve: 'Approvazione con impronta (sudo)',
+};
+
 async function permissionsTab(d) {
   const perms = await api('permissions');
   return h('div', {},
     h('p', { class: 'small muted' }, 'Scegli cosa può fare questo dispositivo con il computer. Le autorizzazioni sensibili sono disattivate per impostazione predefinita.'),
     perms.map((p) => h('div', { class: 'perm' },
-      h('div', {}, h('div', {}, p.label, ' ', p.sensitive ? h('span', { class: 'badge warn' }, 'sensibile') : null)),
+      h('div', {}, h('div', {}, PERMISSION_LABELS[p.id] || p.label, ' ', p.sensitive ? h('span', { class: 'badge warn' }, 'sensibile') : null)),
       sw(d.permissions.includes(p.id), (v) => run(api('setPermission', { deviceId: d.id, permission: p.id, granted: v }))))));
 }
 

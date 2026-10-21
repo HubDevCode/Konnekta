@@ -10,6 +10,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -142,7 +143,7 @@ private fun App() {
 
     route?.let { r ->
         BackHandler { route = null }
-        Column(Modifier.fillMaxSize().safeDrawingPadding().padding(horizontal = 16.dp)) {
+        Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).safeDrawingPadding().padding(horizontal = 16.dp)) {
             val back = { route = null }
             when (r) {
                 Route.Media -> MediaScreen(current, back)
@@ -177,7 +178,7 @@ private fun App() {
             }
         },
     ) { pad ->
-        Column(Modifier.fillMaxSize().padding(pad).statusBarsPadding().padding(horizontal = 16.dp)) {
+        Column(Modifier.fillMaxSize().padding(pad).padding(horizontal = 16.dp)) {
             Row(Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 4.dp)) { ScopeChip(devices, current) }
             val open = { r: Route -> route = r }
             when (tab) {
