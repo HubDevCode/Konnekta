@@ -1,4 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <style name="Theme.Konnekta" parent="android:Theme.Material.NoActionBar" />
+    <!-- "Share › Konnekta": only the computer chooser is visible. -->
+    <style name="Theme.Konnekta.Translucent" parent="android:Theme.Translucent.NoTitleBar">
+        <item name="android:windowNoTitle">true</item>
+    </style>
 </resources>

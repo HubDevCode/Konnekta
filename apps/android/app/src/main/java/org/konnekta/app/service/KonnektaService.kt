@@ -14,6 +14,7 @@ import android.content.pm.ServiceInfo
 import android.media.AudioAttributes
 import android.media.Ringtone
 import android.media.RingtoneManager
+import android.net.Uri
 import android.net.wifi.WifiManager
 import android.os.BatteryManager
 import android.os.Build
@@ -34,6 +35,7 @@ import org.konnekta.app.approve.ApproveKeys
 import org.konnekta.app.approve.PendingApprovals
 import org.konnekta.app.core.Core
 import org.konnekta.app.core.Types
+import org.konnekta.app.state.Store
 import org.konnekta.app.ui.MainActivity
 import java.io.File
 import java.util.concurrent.Executors
@@ -51,6 +53,7 @@ class KonnektaService : Service() {
         private const val N_RING = 3
         private const val N_APPROVE = 4
         private const val N_PAIR = 5
+        private const val N_SHARE = 6
         const val ACTION_STOP_RING = "org.konnekta.app.STOP_RING"
 
         /** Pairing request waiting for the user: {deviceId, deviceName, verificationKey, confirm}. */
@@ -59,11 +62,16 @@ class KonnektaService : Service() {
         fun start(context: Context) {
             context.startForegroundService(Intent(context, KonnektaService::class.java))
         }
+
+        fun stopRinging(context: Context) {
+            context.startService(Intent(context, KonnektaService::class.java).setAction(ACTION_STOP_RING))
+        }
     }
 
     @Volatile
     private var running = true
     private val io = Executors.newSingleThreadExecutor()
+    private val transfers = Executors.newFixedThreadPool(2)
     private val main = Handler(Looper.getMainLooper())
     private var multicast: WifiManager.MulticastLock? = null
     private var ringtone: Ringtone? = null
@@ -113,6 +121,7 @@ class KonnektaService : Service() {
             return
         }
         KonnektaApp.core = core
+        refreshDevices(core)
         main.post { registerReceiver(battery, IntentFilter(Intent.ACTION_BATTERY_CHANGED)) }
         while (running) {
             val e = core.nextEvent(500) ?: continue
@@ -132,7 +141,7 @@ class KonnektaService : Service() {
         when (e.optString("event")) {
             "plugin" -> if (e.optString("kind") == "packet") {
                 val data = e.optJSONObject("data") ?: return
-                onPacket(core, e.optString("deviceId"), data.optString("type"), data.optJSONObject("body") ?: JSONObject())
+                onPacket(core, e.optString("deviceId"), data)
             }
             "pairRequested" -> showPair(e, confirm = false)
             "pairConfirm" -> showPair(e, confirm = true)
@@ -143,22 +152,118 @@ class KonnektaService : Service() {
             "unpaired" -> ApproveKeys(this).remove(e.optString("deviceId"))
             "deviceConnected" -> lastBattery?.let { b -> sendToAll(core, Types.BATTERY, b) }
         }
+        when (e.optString("event")) {
+            "deviceConnected", "deviceDisconnected", "deviceUpdated", "paired", "unpaired", "pairRejected" -> refreshDevices(core)
+        }
+    }
+
+    private fun refreshDevices(core: Core) {
+        runCatching { core.callArray("devices") }.getOrNull()?.let { a ->
+            Store.devices.value = (0 until a.length()).mapNotNull { a.optJSONObject(it) }
+        }
     }
 
     private fun name(core: Core, id: String): String =
         runCatching { core.callObject("device", JSONObject().put("deviceId", id)).optString("name") }.getOrNull()
             ?.ifBlank { null } ?: "Computer"
 
-    private fun onPacket(core: Core, deviceId: String, type: String, body: JSONObject) {
+    private fun onPacket(core: Core, deviceId: String, data: JSONObject) {
+        val type = data.optString("type")
+        val body = data.optJSONObject("body") ?: JSONObject()
+        val payloadKey = data.optString("payloadKey").ifEmpty { null }
         when (type) {
-            Types.PING -> notify(N_PING, "Ping da ${name(core, deviceId)}", body.optString("message", "Ping"))
+            Types.PING -> {
+                val msg = body.optString("message", "Ping")
+                notify(N_PING, "Ping da ${name(core, deviceId)}", msg)
+                Store.item(deviceId, "ping", "Ping", msg)
+            }
             Types.CLIPBOARD -> body.optString("content").takeIf { it.isNotEmpty() }?.let { text ->
                 main.post {
                     getSystemService(ClipboardManager::class.java)?.setPrimaryClip(ClipData.newPlainText("Konnekta", text))
                 }
+                Store.item(deviceId, "clipboard", "Appunti", text)
             }
-            Types.FIND_DEVICE -> main.post { ring(name(core, deviceId)) }
+            Types.FIND_DEVICE -> main.post {
+                ring(name(core, deviceId))
+                Store.item(deviceId, "ring", "${name(core, deviceId)} ti sta cercando")
+            }
             Types.APPROVE_REQUEST -> onApproveRequest(core, deviceId, body)
+            Types.SHARE -> onShare(core, deviceId, body, payloadKey)
+            Types.BROWSE -> onBrowse(core, deviceId, body, payloadKey)
+            Types.MEDIA -> {
+                body.optJSONArray("playerList")?.let { l ->
+                    Store.put(Store.pcPlayers, deviceId, (0 until l.length()).map { l.optString(it) })
+                }
+                val merged = JSONObject((Store.pcMedia.value[deviceId] ?: JSONObject()).toString())
+                body.keys().forEach { k -> if (k != "playerList") merged.put(k, body.get(k)) }
+                Store.put(Store.pcMedia, deviceId, merged)
+            }
+            Types.COMMANDS -> {
+                val list = runCatching { JSONObject(body.optString("commandList", "{}")) }.getOrDefault(JSONObject())
+                Store.put(Store.commands, deviceId, list.keys().asSequence().associateWith { list.getJSONObject(it) })
+            }
+            Types.DECK -> when (body.optString("type")) {
+                "layout" -> Store.put(Store.deckLayout, deviceId, body)
+                "state" -> {
+                    val merged = JSONObject((Store.deckStates.value[deviceId] ?: JSONObject()).toString())
+                    body.optJSONObject("states")?.let { st -> st.keys().forEach { merged.put(it, st.get(it)) } }
+                    Store.put(Store.deckStates, deviceId, merged)
+                }
+            }
+            Types.NOTIFICATION_REQUEST -> {
+                if (body.optBoolean("request")) NotificationForwarder.resendAll(deviceId)
+                body.optString("cancel").takeIf { it.isNotEmpty() }?.let { NotificationForwarder.dismiss(it) }
+            }
+            Types.NOTIFICATION_REPLY ->
+                NotificationForwarder.reply(body.optString("requestReplyId"), body.optString("message"))
+            Types.NOTIFICATION_ACTION ->
+                NotificationForwarder.action(body.optString("key"), body.optString("action"))
+        }
+    }
+
+    // --- files and links -------------------------------------------------------
+
+    private fun onShare(core: Core, deviceId: String, body: JSONObject, payloadKey: String?) {
+        body.optString("text").takeIf { it.isNotEmpty() }?.let { text ->
+            main.post {
+                getSystemService(ClipboardManager::class.java)?.setPrimaryClip(ClipData.newPlainText("Konnekta", text))
+            }
+            Store.item(deviceId, "text", "Testo ricevuto", text)
+            notify(N_SHARE, "Testo da ${name(core, deviceId)}", "Copiato negli appunti")
+            return
+        }
+        body.optString("url").takeIf { it.isNotEmpty() }?.let { url ->
+            Store.item(deviceId, "link", "Link ricevuto", url, target = url)
+            notify(N_SHARE, "Link da ${name(core, deviceId)}", url, Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+            return
+        }
+        if (payloadKey != null) receiveFile(core, deviceId, payloadKey, body.optString("filename"))
+    }
+
+    private fun onBrowse(core: Core, deviceId: String, body: JSONObject, payloadKey: String?) {
+        when (body.optString("action")) {
+            "file" -> if (payloadKey != null) receiveFile(core, deviceId, payloadKey, body.optString("name"))
+            "roots" -> body.optJSONArray("roots")?.let { Store.put(Store.browseRoots, deviceId, it) }
+            else -> Store.put(Store.browse, deviceId, body)
+        }
+    }
+
+    /** Downloads run off the event thread so other packets keep flowing. */
+    private fun receiveFile(core: Core, deviceId: String, payloadKey: String, filename: String) {
+        val t = Store.startTransfer("Ricevo ${Files.safeName(filename)}")
+        transfers.execute {
+            try {
+                val (uri, fname) = Files.receive(this, core, payloadKey, filename)
+                val mime = Files.mimeOf(fname)
+                Store.item(deviceId, "file", fname, "Salvato in Download/${Files.FOLDER}", target = uri.toString(), mime = mime)
+                notify(N_SHARE, "File da ${name(core, deviceId)}", fname,
+                    Intent(Intent.ACTION_VIEW).setDataAndType(uri, mime).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
+            } catch (e: Exception) {
+                Log.w(TAG, "receive failed", e)
+                Store.item(deviceId, "error", "Ricezione non riuscita", "${Files.safeName(filename)}: ${e.message}")
+            } finally {
+                Store.endTransfer(t)
+            }
         }
     }
 
@@ -276,6 +381,7 @@ class KonnektaService : Service() {
     }
 
     private fun stopRing() {
+        Store.dismissKind("ring")
         ringtone?.stop()
         ringtone = null
         nm.cancel(N_RING)
@@ -287,12 +393,15 @@ class KonnektaService : Service() {
         this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE,
     )
 
-    private fun notify(id: Int, title: String, text: String) {
+    private fun notify(id: Int, title: String, text: String, open: Intent? = null) {
+        val tap = open?.let {
+            PendingIntent.getActivity(this, id, it, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        } ?: openApp()
         val n: Notification = NotificationCompat.Builder(this, KonnektaApp.CH_ALERTS)
             .setSmallIcon(R.drawable.ic_stat)
             .setContentTitle(title)
             .setContentText(text)
-            .setContentIntent(openApp())
+            .setContentIntent(tap)
             .setAutoCancel(true)
             .build()
         nm.notify(id, n)
@@ -304,6 +413,7 @@ class KonnektaService : Service() {
         runCatching { unregisterReceiver(battery) }
         multicast?.release()
         io.shutdown()
+        transfers.shutdownNow()
         super.onDestroy()
     }
 }
