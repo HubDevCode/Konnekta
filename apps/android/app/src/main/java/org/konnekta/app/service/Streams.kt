@@ -55,7 +55,17 @@ object Streams {
         "phonescreen" to "konnekta.phonescreen",
         "desktop" to "konnekta.desktop",
         "systemaudio" to "konnekta.systemaudio",
+        "phoneaudio" to "konnekta.phoneaudio",
     )
+
+    /** Streams the phone produces (the computer consumes them). */
+    val PRODUCED = setOf("microphone", "camera", "phonescreen", "phoneaudio")
+
+    /** These need the screen-capture consent (MediaProjection). */
+    val NEEDS_PROJECTION = setOf("phonescreen", "phoneaudio")
+
+    fun newRequest(deviceId: String, deviceName: String, plugin: String, params: JSONObject = JSONObject()) =
+        StreamRequest(deviceId, deviceName, plugin, newSession(), params)
 
     val pending = MutableStateFlow<List<StreamRequest>>(emptyList())
     val live = MutableStateFlow<Map<String, LiveStream>>(emptyMap())
@@ -78,6 +88,8 @@ object Streams {
     val desktopSize = MutableStateFlow<Pair<Int, Int>?>(null)
 
     private val workers = mutableMapOf<String, Worker>()
+    /** Devices whose phone audio rides on the phone-screen capture. */
+    private val sharedAudio = java.util.Collections.synchronizedSet(mutableSetOf<String>())
     private val desktopDecoders = mutableMapOf<String, DesktopDecoder>()
 
     interface Worker {
@@ -100,7 +112,7 @@ object Streams {
                 pending.update { l -> l.filterNot { it.deviceId == deviceId && it.plugin == plugin } }
                 stop(deviceId, plugin, notifyPeer = false)
             }
-            "request" -> if (plugin in setOf("microphone", "camera", "phonescreen")) {
+            "request" -> if (plugin in PRODUCED) {
                 val r = StreamRequest(deviceId, deviceName, plugin, session, params)
                 pending.update { l -> l.filterNot { it.key == r.key } + r }
                 return r
@@ -117,6 +129,8 @@ object Streams {
 
     fun stop(deviceId: String, plugin: String, notifyPeer: Boolean = true) {
         val key = "$plugin/$deviceId"
+        // The screen's own audio shares its capture: they end together.
+        if (plugin == "phonescreen" && sharedAudio.remove(deviceId)) stop(deviceId, "phoneaudio", notifyPeer)
         val l = live.value[key]
         synchronized(workers) { workers.remove(key) }?.stop()
         desktopDecoders.remove(key)
@@ -158,6 +172,11 @@ object Streams {
                     CameraProducer(ctx, core, channel, w, h, fps, facing, ended) to
                         JSONObject().put("codec", "h264").put("width", w).put("height", h).put("fps", fps).put("facing", facing)
                 }
+                "phoneaudio" -> {
+                    val p = projection ?: return
+                    PlaybackProducer(core, channel, p, ownsProjection = !r.params.optBoolean("sharedProjection"), ended) to
+                        JSONObject().put("codec", "pcm_s16le").put("sampleRate", 48000).put("channels", 2)
+                }
                 else -> {
                     val p = projection ?: return
                     val prod = ScreenProducer(ctx, core, channel, p, r.params.optInt("height", 1280).coerceIn(480, 1920), ended)
@@ -174,6 +193,11 @@ object Streams {
         live.update { it + (r.key to LiveStream(r.plugin, r.deviceId, r.session, outgoing = true)) }
         onChanged?.invoke()
         send(r.deviceId, r.plugin, JSONObject().put("action", "offer").put("session", r.session).put("port", port).put("params", out))
+        // "Screen with audio": the phone's sound goes as its own stream, on the same capture consent.
+        if (r.plugin == "phonescreen" && r.params.optBoolean("withAudio") && projection != null) {
+            sharedAudio.add(r.deviceId)
+            accept(ctx, core, newRequest(r.deviceId, r.deviceName, "phoneaudio", JSONObject().put("sharedProjection", true)), projection)
+        }
     }
 
     // --- the phone consumes ------------------------------------------------------
@@ -411,6 +435,60 @@ object Streams {
         }
     }
 
+    /** What the phone is playing (Android 10+ playback capture), PCM s16le 48 kHz stereo. */
+    private class PlaybackProducer(
+        private val core: Core, private val channel: Long, private val projection: MediaProjection,
+        private val ownsProjection: Boolean, private val ended: () -> Unit,
+    ) : Worker {
+        @Volatile
+        private var running = true
+        private val pace = Pace()
+
+        @SuppressLint("MissingPermission")
+        private val rec: AudioRecord = run {
+            check(android.os.Build.VERSION.SDK_INT >= 29) { "serve Android 10 o successivo" }
+            val cfg = android.media.AudioPlaybackCaptureConfiguration.Builder(projection)
+                .addMatchingUsage(AudioAttributes.USAGE_MEDIA)
+                .addMatchingUsage(AudioAttributes.USAGE_GAME)
+                .addMatchingUsage(AudioAttributes.USAGE_UNKNOWN)
+                .build()
+            AudioRecord.Builder()
+                .setAudioFormat(AudioFormat.Builder().setSampleRate(48000).setChannelMask(AudioFormat.CHANNEL_IN_STEREO)
+                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT).build())
+                .setBufferSizeInBytes(19200)
+                .setAudioPlaybackCaptureConfig(cfg)
+                .build()
+        }
+
+        init {
+            check(rec.state == AudioRecord.STATE_INITIALIZED) { "cattura dell'audio non disponibile" }
+            if (ownsProjection) projection.registerCallback(object : MediaProjection.Callback() {
+                override fun onStop() = stop()
+            }, Handler(android.os.Looper.getMainLooper()))
+            rec.startRecording()
+            Thread({
+                val buf = ByteArray(3840) // 20 ms stereo
+                while (running) {
+                    val n = rec.read(buf, 0, buf.size)
+                    if (n < 0) break // the shared capture ended
+                    if (n == 0) continue
+                    if (!pace.ok(core.streamWrite(channel, Frame.AUDIO, 0, System.nanoTime() / 1000, buf, n))) break
+                }
+                val byItself = running
+                running = false
+                runCatching { rec.stop() }
+                rec.release()
+                if (ownsProjection) runCatching { projection.stop() }
+                runCatching { core.call("streamClose", JSONObject().put("channelId", channel)) }
+                if (byItself) ended()
+            }, "konnekta-playback").start()
+        }
+
+        override fun stop() {
+            running = false
+        }
+    }
+
     // --- consumers -----------------------------------------------------------------
 
     private class AudioPlayer(private val core: Core, private val channel: Long, rate: Int, channels: Int, private val ended: () -> Unit) : Worker {
@@ -450,17 +528,24 @@ object Streams {
     /**
      * The computer's screen: one H.264 NAL unit per frame (Annex-B, with
      * start code), several slices per picture. NALs are joined into access
-     * units — what MediaCodec expects per input buffer — and decoding starts
-     * at the first IDR, with SPS/PPS carried in-band. The decoder is rebuilt
-     * when the Surface changes.
+     * units — what MediaCodec expects per input buffer. The decoder is set up
+     * from the stream's own SPS/PPS (size and csd), hardware first; if it
+     * refuses them or shows nothing, the software decoder takes over. It is
+     * rebuilt when the Surface or the stream's resolution changes.
      */
-    private class DesktopDecoder(private val core: Core, private val channel: Long, private val w: Int, private val h: Int, private val ended: () -> Unit) : Worker {
+    private class DesktopDecoder(private val core: Core, private val channel: Long, w: Int, h: Int, private val ended: () -> Unit) : Worker {
         @Volatile
         private var running = true
         @Volatile
         private var rebuild = true
         private var codec: MediaCodec? = null
+        private var software = false
+        private var sps: ByteArray? = null
+        private var pps: ByteArray? = null
+        private var size = w to h
         private var waitingKey = true
+        private var queuedSinceBuild = 0
+        private var rendered = 0
         private val au = java.io.ByteArrayOutputStream(512 * 1024)
         private var auHasVcl = false
         private var auKey = false
@@ -479,18 +564,47 @@ object Streams {
             codec = null
         }
 
-        private fun build(surface: Surface): MediaCodec? = runCatching {
-            MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_AVC).apply {
-                configure(MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, w, h), surface, null, 0)
-                start()
+        private fun build(surface: Surface) {
+            release()
+            waitingKey = true
+            queuedSinceBuild = 0
+            rendered = 0
+            val (fw, fh) = size
+            val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, fw, fh).apply {
+                sps?.let { setByteBuffer("csd-0", java.nio.ByteBuffer.wrap(it)) }
+                pps?.let { setByteBuffer("csd-1", java.nio.ByteBuffer.wrap(it)) }
+                if (android.os.Build.VERSION.SDK_INT >= 30) setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
             }
-        }.onFailure { Log.w(TAG, "decoder failed", it) }.getOrNull()
+            val names = buildList {
+                if (!software) android.media.MediaCodecList(android.media.MediaCodecList.REGULAR_CODECS)
+                    .findDecoderForFormat(MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, fw, fh))?.let { add(it) }
+                add("c2.android.avc.decoder")
+                add("OMX.google.h264.decoder")
+            }.distinct()
+            for (n in names) {
+                val c = runCatching { MediaCodec.createByCodecName(n) }.getOrNull() ?: continue
+                try {
+                    c.configure(format, surface, null, 0)
+                    c.start()
+                    codec = c
+                    software = software || n.startsWith("c2.android") || n.startsWith("OMX.google")
+                    Log.i(TAG, "remote desktop decoder $n ${fw}x$fh")
+                    return
+                } catch (e: Exception) {
+                    Log.w(TAG, "decoder $n refused ${fw}x$fh", e)
+                    c.release()
+                }
+            }
+        }
 
         private fun render(c: MediaCodec, info: MediaCodec.BufferInfo) {
             while (true) {
                 val o = c.dequeueOutputBuffer(info, 0)
                 when {
-                    o >= 0 -> c.releaseOutputBuffer(o, true)
+                    o >= 0 -> {
+                        c.releaseOutputBuffer(o, true)
+                        rendered++
+                    }
                     o == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> c.outputFormat.let { f ->
                         val cw = if (f.containsKey("crop-right")) f.getInteger("crop-right") - f.getInteger("crop-left") + 1 else f.getInteger(MediaFormat.KEY_WIDTH)
                         val ch = if (f.containsKey("crop-bottom")) f.getInteger("crop-bottom") - f.getInteger("crop-top") + 1 else f.getInteger(MediaFormat.KEY_HEIGHT)
@@ -506,20 +620,33 @@ object Streams {
             if (!auHasVcl) return
             val c = codec
             if (c != null && (!waitingKey || auKey)) {
-                val i = c.dequeueInputBuffer(30_000)
-                if (i >= 0) {
-                    val data = au.toByteArray()
-                    val inBuf = c.getInputBuffer(i)!!
-                    inBuf.clear()
-                    if (data.size <= inBuf.capacity()) {
-                        inBuf.put(data)
-                        c.queueInputBuffer(i, 0, data.size, auPts, 0)
-                        waitingKey = false
-                    } else {
-                        c.queueInputBuffer(i, 0, 0, auPts, 0)
+                try {
+                    val i = c.dequeueInputBuffer(30_000)
+                    if (i >= 0) {
+                        val data = au.toByteArray()
+                        val inBuf = c.getInputBuffer(i)!!
+                        inBuf.clear()
+                        if (data.size <= inBuf.capacity()) {
+                            inBuf.put(data)
+                            c.queueInputBuffer(i, 0, data.size, auPts, 0)
+                            waitingKey = false
+                            queuedSinceBuild++
+                        } else {
+                            c.queueInputBuffer(i, 0, 0, auPts, 0)
+                        }
                     }
+                    render(c, info)
+                } catch (e: Exception) {
+                    Log.w(TAG, "decoder failed, switching to software", e)
+                    software = true
+                    rebuild = true
                 }
-                render(c, info)
+                // Hardware decoder that takes frames but never shows one: use software.
+                if (!software && queuedSinceBuild >= 30 && rendered == 0) {
+                    Log.w(TAG, "hardware decoder shows nothing, switching to software")
+                    software = true
+                    rebuild = true
+                }
             }
             au.reset()
             auHasVcl = false
@@ -535,11 +662,9 @@ object Streams {
                 while (running) {
                     val n = core.streamRead(channel, buf, meta, pts, 100)
                     if (n < 0) break
-                    if (rebuild) {
+                    if (rebuild && sps != null && pps != null) {
                         rebuild = false
-                        release()
-                        waitingKey = true
-                        desktopSurface?.takeIf { it.isValid }?.let { s -> codec = build(s) }
+                        desktopSurface?.takeIf { it.isValid }?.let(::build) ?: release()
                     }
                     if (n == 0) {
                         flush(info)
@@ -550,6 +675,21 @@ object Streams {
                     val hdr = if (n > 3 && buf[2].toInt() == 1) 3 else 4
                     if (n <= hdr) continue
                     val type = buf[hdr].toInt() and 0x1f
+                    when (type) {
+                        7 -> {
+                            val nal = buf.copyOf(n)
+                            if (!nal.contentEquals(sps)) {
+                                sps = nal
+                                H264.spsSize(nal, hdr)?.let { size = it }
+                                // New resolution (quality change): the decoder starts over.
+                                rebuild = true
+                            }
+                        }
+                        8 -> if (!buf.copyOf(n).contentEquals(pps)) {
+                            pps = buf.copyOf(n)
+                            rebuild = true
+                        }
+                    }
                     val vcl = type in 1..5
                     // first_mb_in_slice == 0 (ue(v) "1") marks a new picture.
                     val firstSlice = vcl && n > hdr + 1 && (buf[hdr + 1].toInt() and 0x80) != 0
@@ -558,7 +698,7 @@ object Streams {
                     au.write(buf, 0, n)
                     if (vcl) auHasVcl = true
                     if (type == 5) auKey = true
-                    codec?.let { render(it, info) }
+                    codec?.let { c -> runCatching { render(c, info) } }
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "remote desktop stopped", e)

@@ -21,7 +21,7 @@ use konnekta_media::abr::{DEFAULT_LADDER, NetworkSample};
 use konnekta_media::frame::{FLAG_CONFIG, Frame, FrameKind, read_frame};
 use konnekta_media::pipeline::{AnnexBSplitter, ProcessPipeline, screen_capture_command};
 use konnekta_media::virtual_devices::{
-    SystemAudioCapture, VirtualCamera, VirtualMic, screen_viewer,
+    Speakers, SystemAudioCapture, VirtualCamera, VirtualMic, screen_viewer,
 };
 use konnekta_media::{AdaptiveBitrate, FrameSender};
 use serde_json::{Value, json};
@@ -38,6 +38,7 @@ pub enum Kind {
     PhoneScreen,
     Desktop,
     SystemAudio,
+    PhoneAudio,
 }
 
 impl Kind {
@@ -120,6 +121,20 @@ impl StreamPlugin {
                 permission: Permission::Desktop,
                 incoming: &[types::PHONE_SCREEN],
                 outgoing: &[types::PHONE_SCREEN],
+            },
+        )
+    }
+
+    pub fn phone_audio() -> Arc<Self> {
+        Self::make(
+            Kind::PhoneAudio,
+            PluginInfo {
+                id: "phoneaudio",
+                name: "Phone audio",
+                description: "Play what the phone is playing on this computer's speakers",
+                permission: Permission::SystemAudio,
+                incoming: &[types::PHONE_AUDIO],
+                outgoing: &[types::PHONE_AUDIO],
             },
         )
     }
@@ -297,6 +312,25 @@ impl StreamPlugin {
                 while let Some(f) = read_frame(&mut ch).await? {
                     if f.kind == FrameKind::Video {
                         stdin.write_all(&f.data).await?;
+                    }
+                }
+            }
+            Kind::PhoneAudio => {
+                if params.codec != "pcm_s16le"
+                    || params.sample_rate != 48_000
+                    || !(1..=2).contains(&params.channels)
+                {
+                    bail!(
+                        "unsupported phone audio format {} {} Hz {} ch",
+                        params.codec,
+                        params.sample_rate,
+                        params.channels
+                    );
+                }
+                let mut out = Speakers::create(params.channels).await?;
+                while let Some(f) = read_frame(&mut ch).await? {
+                    if f.kind == FrameKind::Audio {
+                        out.write(&f.data).await?;
                     }
                 }
             }

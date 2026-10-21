@@ -72,3 +72,5 @@ pub const CAMERA: &str = "konnekta.camera";
 pub const DESKTOP: &str = "konnekta.desktop";
 pub const SYSTEM_AUDIO: &str = "konnekta.systemaudio";
 pub const PHONE_SCREEN: &str = "konnekta.phonescreen";
+/// Audio playing on the phone, played on the computer's speakers.
+pub const PHONE_AUDIO: &str = "konnekta.phoneaudio";

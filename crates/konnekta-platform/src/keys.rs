@@ -28,6 +28,11 @@ pub enum SpecialKey {
     VolumeUp,
     VolumeDown,
     VolumeMute,
+    /// A modifier pressed alone (e.g. Super opens the launcher).
+    Super,
+    Control,
+    Alt,
+    Shift,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -2,6 +2,9 @@ package org.konnekta.app.ui
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -58,6 +61,9 @@ import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.Work
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Dashboard
+import androidx.compose.material.icons.filled.Headphones
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.ScreenShare
 import androidx.compose.material.icons.filled.DesktopWindows
 import androidx.compose.material.icons.filled.Speaker
 import androidx.compose.material.icons.filled.MusicNote
@@ -79,6 +85,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -115,33 +122,93 @@ import kotlin.math.abs
 
 @Composable
 fun ControlScreen(current: JSONObject?, open: (Route) -> Unit) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
     val online = current?.optBoolean("connected") == true
     fun can(type: String) = online && current?.supports(type) == true
+    val live by Streams.live.collectAsState()
+    val start = rememberStreamStarter()
+    val prefs = remember { ctx.getSharedPreferences("konnekta", android.content.Context.MODE_PRIVATE) }
+    var front by remember { mutableStateOf(prefs.getBoolean("cameraFront", false)) }
+    var screenAudio by remember { mutableStateOf(prefs.getBoolean("screenAudio", true)) }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         if (current == null) {
             Hint("Associa un computer per controllarlo da qui.")
             return
         }
-        if (!online) Hint("${current.optString("name")} non è raggiungibile: i comandi si attivano quando si collega.")
-        SectionTitle("Computer")
+        val id = current.optString("id")
+        val name = current.optString("name")
+        fun on(plugin: String) = live.containsKey("$plugin/$id")
+        fun toggle(plugin: String, params: JSONObject = JSONObject()) {
+            if (on(plugin)) Thread { Streams.stop(id, plugin) }.start()
+            else start(Streams.newRequest(id, name, plugin, params))
+        }
+        if (!online) Hint("$name non è raggiungibile: i comandi si attivano quando si collega.")
+
+        SectionTitle("Al computer")
+        StreamCard(Icons.Filled.Mic, "Microfono", "Il telefono diventa il microfono di $name", on("microphone"), can(Types.MICROPHONE)) {
+            toggle("microphone")
+        }
+        StreamCard(Icons.Filled.Videocam, "Webcam", "La fotocamera ${if (front) "anteriore" else "posteriore"} come webcam",
+            on("camera"), can(Types.CAMERA),
+            extra = {
+                TextButton(onClick = {
+                    front = !front
+                    prefs.edit().putBoolean("cameraFront", front).apply()
+                }, enabled = !on("camera")) { Text(if (front) "Anteriore" else "Posteriore") }
+            },
+        ) { toggle("camera", JSONObject().put("facing", if (front) "front" else "back")) }
+        StreamCard(Icons.Filled.ScreenShare, "Schermo del telefono", if (screenAudio) "Schermo e audio del telefono sul computer" else "Lo schermo del telefono sul computer",
+            on("phonescreen"), can(Types.PHONE_SCREEN),
+            extra = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("audio", style = MaterialTheme.typography.labelSmall)
+                    androidx.compose.material3.Switch(screenAudio, {
+                        screenAudio = it
+                        prefs.edit().putBoolean("screenAudio", it).apply()
+                    }, enabled = !on("phonescreen"), modifier = Modifier.padding(start = 4.dp))
+                }
+            },
+        ) { toggle("phonescreen", JSONObject().put("withAudio", screenAudio)) }
+        StreamCard(Icons.Filled.Headphones, "Audio del telefono", "Musica, video e giochi del telefono dalle casse di $name",
+            on("phoneaudio") && !on("phonescreen"), can(Types.PHONE_AUDIO) && android.os.Build.VERSION.SDK_INT >= 29) {
+            toggle("phoneaudio")
+        }
+
+        SectionTitle("Dal computer")
+        ActionCard(Icons.Filled.DesktopWindows, "Desktop remoto", "Vedi e controlla lo schermo del computer", enabled = can(Types.DESKTOP)) { open(Route.Desktop) }
+        StreamCard(Icons.Filled.Speaker, "Audio del computer", "Ascolta sul telefono l'audio di $name", on("systemaudio"), can(Types.SYSTEM_AUDIO)) {
+            if (on("systemaudio")) Thread { Streams.stop(id, "systemaudio") }.start() else Streams.request(id, "systemaudio")
+        }
+
+        SectionTitle("Comandi")
         ActionCard(Icons.Filled.MusicNote, "Media", "Musica e video in riproduzione, volume", enabled = can(Types.MEDIA_REQUEST)) { open(Route.Media) }
         ActionCard(Icons.Filled.TouchApp, "Touchpad e tastiera", "Muovi il puntatore e scrivi sul computer", enabled = can(Types.INPUT)) { open(Route.Touchpad) }
-        ActionCard(Icons.Filled.Slideshow, "Presentazione", "Avanti, indietro e puntatore laser", enabled = can(Types.PRESENTER)) { open(Route.Presenter) }
-        ActionCard(Icons.Filled.DesktopWindows, "Desktop remoto", "Vedi e controlla lo schermo del computer", enabled = can(Types.DESKTOP)) { open(Route.Desktop) }
-        val live by Streams.live.collectAsState()
-        val audioOn = live.containsKey("systemaudio/${current.optString("id")}")
-        ActionCard(
-            Icons.Filled.Speaker, "Audio del computer", if (audioOn) "In ascolto sul telefono: tocca per fermare" else "Ascolta sul telefono l'audio del computer",
-            enabled = can(Types.SYSTEM_AUDIO), highlight = audioOn,
-        ) {
-            val id = current.optString("id")
-            if (audioOn) Thread { Streams.stop(id, "systemaudio") }.start() else Streams.request(id, "systemaudio")
-        }
+        ActionCard(Icons.Filled.Slideshow, "Presentazione", "Avanti e indietro (anche con i tasti del volume), puntatore laser", enabled = can(Types.PRESENTER)) { open(Route.Presenter) }
+
         SectionTitle("Automazioni")
         ActionCard(Icons.Filled.Dashboard, "Mobile Deck", "I pulsanti configurati sul computer", enabled = can(Types.DECK_REQUEST)) { open(Route.Deck) }
-        ActionCard(Icons.Filled.Terminal, "Comandi", "Avvia i comandi personalizzati del computer", enabled = can(Types.COMMANDS_REQUEST)) { open(Route.Commands) }
+        ActionCard(Icons.Filled.Terminal, "Comandi personalizzati", "Avvia i comandi configurati sul computer", enabled = can(Types.COMMANDS_REQUEST)) { open(Route.Commands) }
         Hint("Le voci spente richiedono il permesso corrispondente sul computer (Dispositivi › Permessi).")
     }
+}
+
+/** A stream that can be on or off: highlighted while it runs, tap to stop. */
+@Composable
+private fun StreamCard(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    on: Boolean,
+    enabled: Boolean,
+    extra: (@Composable () -> Unit)? = null,
+    onClick: () -> Unit,
+) {
+    ActionCard(
+        icon, title, if (on) "Dal vivo · tocca per fermare" else subtitle,
+        enabled = enabled || on, highlight = on,
+        trailing = extra,
+        onClick = onClick,
+    )
 }
 
 // --- media ---------------------------------------------------------------------
@@ -247,6 +314,16 @@ private object Key {
     const val DOWN = 7
     const val ENTER = 12
     const val ESC = 14
+    // Konnekta: modifiers pressed alone.
+    const val SUPER = 40
+    const val CTRL = 41
+    const val ALT = 42
+    const val SHIFT = 43
+}
+
+/** Modifier keys: tap = press it alone, long press = lock it for combinations. */
+private enum class Mod(val label: String, val field: String, val code: Int) {
+    Ctrl("ctrl", "ctrl", Key.CTRL), Alt("alt", "alt", Key.ALT), Shift("shift", "shift", Key.SHIFT), Super("super", "super", Key.SUPER),
 }
 
 @Composable
@@ -259,94 +336,122 @@ fun ColumnScope.TouchpadScreen(current: JSONObject?, onBack: () -> Unit) {
             for (b in queue) runCatching { KonnektaApp.core?.sendPacket(id, Types.INPUT, b) }
         }
     }
-    var ctrl by remember { mutableStateOf(false) }
-    var alt by remember { mutableStateOf(false) }
-    var shift by remember { mutableStateOf(false) }
-    var meta by remember { mutableStateOf(false) }
-    fun mods(b: JSONObject) = b.apply {
-        if (ctrl) put("ctrl", true)
-        if (alt) put("alt", true)
-        if (shift) put("shift", true)
-        if (meta) put("super", true)
-    }
+    var locked by remember { mutableStateOf(setOf<Mod>()) }
+    fun mods(b: JSONObject) = b.apply { locked.forEach { put(it.field, true) } }
     fun emit(b: JSONObject) { queue.trySend(b) }
     fun special(code: Int) = emit(mods(JSONObject().put("specialKey", code)))
     val sensitivity = 1.6f
+    val name = current.optString("name")
 
-    SubHeader("Touchpad e tastiera", current.optString("name"), onBack)
-    Surface(
-        shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        border = BorderStroke(1.dp, LocalStatus.current.border),
-        modifier = Modifier.fillMaxWidth().weight(1f)
-            .pointerInput(id) { touchpad(sensitivity, ::emit) },
-    ) {
-        Box(contentAlignment = Alignment.Center) {
-            Text("1 dito muove · tocco = clic\n2 dita scorrono · tocco con 2 dita = tasto destro\ntieni premuto per trascinare",
-                textAlign = TextAlign.Center, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    val pad: @Composable (Modifier) -> Unit = { m ->
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            border = BorderStroke(1.dp, LocalStatus.current.border),
+            modifier = m.pointerInput(id) { touchpad(sensitivity, ::emit) },
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Text("1 dito muove · tocco = clic\n2 dita scorrono · tocco con 2 dita = tasto destro\ntieni premuto per trascinare",
+                    textAlign = TextAlign.Center, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
     }
-    Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        KeyCap("sinistro", Modifier.weight(1f)) { emit(JSONObject().put("singleclick", true)) }
-        KeyCap("centrale", Modifier.weight(1f)) { emit(JSONObject().put("middleclick", true)) }
-        KeyCap("destro", Modifier.weight(1f)) { emit(JSONObject().put("rightclick", true)) }
-    }
-    Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        KeyCap("esc", Modifier.weight(1f)) { special(Key.ESC) }
-        KeyCap("tab", Modifier.weight(1f)) { special(Key.TAB) }
-        KeyCap("←", Modifier.weight(1f)) { special(Key.LEFT) }
-        KeyCap("↑", Modifier.weight(1f)) { special(Key.UP) }
-        KeyCap("↓", Modifier.weight(1f)) { special(Key.DOWN) }
-        KeyCap("→", Modifier.weight(1f)) { special(Key.RIGHT) }
-    }
-    Row(Modifier.fillMaxWidth().padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        KeyCap("ctrl", Modifier.weight(1f), ctrl) { ctrl = !ctrl }
-        KeyCap("alt", Modifier.weight(1f), alt) { alt = !alt }
-        KeyCap("shift", Modifier.weight(1f), shift) { shift = !shift }
-        KeyCap("super", Modifier.weight(1f), meta) { meta = !meta }
-        Surface(onClick = { special(Key.BACKSPACE) }, shape = RoundedCornerShape(10.dp),
-            color = MaterialTheme.colorScheme.surfaceContainerHigh, modifier = Modifier.weight(1f).height(44.dp)) {
-            Box(contentAlignment = Alignment.Center) { Icon(Icons.Filled.Backspace, "Cancella", Modifier.size(18.dp)) }
+    val keys: @Composable () -> Unit = {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            KeyCap("sinistro", Modifier.weight(1f)) { emit(JSONObject().put("singleclick", true)) }
+            KeyCap("centrale", Modifier.weight(1f)) { emit(JSONObject().put("middleclick", true)) }
+            KeyCap("destro", Modifier.weight(1f)) { emit(JSONObject().put("rightclick", true)) }
+        }
+        Row(Modifier.fillMaxWidth().padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            KeyCap("esc", Modifier.weight(1f)) { special(Key.ESC) }
+            KeyCap("tab", Modifier.weight(1f)) { special(Key.TAB) }
+            KeyCap("←", Modifier.weight(1f)) { special(Key.LEFT) }
+            KeyCap("↑", Modifier.weight(1f)) { special(Key.UP) }
+            KeyCap("↓", Modifier.weight(1f)) { special(Key.DOWN) }
+            KeyCap("→", Modifier.weight(1f)) { special(Key.RIGHT) }
+        }
+        Row(Modifier.fillMaxWidth().padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Mod.entries.forEach { m ->
+                KeyCap(m.label, Modifier.weight(1f), on = m in locked,
+                    onLongClick = { locked = if (m in locked) locked - m else locked + m }) {
+                    // Locked: a tap unlocks. Otherwise the key alone (with any locked ones).
+                    if (m in locked) locked = locked - m
+                    else emit(JSONObject().put("specialKey", m.code).apply { locked.forEach { put(it.field, true) } })
+                }
+            }
+            Surface(onClick = { special(Key.BACKSPACE) }, shape = RoundedCornerShape(10.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerHigh, modifier = Modifier.weight(1f).height(44.dp)) {
+                Box(contentAlignment = Alignment.Center) { Icon(Icons.Filled.Backspace, "Cancella", Modifier.size(18.dp)) }
+            }
+        }
+        Hint("Modificatori: tocco = premi il tasto, tieni premuto = bloccalo per le combinazioni.")
+        var text by remember { mutableStateOf("") }
+        Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(
+                text,
+                { v ->
+                    // Diff against the previous value: typed characters or backspaces.
+                    if (v.length > text.length && v.startsWith(text)) emit(mods(JSONObject().put("key", v.substring(text.length))))
+                    else if (v.length < text.length) repeat(text.length - v.length) { special(Key.BACKSPACE) }
+                    text = if (v.length > 64) "" else v
+                },
+                Modifier.weight(1f),
+                placeholder = { Text("Scrivi su $name") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(autoCorrectEnabled = false, imeAction = ImeAction.Send),
+                keyboardActions = KeyboardActions(onSend = {
+                    special(Key.ENTER)
+                    text = ""
+                }),
+            )
+            Spacer(Modifier.size(8.dp))
+            Surface(onClick = { special(Key.ENTER) }, shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerHigh, modifier = Modifier.size(56.dp)) {
+                Box(contentAlignment = Alignment.Center) { Icon(Icons.AutoMirrored.Filled.KeyboardReturn, "Invio") }
+            }
         }
     }
-    var text by remember { mutableStateOf("") }
-    Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        OutlinedTextField(
-            text,
-            { v ->
-                // Diff against the previous value: typed characters or backspaces.
-                if (v.length > text.length && v.startsWith(text)) emit(mods(JSONObject().put("key", v.substring(text.length))))
-                else if (v.length < text.length) repeat(text.length - v.length) { special(Key.BACKSPACE) }
-                text = if (v.length > 64) "" else v
-            },
-            Modifier.weight(1f),
-            placeholder = { Text("Scrivi su ${current.optString("name")}") },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(autoCorrectEnabled = false, imeAction = ImeAction.Send),
-            keyboardActions = KeyboardActions(onSend = {
-                special(Key.ENTER)
-                text = ""
-            }),
-        )
-        Spacer(Modifier.size(8.dp))
-        Surface(onClick = { special(Key.ENTER) }, shape = RoundedCornerShape(12.dp),
-            color = MaterialTheme.colorScheme.surfaceContainerHigh, modifier = Modifier.size(56.dp)) {
-            Box(contentAlignment = Alignment.Center) { Icon(Icons.AutoMirrored.Filled.KeyboardReturn, "Invio") }
+
+    androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth().weight(1f)) {
+        if (maxWidth > maxHeight) {
+            // Landscape: the whole left side is the touchpad, keys in a column on the right.
+            Row(Modifier.fillMaxSize().padding(vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                pad(Modifier.weight(1f).fillMaxSize())
+                Column(Modifier.width(320.dp).fillMaxSize().verticalScroll(rememberScrollState())) {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 8.dp)) {
+                        BackButton(onBack)
+                        Text("Touchpad · $name", style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    keys()
+                }
+            }
+        } else {
+            Column(Modifier.fillMaxSize()) {
+                SubHeader("Touchpad e tastiera", name, onBack)
+                pad(Modifier.fillMaxWidth().weight(1f))
+                Spacer(Modifier.height(8.dp))
+                keys()
+            }
         }
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun KeyCap(label: String, modifier: Modifier, on: Boolean = false, onClick: () -> Unit) {
+private fun KeyCap(label: String, modifier: Modifier, on: Boolean = false, onLongClick: (() -> Unit)? = null, onClick: () -> Unit) {
+    val haptic = LocalHapticFeedback.current
     Surface(
-        onClick = onClick,
         shape = RoundedCornerShape(10.dp),
         color = if (on) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh,
-        border = if (on) BorderStroke(1.dp, MaterialTheme.colorScheme.primary) else null,
-        modifier = modifier.height(44.dp),
+        border = if (on) BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary) else null,
+        modifier = modifier.height(44.dp).clip(RoundedCornerShape(10.dp)).combinedClickable(
+            onClick = onClick,
+            onLongClick = onLongClick?.let { l -> { haptic.performHapticFeedback(HapticFeedbackType.LongPress); l() } },
+        ),
     ) {
         Box(contentAlignment = Alignment.Center) {
-            Text(label, fontFamily = FontFamily.Monospace, fontSize = 13.sp, maxLines = 1)
+            Text(label, fontFamily = FontFamily.Monospace, fontSize = 13.sp, maxLines = 1,
+                fontWeight = if (on) FontWeight.Bold else FontWeight.Normal)
         }
     }
 }
@@ -383,7 +488,8 @@ private suspend fun androidx.compose.ui.input.pointer.PointerInputScope.touchpad
                 pendY += dy
                 // Coalesce tiny moves: fewer packets, same path.
                 if (abs(pendX) + abs(pendY) >= 2f) {
-                    if (pressed.size >= 2) emit(JSONObject().put("dx", pendX / 2).put("dy", pendY / 2).put("scroll", true))
+                    // Raw distance: the computer turns it into wheel steps and keeps the remainder.
+                    if (pressed.size >= 2) emit(JSONObject().put("dx", pendX).put("dy", pendY).put("scroll", true))
                     else emit(JSONObject().put("dx", pendX * sens).put("dy", pendY * sens))
                     pendX = 0f
                     pendY = 0f
@@ -411,7 +517,12 @@ fun ColumnScope.PresenterScreen(current: JSONObject?, onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
     val id = current?.optString("id") ?: return onBack()
     fun cmd(c: String) = scope.launch { send(ui.toast, id, Types.PRESENTER, JSONObject().put("konnektaKey", c)) }
+    androidx.compose.runtime.DisposableEffect(id) {
+        PresenterKeys.deviceId = id
+        onDispose { if (PresenterKeys.deviceId == id) PresenterKeys.deviceId = null }
+    }
     SubHeader("Presentazione", current.optString("name"), onBack)
+    Hint("Puoi cambiare slide anche con i tasti del volume: su = avanti, giù = indietro.")
     Row(Modifier.fillMaxWidth().height(220.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         BigTile(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Indietro", Modifier.weight(1f).fillMaxSize()) { cmd("previous") }
         BigTile(Icons.AutoMirrored.Filled.KeyboardArrowRight, "Avanti", Modifier.weight(1f).fillMaxSize(), primary = true) { cmd("next") }

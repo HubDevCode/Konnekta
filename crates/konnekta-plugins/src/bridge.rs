@@ -203,6 +203,13 @@ pub fn mobile(pending: Arc<PendingPayloads>, call_control: bool) -> Vec<Arc<dyn 
         ),
         bridge!("desktop", "Remote desktop", Desktop, [DESKTOP], [DESKTOP]),
         bridge!(
+            "phoneaudio",
+            "Phone audio",
+            SystemAudio,
+            [PHONE_AUDIO],
+            [PHONE_AUDIO]
+        ),
+        bridge!(
             "systemaudio",
             "Computer audio",
             SystemAudio,

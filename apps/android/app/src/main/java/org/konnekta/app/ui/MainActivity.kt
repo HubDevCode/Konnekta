@@ -60,6 +60,12 @@ import org.konnekta.app.KonnektaApp
 import org.konnekta.app.service.KonnektaService
 import org.konnekta.app.state.Store
 
+/** Set while the Presentation screen is open: the computer the volume keys drive. */
+object PresenterKeys {
+    @Volatile
+    var deviceId: String? = null
+}
+
 /** UI helpers handed down to every screen. */
 class Ui(val toast: (String) -> Unit, val clipboard: () -> String?)
 
@@ -85,6 +91,20 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+
+    /** In Presentation the volume keys change slide (up = next, down = previous). */
+    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+        val target = PresenterKeys.deviceId
+        val code = event.keyCode
+        if (target != null && (code == android.view.KeyEvent.KEYCODE_VOLUME_UP || code == android.view.KeyEvent.KEYCODE_VOLUME_DOWN)) {
+            if (event.action == android.view.KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                val cmd = if (code == android.view.KeyEvent.KEYCODE_VOLUME_UP) "next" else "previous"
+                Thread { runCatching { KonnektaApp.core?.sendPacket(target, org.konnekta.app.core.Types.PRESENTER, JSONObject().put("konnektaKey", cmd)) } }.start()
+            }
+            return true
+        }
+        return super.dispatchKeyEvent(event)
+    }
 
     /** Android lets only the app on screen read the clipboard. */
     private fun clipboardText(): String? =
@@ -134,13 +154,18 @@ private fun App() {
             core(ui.toast) { it.callArray("devices") }?.let { Store.devices.value = it.objects() }
         }
     } }
-    // First run: nothing paired yet, start on the Computers tab.
-    LaunchedEffect(devices.isNotEmpty()) {
-        if (devices.none { it.optBoolean("paired") } && tab == Tab.Inbox) tab = Tab.Computers
-    }
 
     val current = remember(devices, selected) { Store.current() }
     prompt?.let { p -> PairSheet(p) { KonnektaService.pairPrompt.value = null } }
+
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    var onboarding by remember { mutableStateOf(Onboarding.needed(ctx)) }
+    if (onboarding) {
+        Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+            OnboardingScreen { onboarding = false }
+        }
+        return
+    }
 
     route?.let { r ->
         BackHandler { route = null }

@@ -157,4 +157,5 @@ object Types {
     const val PHONE_SCREEN = "konnekta.phonescreen"
     const val DESKTOP = "konnekta.desktop"
     const val SYSTEM_AUDIO = "konnekta.systemaudio"
+    const val PHONE_AUDIO = "konnekta.phoneaudio"
 }

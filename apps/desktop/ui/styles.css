@@ -94,3 +94,15 @@ label.field > input, label.field > select, label.field > textarea { color: var(-
 /* Section titles and status pills as on the phone. */
 h3 { text-transform: none; letter-spacing: 0; font-size: 13px; font-weight: 600; }
 .badge { border-radius: 99px; font-weight: 600; }
+/* Material icons (same set as the phone). */
+.ic { fill: currentColor; flex: none; vertical-align: -3px; }
+nav button { display: flex; align-items: center; gap: 10px; }
+.btn .ic { margin-right: 2px; }
+.dev .icon { display: flex; align-items: center; justify-content: center; color: var(--accent); }
+.dev-ic, .stream-ic { color: var(--accent); display: flex; align-items: center; }
+.stream-ic { width: 36px; height: 36px; border-radius: 10px; background: var(--accent-cont); color: var(--on-accent-cont); justify-content: center; flex: none; }
+/* Long device names never push the badge out of the card. */
+.dev-text { min-width: 0; }
+.dev-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dev .badge { flex: none; }
+.devices { grid-template-columns: 320px 1fr; }

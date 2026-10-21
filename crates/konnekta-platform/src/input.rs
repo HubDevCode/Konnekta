@@ -175,6 +175,10 @@ mod enigo_backend {
                 SpecialKey::VolumeUp => E::VolumeUp,
                 SpecialKey::VolumeDown => E::VolumeDown,
                 SpecialKey::VolumeMute => E::VolumeMute,
+                SpecialKey::Super => E::Meta,
+                SpecialKey::Control => E::Control,
+                SpecialKey::Alt => E::Alt,
+                SpecialKey::Shift => E::Shift,
             },
         }
     }
@@ -266,6 +270,10 @@ mod ydotool {
                 SpecialKey::Insert => 110,
                 SpecialKey::Delete => 111,
                 SpecialKey::VolumeMute => 113,
+                SpecialKey::Super => 125,
+                SpecialKey::Control => 29,
+                SpecialKey::Alt => 56,
+                SpecialKey::Shift => 42,
                 SpecialKey::VolumeDown => 114,
                 SpecialKey::VolumeUp => 115,
                 SpecialKey::MediaNext => 163,

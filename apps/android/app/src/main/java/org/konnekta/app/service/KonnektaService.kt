@@ -75,7 +75,8 @@ class KonnektaService : Service() {
         fun acceptStream(context: Context, r: StreamRequest, projection: Intent? = null, resultCode: Int = 0) {
             context.startForegroundService(
                 Intent(context, KonnektaService::class.java).setAction(ACTION_ACCEPT_STREAM)
-                    .putExtra("device", r.deviceId).putExtra("plugin", r.plugin)
+                    .putExtra("device", r.deviceId).putExtra("name", r.deviceName).putExtra("plugin", r.plugin)
+                    .putExtra("session", r.session).putExtra("params", r.params.toString())
                     .putExtra("projection", projection).putExtra("resultCode", resultCode),
             )
         }
@@ -83,6 +84,12 @@ class KonnektaService : Service() {
         /** Phone permissions changed: (re)start the features that need them. */
         fun refreshFeatures(context: Context) {
             context.startService(Intent(context, KonnektaService::class.java).setAction(ACTION_REFRESH))
+        }
+
+        /** Start the core again (a new device name is announced only when links open). */
+        fun restart(context: Context) {
+            context.stopService(Intent(context, KonnektaService::class.java))
+            Handler(Looper.getMainLooper()).postDelayed({ start(context) }, 1500)
         }
 
         fun stopRinging(context: Context) {
@@ -142,8 +149,10 @@ class KonnektaService : Service() {
         return START_STICKY
     }
 
+    /** The name chosen at first start, else the model. */
     private fun deviceName(): String =
-        (Build.MODEL ?: "Android").filter { it.isLetterOrDigit() || it == ' ' || it == '-' }.take(32).ifBlank { "Android" }
+        getSharedPreferences("konnekta", MODE_PRIVATE).getString("deviceName", null)?.takeIf { it.isNotBlank() }
+            ?: (Build.MODEL ?: "Android").filter { it.isLetterOrDigit() || it == ' ' || it == '-' }.take(32).ifBlank { "Android" }
 
     private fun run() {
         val core = try {
@@ -274,19 +283,20 @@ class KonnektaService : Service() {
             Types.DND -> main.post { dnd?.apply(body) }
             Types.SCREENSHOT -> shots?.configure(deviceId, body)
             Types.PHOTO_REQUEST -> onPhotoRequest(core, deviceId, body.optString("mode", "photo"))
-            Types.MICROPHONE, Types.CAMERA, Types.PHONE_SCREEN, Types.DESKTOP, Types.SYSTEM_AUDIO ->
+            Types.MICROPHONE, Types.CAMERA, Types.PHONE_SCREEN, Types.DESKTOP, Types.SYSTEM_AUDIO, Types.PHONE_AUDIO ->
                 onStreamPacket(core, deviceId, type, body)
         }
     }
 
     // --- streams ---------------------------------------------------------------
 
-    private fun foregroundTypes(extra: String? = null): Int {
+    private fun foregroundTypes(vararg extra: String?): Int {
         var t = ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
-        val plugins = Streams.live.value.values.filter { it.outgoing }.map { it.plugin } + listOfNotNull(extra)
+        val plugins = Streams.live.value.values.filter { it.outgoing }.map { it.plugin } + extra.filterNotNull()
         if ("microphone" in plugins) t = t or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
         if ("camera" in plugins) t = t or ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
-        if ("phonescreen" in plugins) t = t or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+        if ("phonescreen" in plugins || "phoneaudio" in plugins) t = t or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+        if ("phoneaudio" in plugins) t = t or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
         return t
     }
 
@@ -308,10 +318,16 @@ class KonnektaService : Service() {
     }
 
     private fun onAcceptStream(i: Intent) {
-        val r = Streams.pending.value.firstOrNull { it.deviceId == i.getStringExtra("device") && it.plugin == i.getStringExtra("plugin") } ?: return
+        // A computer's request, or a stream the user starts from the phone.
+        val r = Streams.pending.value.firstOrNull { it.deviceId == i.getStringExtra("device") && it.plugin == i.getStringExtra("plugin") }
+            ?: StreamRequest(
+                i.getStringExtra("device") ?: return, i.getStringExtra("name").orEmpty(), i.getStringExtra("plugin") ?: return,
+                i.getStringExtra("session") ?: return, runCatching { JSONObject(i.getStringExtra("params") ?: "{}") }.getOrDefault(JSONObject()),
+            )
         nm.cancel(N_STREAM)
         try {
-            ServiceCompat.startForeground(this, N_SERVICE, serviceNotification(), foregroundTypes(r.plugin))
+            val audio = if (r.params.optBoolean("withAudio")) "phoneaudio" else null
+            ServiceCompat.startForeground(this, N_SERVICE, serviceNotification(), foregroundTypes(r.plugin, audio))
         } catch (e: Exception) {
             Log.w(TAG, "cannot add ${r.plugin} to the foreground service", e)
             Streams.decline(r)
@@ -552,9 +568,12 @@ class KonnektaService : Service() {
 
 val STREAM_NAMES = mapOf(
     "microphone" to "microfono", "camera" to "fotocamera", "phonescreen" to "schermo",
-    "desktop" to "desktop remoto", "systemaudio" to "audio del computer",
+    "desktop" to "desktop remoto", "systemaudio" to "audio del computer", "phoneaudio" to "audio del telefono",
 )
-val STREAM_ASK = mapOf("microphone" to "il microfono", "camera" to "la fotocamera come webcam", "phonescreen" to "lo schermo del telefono")
+val STREAM_ASK = mapOf(
+    "microphone" to "il microfono", "camera" to "la fotocamera come webcam", "phonescreen" to "lo schermo del telefono",
+    "phoneaudio" to "l'audio del telefono",
+)
 
 /** "5EE6825F974ED59A" -> "5EE6 825F 974E D59A". */
 fun formatKey(k: String): String = k.chunked(4).joinToString(" ")

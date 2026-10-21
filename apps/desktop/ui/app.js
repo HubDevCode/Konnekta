@@ -28,6 +28,48 @@ function h(tag, props, ...kids) {
   return el;
 }
 
+// Material icons (the phone app uses the same set), drawn inline.
+const MATERIAL = {
+  smartphone: 'M17 1.01L7 1c-1.1 0-2 .9-2 2v18c0 1.1.9 2 2 2h10c1.1 0 2-.9 2-2V3c0-1.1-.9-1.99-2-1.99zM17 19H7V5h10v14z',
+  tablet: 'M18 0H6C4.34 0 3 1.34 3 3v18c0 1.66 1.34 3 3 3h12c1.66 0 3-1.34 3-3V3c0-1.66-1.34-3-3-3zm-4 22h-4v-1h4v1zm5.25-3H4.75V3h14.5v16z',
+  laptop: 'M20 18c1.1 0 1.99-.9 1.99-2L22 6c0-1.1-.9-2-2-2H4c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2H0v2h24v-2h-4zM4 6h16v10H4V6z',
+  desktop: 'M21 2H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h7v2H8v2h8v-2h-2v-2h7c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H3V4h18v12z',
+  tv: 'M21 3H3c-1.1 0-2 .89-2 2v12c0 1.1.9 2 2 2h5v2h8v-2h5c1.1 0 1.99-.9 1.99-2L23 5c0-1.11-.9-2-2-2zm0 14H3V5h18v12z',
+  devices: 'M4 6h18V4H4c-1.1 0-2 .9-2 2v11H0v3h14v-3H4V6zm19 2h-6c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h6c.55 0 1-.45 1-1V9c0-.55-.45-1-1-1zm-1 9h-4v-7h4v7z',
+  swap: 'M16 17.01V10h-2v7.01h-3L15 21l4-3.99h-3zM9 3L5 6.99h3V14h2V6.99h3L9 3z',
+  terminal: 'M20 4H4c-1.11 0-2 .9-2 2v12c0 1.1.89 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.89-2-2-2zm0 14H4V8h16v10zm-2-1h-6v-2h6v2zM7.5 17l-1.41-1.41L8.67 13l-2.59-2.59L7.5 9l4 4-4 4z',
+  dashboard: 'M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z',
+  extension: 'M20.5 11H19V7c0-1.1-.9-2-2-2h-4V3.5C13 2.12 11.88 1 10.5 1S8 2.12 8 3.5V5H4c-1.1 0-1.99.9-1.99 2v3.8H3.5c1.49 0 2.7 1.21 2.7 2.7s-1.21 2.7-2.7 2.7H2V20c0 1.1.9 2 2 2h3.8v-1.5c0-1.49 1.21-2.7 2.7-2.7 1.49 0 2.7 1.21 2.7 2.7V22H17c1.1 0 2-.9 2-2v-4h1.5c1.38 0 2.5-1.12 2.5-2.5S21.88 11 20.5 11z',
+  settings: 'M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z',
+  lock: 'M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z',
+  link: 'M3.9 12c0-1.71 1.39-3.1 3.1-3.1h4V7H7c-2.76 0-5 2.24-5 5s2.24 5 5 5h4v-1.9H7c-1.71 0-3.1-1.39-3.1-3.1zM8 13h8v-2H8v2zm9-6h-4v1.9h4c1.71 0 3.1 1.39 3.1 3.1s-1.39 3.1-3.1 3.1h-4V17h4c2.76 0 5-2.24 5-5s-2.24-5-5-5z',
+  mic: 'M12 14c1.66 0 2.99-1.34 2.99-3L15 5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z',
+  videocam: 'M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z',
+  screen: 'M20 18c1.1 0 1.99-.9 1.99-2L22 6c0-1.11-.9-2-2-2H4c-1.11 0-2 .89-2 2v10c0 1.1.89 2 2 2H0v2h24v-2h-4zm-7-3.53v-2.19c-2.78 0-4.61.85-6 2.72.56-2.67 2.11-5.33 6-5.87V7l4 3.73-4 3.74z',
+  speaker: 'M17 2H7c-1.1 0-2 .9-2 2v16c0 1.1.9 1.99 2 1.99L17 22c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-5 2c1.1 0 2 .9 2 2s-.9 2-2 2c-1.11 0-2-.9-2-2s.89-2 2-2zm0 16c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z',
+  headphones: 'M12 1c-4.97 0-9 4.03-9 9v7c0 1.66 1.34 3 3 3h3v-8H5v-2c0-3.87 3.13-7 7-7s7 3.13 7 7v2h-4v8h3c1.66 0 3-1.34 3-3v-7c0-4.97-4.03-9-9-9z',
+  folder: 'M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z',
+  paste: 'M19 2h-4.18C14.4.84 13.3 0 12 0c-1.3 0-2.4.84-2.82 2H5c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-7 0c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1zm7 18H5V4h2v3h10V4h2v16z',
+  bell: 'M12 22c1.1 0 2-.9 2-2h-4c0 1.1.89 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z',
+  ring: 'M0 15h2V9H0v6zm3 2h2V7H3v10zm19-8v6h2V9h-2zm-3 8h2V7h-2v10zM16.5 3h-9C6.67 3 6 3.67 6 4.5v15c0 .83.67 1.5 1.5 1.5h9c.83 0 1.5-.67 1.5-1.5v-15c0-.83-.67-1.5-1.5-1.5zM16 19H8V5h8v14z',
+  call: 'M20.01 15.38c-1.23 0-2.42-.2-3.53-.56-.35-.12-.74-.03-1.01.24l-1.57 1.97c-2.83-1.35-5.48-3.9-6.89-6.83l1.95-1.66c.27-.28.35-.67.24-1.02-.37-1.11-.56-2.3-.56-3.53 0-.54-.45-.99-.99-.99H4.19C3.65 3 3 3.24 3 3.99 3 13.28 10.73 21 20.01 21c.71 0 .99-.63.99-1.18v-3.45c0-.54-.45-.99-.99-.99z',
+  battery: 'M15.67 4H14V2h-4v2H8.33C7.6 4 7 4.6 7 5.33v15.33C7 21.4 7.6 22 8.33 22h7.33c.74 0 1.34-.6 1.34-1.33V5.33C17 4.6 16.4 4 15.67 4z',
+  volume: 'M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z',
+};
+function icon(name, size = 18) {
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(NS, 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('width', size);
+  svg.setAttribute('height', size);
+  svg.setAttribute('class', 'ic');
+  svg.setAttribute('aria-hidden', 'true');
+  const path = document.createElementNS(NS, 'path');
+  path.setAttribute('d', MATERIAL[name] || MATERIAL.link);
+  svg.append(path);
+  return svg;
+}
+
 const $main = document.getElementById('main');
 const btn = (label, onclick, cls = '') => h('button', { class: `btn ${cls}`, onclick }, label);
 
@@ -85,7 +127,10 @@ const interopNote = (list) => (list && list.length)
   ? h('span', { class: 'small muted' }, ` · funziona anche con ${list.map((x) => ({ kdeConnect: 'KDE Connect', flux: 'Flux' }[x] || x)).join(' e ')}`)
   : null;
 
-const typeIcon = (t) => ({ phone: '📱', tablet: '📟', laptop: '💻', desktop: '🖥️', tv: '📺' }[t] || '🔗');
+const typeIcon = (t, size = 22) => icon({ phone: 'smartphone', tablet: 'tablet', laptop: 'laptop', desktop: 'desktop', tv: 'tv' }[t] || 'link', size);
+
+// Sidebar icons (index.html marks each button with data-icon).
+for (const b of document.querySelectorAll('#nav button[data-icon]')) b.prepend(icon(b.dataset.icon, 18));
 
 // ------------------------------------------------------------------ state --
 
@@ -116,7 +161,7 @@ async function refreshDevices() {
   if (!S.selected && S.devices.length) S.selected = S.devices[0].id;
   const online = S.devices.filter((d) => d.connected && d.paired).length;
   document.getElementById('status').textContent =
-    `${online} dispositivo${online === 1 ? '' : 'i'} connesso${online === 1 ? '' : 'i'}`;
+    online === 1 ? '1 dispositivo connesso' : `${online} dispositivi connessi`;
   if (S.view === 'devices') render();
 }
 
@@ -283,12 +328,12 @@ function deviceList() {
       onclick: () => { S.selected = d.id; render(); },
     },
     h('div', { class: 'icon' }, typeIcon(d.deviceType)),
-    h('div', { class: 'grow' },
-      h('div', { style: 'font-weight:600' }, d.name),
+    h('div', { class: 'grow dev-text' },
+      h('div', { class: 'dev-name', title: d.name }, d.name),
       h('div', { class: 'small muted row', style: 'gap:6px' },
         h('span', { class: `dot ${d.connected ? 'on' : ''}` }),
         d.connected ? 'Online' : 'Offline',
-        S.battery[d.id] ? ` · 🔋 ${S.battery[d.id].currentCharge}%` : '')),
+        S.battery[d.id] ? ` · batteria ${S.battery[d.id].currentCharge}%` : '')),
     d.paired ? h('span', { class: 'badge ok' }, 'Associato')
       : h('span', { class: 'badge warn' }, { requested: 'In attesa', confirm: 'Da confermare', requestedByPeer: 'Richiesta' }[d.pairState] || 'Nuovo'))),
     h('div', { style: 'margin-top:10px' }, connectBox()),
@@ -329,7 +374,7 @@ const TABS = [
 
 async function deviceDetail(d) {
   const head = h('div', { class: 'row' },
-    h('div', { style: 'font-size:28px' }, typeIcon(d.deviceType)),
+    h('div', { class: 'dev-ic' }, typeIcon(d.deviceType, 30)),
     h('div', { class: 'grow' },
       h('div', { style: 'font-size:18px;font-weight:700' }, d.name),
       h('div', { class: 'small muted row', style: 'gap:6px' }, d.connected ? `Connesso · ${d.address}` : 'Non raggiungibile', protoBadge(d.protocol))),
@@ -379,13 +424,13 @@ function actionsTab(d) {
   const transfers = [...S.transfers.values()].filter((t) => t.deviceId === d.id).slice(-5).reverse();
   return h('div', {},
     h('div', { class: 'row' },
-      btn('📁 Invia file…', async () => {
+      btn([icon('folder'), ' Invia file…'], async () => {
         const paths = await invoke('pick_files');
         if (paths.length) await run(act('share', 'sendFiles', { paths }, d.id), 'Invio avviato');
       }, 'primary'),
-      btn('📋 Invia appunti', () => run(act('clipboard', 'send', null, d.id), 'Appunti inviati')),
-      btn('🔔 Ping', () => run(act('ping', 'send', { message: 'Ping da Konnekta' }, d.id))),
-      hasCap(d, 'konnekta.finddevice') ? btn('📳 Fai squillare', () => run(act('finddevice', 'ring', null, d.id))) : null),
+      btn([icon('paste'), ' Invia appunti'], () => run(act('clipboard', 'send', null, d.id), 'Appunti inviati')),
+      btn([icon('bell'), ' Ping'], () => run(act('ping', 'send', { message: 'Ping da Konnekta' }, d.id))),
+      hasCap(d, 'konnekta.finddevice') ? btn([icon('ring'), ' Fai squillare'], () => run(act('finddevice', 'ring', null, d.id))) : null),
     h('h3', {}, 'Condividi testo'),
     text,
     h('div', { class: 'row', style: 'margin-top:6px' },
@@ -469,17 +514,21 @@ function callsTab(d) {
 
 function streamsTab(d) {
   const st = S.streams[d.id] || {};
-  const row = (plugin, title, desc, startable, extra) => {
+  // startable: this computer can ask for it (the phone shows Start / Not now);
+  // otherwise it is started from the phone (Control).
+  const row = (plugin, ic, title, desc, startable, extra) => {
     const supported = hasCap(d, `konnekta.${plugin}`);
     return h('div', { class: 'perm' },
-      h('div', { class: 'grow' },
-        h('div', { style: 'font-weight:600' }, title, ' ', st[plugin] ? h('span', { class: 'badge ok' }, 'attivo') : null),
-        h('div', { class: 'small muted' }, supported ? desc : 'Non supportato dal dispositivo (serve l\'app Konnekta).')),
+      h('div', { class: 'row grow', style: 'flex-wrap:nowrap' },
+        h('div', { class: 'stream-ic' }, icon(ic, 22)),
+        h('div', { class: 'grow' },
+          h('div', { style: 'font-weight:600' }, title, ' ', st[plugin] ? h('span', { class: 'badge ok' }, 'dal vivo') : null),
+          h('div', { class: 'small muted' }, supported ? desc : 'Non supportato dal dispositivo (serve l\'app Konnekta aggiornata).'))),
       extra || null,
       supported ? (st[plugin]
         ? btn('Interrompi', () => run(act(plugin, 'stop', null, d.id)), 'danger')
-        : startable ? btn('Avvia', () => run(act(plugin, 'start', extraArgs(plugin), d.id)), 'primary')
-          : h('span', { class: 'small muted' }, 'Avvia dal telefono')) : null);
+        : startable ? btn('Chiedi al telefono', () => run(act(plugin, 'start', extraArgs(plugin), d.id), 'Richiesta inviata: conferma sul telefono'), 'primary')
+          : h('span', { class: 'small muted' }, 'Si avvia dal telefono')) : null);
   };
   const facing = h('select', {}, h('option', { value: 'back' }, 'Posteriore'), h('option', { value: 'front' }, 'Anteriore'));
   const res = h('select', {}, h('option', { value: '720' }, '720p'), h('option', { value: '1080' }, '1080p'), h('option', { value: '480' }, '480p'));
@@ -489,15 +538,20 @@ function streamsTab(d) {
       return { codec: 'h264', height: hgt, width: Math.round(hgt * 16 / 9), fps: 30, facing: facing.value };
     }
     if (plugin === 'microphone') return { codec: 'pcm_s16le', sampleRate: 48000, channels: 1 };
+    if (plugin === 'phoneaudio') return { codec: 'pcm_s16le', sampleRate: 48000, channels: 2 };
     return { codec: 'h264' };
   }
   return h('div', {},
-    h('p', { class: 'small muted' }, 'Tutti i flussi sono cifrati end-to-end con TLS e autenticati con il certificato del dispositivo associato.'),
-    row('microphone', '🎙️ Microfono del telefono', 'Diventa il dispositivo di ingresso "Konnekta Microphone" (Discord, Zoom, OBS…).', true),
-    row('camera', '📷 Webcam wireless', 'Usa la fotocamera del telefono come webcam del computer.', true, h('div', { class: 'row' }, facing, res)),
-    row('phonescreen', '📲 Schermo del telefono', 'Mostra lo schermo del telefono in una finestra.', true),
-    row('desktop', '🖥️ Desktop remoto', 'Il telefono vede e controlla questo schermo (servono i permessi Desktop remoto e Mouse e tastiera).', false),
-    row('systemaudio', '🔈 Audio del computer sul telefono', 'Ascolta sul telefono l\'audio riprodotto da questo computer.', false));
+    h('p', { class: 'small muted' }, 'Tutti i flussi sono cifrati end-to-end con TLS e autenticati con il certificato del dispositivo associato. ' +
+      'Il telefono chiede sempre conferma prima di accendere microfono, fotocamera o cattura dello schermo.'),
+    h('h3', {}, 'Dal telefono a questo computer'),
+    row('microphone', 'mic', 'Microfono', 'Diventa il dispositivo di ingresso "Konnekta Microphone" (Discord, Zoom, OBS…).', true),
+    row('camera', 'videocam', 'Webcam', 'La fotocamera del telefono come webcam del computer.', true, h('div', { class: 'row' }, facing, res)),
+    row('phonescreen', 'screen', 'Schermo del telefono', 'Lo schermo del telefono in una finestra (con l\'audio, se avviato dal telefono).', true),
+    row('phoneaudio', 'headphones', 'Audio del telefono', 'Musica, video e giochi del telefono dalle casse di questo computer.', true),
+    h('h3', {}, 'Da questo computer al telefono'),
+    row('desktop', 'desktop', 'Desktop remoto', 'Il telefono vede e controlla questo schermo (servono i permessi Desktop remoto e Mouse e tastiera).', false),
+    row('systemaudio', 'speaker', 'Audio del computer', 'Il telefono ascolta l\'audio riprodotto da questo computer.', false));
 }
 
 // Same names as the phone app (PERMISSION_LABELS in apps/android/.../ui/Common.kt).

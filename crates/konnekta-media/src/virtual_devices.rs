@@ -6,6 +6,7 @@
 //! | Microphone     | PipeWire/Pulse `module-pipe-source`     | VB-Audio Cable (cpal)            | BlackHole 2ch (cpal)           |
 //! | Webcam         | v4l2loopback + ffmpeg                   | ffmpeg -> OBS (Virtual Camera)   | ffmpeg -> OBS (Virtual Camera) |
 //! | System audio   | `parec` on the default monitor          | WASAPI loopback (cpal)           | BlackHole input (cpal)         |
+//! | Phone audio    | `pacat` to the default output           | default output (cpal)            | default output (cpal)         |
 
 use anyhow::{Context, Result, bail};
 use std::sync::Arc;
@@ -128,6 +129,95 @@ impl Drop for VirtualMic {
                 .args(["unload-module", module])
                 .status();
             let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+/// Audio from the phone played on the computer's default output
+/// (PCM s16le, 48 kHz, mono or stereo).
+pub struct Speakers {
+    inner: SpeakerImpl,
+    channels: u8,
+}
+
+enum SpeakerImpl {
+    #[cfg(target_os = "linux")]
+    /// The child is kept so pacat is killed with the stream.
+    Pacat {
+        _child: tokio::process::Child,
+        stdin: tokio::process::ChildStdin,
+    },
+    #[cfg(any(windows, target_os = "macos"))]
+    Cpal(cpal_out::CpalOutput),
+    #[allow(dead_code)]
+    None,
+}
+
+impl Speakers {
+    pub async fn create(channels: u8) -> Result<Self> {
+        #[cfg(target_os = "linux")]
+        {
+            let mut child = tokio::process::Command::new("pacat")
+                .args([
+                    "--playback",
+                    "--raw",
+                    "--format=s16le",
+                    &format!("--rate={SAMPLE_RATE}"),
+                    &format!("--channels={channels}"),
+                    "--client-name=Konnekta",
+                    "--stream-name=Phone audio",
+                    "--latency-msec=60",
+                ])
+                .stdin(std::process::Stdio::piped())
+                .kill_on_drop(true)
+                .spawn()
+                .context("pacat not found (install pipewire-pulse or pulseaudio-utils)")?;
+            let stdin = child.stdin.take().context("pacat has no input")?;
+            return Ok(Self {
+                inner: SpeakerImpl::Pacat {
+                    _child: child,
+                    stdin,
+                },
+                channels,
+            });
+        }
+        #[cfg(any(windows, target_os = "macos"))]
+        {
+            // The jitter buffer plays mono: stereo is mixed down in `write`.
+            return Ok(Self {
+                inner: SpeakerImpl::Cpal(cpal_out::CpalOutput::open(&[], 1)?),
+                channels,
+            });
+        }
+        #[allow(unreachable_code)]
+        {
+            let _ = channels;
+            bail!("phone audio playback not supported on this platform")
+        }
+    }
+
+    pub async fn write(&mut self, pcm: &[u8]) -> Result<()> {
+        match &mut self.inner {
+            #[cfg(target_os = "linux")]
+            SpeakerImpl::Pacat { stdin, .. } => Ok(stdin.write_all(pcm).await?),
+            #[cfg(any(windows, target_os = "macos"))]
+            SpeakerImpl::Cpal(o) => {
+                let s = crate::jitter::bytes_to_i16(pcm);
+                if self.channels == 2 {
+                    let mono: Vec<i16> = s
+                        .chunks_exact(2)
+                        .map(|c| ((c[0] as i32 + c[1] as i32) / 2) as i16)
+                        .collect();
+                    o.push(&mono);
+                } else {
+                    o.push(&s);
+                }
+                Ok(())
+            }
+            SpeakerImpl::None => {
+                let _ = (pcm, self.channels);
+                Ok(())
+            }
         }
     }
 }
@@ -338,9 +428,10 @@ mod cpal_out {
             std::thread::spawn(move || {
                 let r = (|| -> Result<cpal::Stream> {
                     let host = cpal::default_host();
-                    let dev = host
+                    // No names: the default output (phone audio on the speakers).
+                    let dev = if names.is_empty() { host.default_output_device() } else { host
                         .output_devices()?
-                        .find(|d| d.name().map(|n| names.iter().any(|x| n.contains(x))).unwrap_or(false))
+                        .find(|d| d.name().map(|n| names.iter().any(|x| n.contains(x))).unwrap_or(false)) }
                         .with_context(|| {
                             format!("virtual audio device not found ({}). Install it to expose the phone microphone.", names.join(" / "))
                         })?;

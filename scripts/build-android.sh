@@ -13,5 +13,6 @@ export ANDROID_NDK_HOME=$NDK
 JNI=$ROOT/apps/android/app/src/main/jniLibs
 cargo ndk -t arm64-v8a -t x86_64 -P 28 -o "$JNI" build -p konnekta-ffi --release
 cd "$ROOT/apps/android"
-"${GRADLE:-gradle}" --no-daemon "assemble${MODE^}" "test${MODE^}UnitTest"
+# Unit tests run on the debug variant (AGP does not create them for release).
+"${GRADLE:-gradle}" --no-daemon "assemble${MODE^}" testDebugUnitTest
 ls -la app/build/outputs/apk/"$MODE"/*.apk
