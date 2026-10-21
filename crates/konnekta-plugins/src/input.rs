@@ -14,8 +14,6 @@ pub struct InputPlugin {
     platform: Platform,
     /// Sub-pixel remainder of relative movements.
     acc: Mutex<(f64, f64)>,
-    /// Scroll remainder in wheel steps (x, y).
-    scroll_acc: Mutex<(f64, f64)>,
 }
 
 /// `specialKey` codes (the same numbers KDE Connect apps send through the
@@ -52,7 +50,6 @@ impl InputPlugin {
         Self {
             platform,
             acc: Mutex::new((0.0, 0.0)),
-            scroll_acc: Mutex::new((0.0, 0.0)),
         }
     }
 
@@ -111,21 +108,14 @@ impl InputPlugin {
         let (dx, dy) = (b.dx.unwrap_or(0.0), b.dy.unwrap_or(0.0));
         if (dx != 0.0 || dy != 0.0) && dx.is_finite() && dy.is_finite() {
             if b.scroll {
-                // KDE: negative dy scrolls down. One wheel step per 10 px,
-                // remainders carried over so small moves add up smoothly
-                // instead of each becoming a full step.
-                let mut acc = self.scroll_acc.lock().unwrap();
-                acc.0 += (dx / 10.0).clamp(-20.0, 20.0);
-                acc.1 += (-dy / 10.0).clamp(-20.0, 20.0);
-                let (sx, sy) = (acc.0.trunc(), acc.1.trunc());
-                acc.0 -= sx;
-                acc.1 -= sy;
-                if sx != 0.0 || sy != 0.0 {
-                    out.push(InputEvent::Scroll {
-                        dx: -(sx as i32),
-                        dy: sy as i32,
-                    });
-                }
+                // The phone sends how far the fingers moved: content follows
+                // the fingers (fingers up = scroll down), like a touchpad.
+                // Half the phone's pixels match a laptop touchpad; the speed
+                // setting on the phone scales it further.
+                out.push(InputEvent::SmoothScroll {
+                    dx: (-dx * SCROLL_SCALE).clamp(-2000.0, 2000.0),
+                    dy: (-dy * SCROLL_SCALE).clamp(-2000.0, 2000.0),
+                });
             } else {
                 let mut acc = self.acc.lock().unwrap();
                 acc.0 += dx.clamp(-2000.0, 2000.0);
@@ -144,6 +134,9 @@ impl InputPlugin {
         out
     }
 }
+
+/// Desktop scroll pixels per phone pixel.
+const SCROLL_SCALE: f64 = 0.5;
 
 /// What a three-finger swipe does on this desktop.
 #[derive(Debug, PartialEq)]
@@ -418,21 +411,25 @@ mod tests {
     #[test]
     fn scroll_direction() {
         let p = plugin();
+        // Fingers up: content scrolls down, in pixels (no notch rounding).
         let b = MousepadBody {
             dy: Some(-30.0),
             scroll: true,
             ..Default::default()
         };
-        assert_eq!(p.events(&b), vec![InputEvent::Scroll { dx: 0, dy: 3 }]);
-        // Small moves add up instead of each being a full step.
+        assert_eq!(
+            p.events(&b),
+            vec![InputEvent::SmoothScroll { dx: 0.0, dy: 15.0 }]
+        );
         let b = MousepadBody {
-            dy: Some(4.0),
+            dx: Some(4.0),
             scroll: true,
             ..Default::default()
         };
-        assert!(p.events(&b).is_empty());
-        assert!(p.events(&b).is_empty());
-        assert_eq!(p.events(&b), vec![InputEvent::Scroll { dx: 0, dy: -1 }]);
+        assert_eq!(
+            p.events(&b),
+            vec![InputEvent::SmoothScroll { dx: -2.0, dy: -0.0 }]
+        );
     }
 
     #[test]

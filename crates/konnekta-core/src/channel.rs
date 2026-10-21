@@ -18,8 +18,14 @@ impl<T: AsyncRead + AsyncWrite + Send + Unpin> Channel for T {}
 
 pub type SecureChannel = Box<dyn Channel>;
 
+/// Bytes the kernel may hold for a stream before the sender waits. Small on
+/// purpose: a big buffer on a slow network turns into seconds of delay; a
+/// small one makes the producer skip stale pictures instead.
+const STREAM_SEND_BUFFER: usize = 256 * 1024;
+
 fn tune(tcp: &TcpStream) {
     let _ = tcp.set_nodelay(true);
+    let _ = socket2::SockRef::from(tcp).set_send_buffer_size(STREAM_SEND_BUFFER);
 }
 
 impl DeviceHandle {

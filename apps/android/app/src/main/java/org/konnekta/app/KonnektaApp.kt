@@ -25,6 +25,7 @@ class KonnektaApp : Application() {
         const val CH_SERVICE = "service"
         const val CH_ALERTS = "alerts"
         const val CH_APPROVE = "approve"
+        const val CH_MEDIA = "pcmedia"
     }
 
     override fun onCreate() {
@@ -33,5 +34,9 @@ class KonnektaApp : Application() {
         nm.createNotificationChannel(NotificationChannel(CH_SERVICE, "Connessione", NotificationManager.IMPORTANCE_MIN))
         nm.createNotificationChannel(NotificationChannel(CH_ALERTS, "Avvisi dal computer", NotificationManager.IMPORTANCE_HIGH))
         nm.createNotificationChannel(NotificationChannel(CH_APPROVE, "Approvazioni", NotificationManager.IMPORTANCE_HIGH))
+        nm.createNotificationChannel(NotificationChannel(CH_MEDIA, "Lettore del computer", NotificationManager.IMPORTANCE_LOW))
+        // The service may start without the UI (boot, after an update).
+        org.konnekta.app.state.Settings.load(this)
+        org.konnekta.app.service.ClipboardSync.install(this)
     }
 }

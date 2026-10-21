@@ -9,7 +9,7 @@ license.workspace = true
 default = ["desktop"]
 # Native desktop backends. Disabled when building the core for Android / iOS,
 # where the mobile app provides these through FFI callbacks.
-desktop = ["dep:enigo", "dep:arboard", "dep:notify-rust", "dep:open", "dep:image"]
+desktop = ["dep:enigo", "dep:arboard", "dep:notify-rust", "dep:open", "dep:image", "dep:wayland-client", "dep:wayland-protocols-wlr"]
 
 [dependencies]
 anyhow.workspace = true
@@ -27,3 +27,6 @@ image = { version = "0.25", optional = true, default-features = false, features 
 [target.'cfg(target_os = "linux")'.dependencies]
 arboard = { version = "3", optional = true, default-features = false, features = ["image-data", "wayland-data-control"] }
 enigo = { version = "0.6", optional = true, features = ["x11rb", "wayland"] }
+# Smooth (pixel) scrolling through zwlr_virtual_pointer_v1, as a touchpad does.
+wayland-client = { version = "0.31", optional = true }
+wayland-protocols-wlr = { version = "0.3", optional = true, features = ["client"] }

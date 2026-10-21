@@ -44,9 +44,16 @@ pub enum InputEvent {
         button: MouseButton,
         action: ButtonAction,
     },
+    /// Whole wheel notches.
     Scroll {
         dx: i32,
         dy: i32,
+    },
+    /// Touchpad-style scroll in pixels (positive `dy` scrolls down). Smooth
+    /// where the compositor takes pixel scrolling, else turned into notches.
+    SmoothScroll {
+        dx: f64,
+        dy: f64,
     },
     Text {
         text: String,
@@ -59,6 +66,28 @@ pub enum InputEvent {
 
 pub trait InputBackend: Send + Sync {
     fn send(&self, ev: InputEvent) -> Result<()>;
+}
+
+/// Pixels of smooth scroll per wheel notch where only notches exist.
+pub const PIXELS_PER_NOTCH: f64 = 5.0;
+
+/// Turns pixel scrolling into notches, keeping the remainder so slow
+/// moves add up instead of being lost.
+#[derive(Default)]
+pub struct NotchAccumulator {
+    x: f64,
+    y: f64,
+}
+
+impl NotchAccumulator {
+    pub fn push(&mut self, dx: f64, dy: f64) -> Option<(i32, i32)> {
+        self.x += (dx / PIXELS_PER_NOTCH).clamp(-20.0, 20.0);
+        self.y += (dy / PIXELS_PER_NOTCH).clamp(-20.0, 20.0);
+        let (sx, sy) = (self.x.trunc(), self.y.trunc());
+        self.x -= sx;
+        self.y -= sy;
+        (sx != 0.0 || sy != 0.0).then_some((sx as i32, sy as i32))
+    }
 }
 
 #[cfg(feature = "desktop")]
@@ -91,7 +120,15 @@ mod enigo_backend {
                 .name("konnekta-input".into())
                 .spawn(move || {
                     let mut enigo = None;
+                    let mut smooth = Smooth::default();
                     while let Ok(ev) = rx.recv() {
+                        let ev = match ev {
+                            InputEvent::SmoothScroll { dx, dy } => match smooth.scroll(dx, dy) {
+                                Some(notches) => notches,
+                                None => continue,
+                            },
+                            ev => ev,
+                        };
                         if enigo.is_none() {
                             match Enigo::new(&Settings::default()) {
                                 Ok(e) => enigo = Some(e),
@@ -108,6 +145,40 @@ mod enigo_backend {
                 })
                 .expect("spawn input thread");
             Self { tx }
+        }
+    }
+
+    /// Pixel scrolling through the compositor when it can, else notches.
+    #[derive(Default)]
+    struct Smooth {
+        #[cfg(target_os = "linux")]
+        wlr: Option<Option<crate::wlr_scroll::WlrScroll>>,
+        notches: NotchAccumulator,
+    }
+
+    impl Smooth {
+        /// Done (`None`) or the notch event to send instead.
+        fn scroll(&mut self, dx: f64, dy: f64) -> Option<InputEvent> {
+            #[cfg(target_os = "linux")]
+            {
+                let wlr = self.wlr.get_or_insert_with(|| {
+                    std::env::var_os("WAYLAND_DISPLAY")?;
+                    crate::wlr_scroll::WlrScroll::connect()
+                        .inspect_err(|e| tracing::info!("smooth scrolling unavailable: {e:#}"))
+                        .ok()
+                });
+                if let Some(w) = wlr {
+                    match w.scroll(dx, dy) {
+                        Ok(()) => return None,
+                        Err(e) => {
+                            tracing::warn!("smooth scrolling failed: {e:#}");
+                            self.wlr = Some(None);
+                        }
+                    }
+                }
+            }
+            let (sx, sy) = self.notches.push(dx, dy)?;
+            Some(InputEvent::Scroll { dx: sx, dy: sy })
         }
     }
 
@@ -212,6 +283,8 @@ mod enigo_backend {
                     e.scroll(dx, Axis::Horizontal)?;
                 }
             }
+            // Turned into notches (or sent smoothly) before reaching here.
+            InputEvent::SmoothScroll { .. } => {}
             InputEvent::Text { text } => e.text(&text)?,
             InputEvent::Key { key, modifiers: m } => {
                 let mods: Vec<enigo::Key> = [
@@ -341,6 +414,13 @@ mod ydotool {
                     "-y",
                     &(-dy).to_string(),
                 ])),
+                InputEvent::SmoothScroll { dx, dy } => {
+                    static ACC: std::sync::Mutex<NotchAccumulator> =
+                        std::sync::Mutex::new(NotchAccumulator { x: 0.0, y: 0.0 });
+                    if let Some((sx, sy)) = ACC.lock().unwrap().push(dx, dy) {
+                        self.send(InputEvent::Scroll { dx: sx, dy: sy })?;
+                    }
+                }
                 InputEvent::Text { text } => run(vec!["type".into(), "--".into(), text]),
                 InputEvent::Key { key, modifiers: m } => {
                     let Some(code) = keycode(key) else {
@@ -363,5 +443,18 @@ mod ydotool {
             }
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn notches_keep_the_remainder() {
+        let mut a = NotchAccumulator::default();
+        assert_eq!(a.push(0.0, 3.0), None);
+        assert_eq!(a.push(0.0, 3.0), Some((0, 1)));
+        assert_eq!(a.push(0.0, -16.0), Some((0, -3)));
     }
 }

@@ -15,6 +15,8 @@ pub mod media;
 pub mod mixer;
 pub mod mock;
 pub mod notify;
+#[cfg(all(feature = "desktop", target_os = "linux"))]
+pub mod wlr_scroll;
 
 use std::sync::Arc;
 

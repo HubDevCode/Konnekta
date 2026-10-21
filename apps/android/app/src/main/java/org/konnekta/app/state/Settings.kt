@@ -31,6 +31,9 @@ object Settings {
     /** Presentation: the volume keys change slide also with the screen off and outside the app. */
     val presenterAnywhere = MutableStateFlow(false)
 
+    /** The computer's player in the Android media controls and lock screen. */
+    val pcMediaControls = MutableStateFlow(true)
+
     /** Saved order per container: "control" / "send" (sections), "control/<section>" (features). */
     val order = MutableStateFlow<Map<String, List<String>>>(emptyMap())
 
@@ -51,6 +54,12 @@ object Settings {
         }.getOrDefault(emptyMap())
         hidden.value = p.getStringSet("hiddenFeatures", emptySet())!!.toSet()
         presenterAnywhere.value = p.getBoolean("presenterAnywhere", false)
+        pcMediaControls.value = p.getBoolean("pcMediaControls", true)
+    }
+
+    fun setPcMediaControls(ctx: Context, on: Boolean) {
+        pcMediaControls.value = on
+        prefs(ctx).putBoolean("pcMediaControls", on).apply()
     }
 
     fun setPresenterAnywhere(ctx: Context, on: Boolean) {

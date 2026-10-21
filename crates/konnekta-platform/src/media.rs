@@ -47,6 +47,9 @@ pub struct MediaStatus {
     pub position_ms: i64,
     pub length_ms: i64,
     pub can_seek: bool,
+    /// Cover picture (`file://` or `https://`), empty when the player has none.
+    #[serde(default)]
+    pub art_url: String,
 }
 
 #[async_trait]
@@ -159,16 +162,36 @@ mod linux {
         }
 
         async fn status(&self, player: Option<&str>) -> Result<Option<MediaStatus>> {
-            let fmt = "{{playerName}}\t{{title}}\t{{artist}}\t{{album}}\t{{status}}\t{{position}}\t{{mpris:length}}";
-            let Ok(line) = pc(player, &["metadata", "--format", fmt]).await else {
+            let fmt = "{{playerName}}\t{{title}}\t{{artist}}\t{{album}}\t{{status}}\t{{position}}\t{{mpris:length}}\t{{mpris:artUrl}}";
+            let named = player.is_some_and(|p| !p.is_empty());
+            // No player named: look at all of them and take the one playing.
+            let out = if named {
+                pc(player, &["metadata", "--format", fmt]).await
+            } else {
+                output("playerctl", &["-a", "metadata", "--format", fmt]).await
+            };
+            let Ok(out) = out else {
                 return Ok(None);
             };
-            let f: Vec<&str> = line.split('\t').collect();
-            if f.len() < 7 {
+            let rows: Vec<Vec<&str>> = out
+                .lines()
+                .map(|l| l.split('\t').collect::<Vec<_>>())
+                .filter(|f| f.len() >= 7)
+                .collect();
+            let Some(f) = rows
+                .iter()
+                .find(|f| f[4] == "Playing")
+                .or_else(|| rows.first())
+            else {
                 return Ok(None);
-            }
+            };
             Ok(Some(MediaStatus {
-                player: player.unwrap_or(f[0]).to_owned(),
+                player: if named {
+                    player.unwrap_or_default()
+                } else {
+                    f[0]
+                }
+                .to_owned(),
                 title: f[1].into(),
                 artist: f[2].into(),
                 album: f[3].into(),
@@ -176,6 +199,7 @@ mod linux {
                 position_ms: f[5].parse::<i64>().unwrap_or(0) / 1000,
                 length_ms: f[6].parse::<i64>().unwrap_or(0) / 1000,
                 can_seek: true,
+                art_url: f.get(7).copied().unwrap_or_default().to_owned(),
             }))
         }
 
@@ -329,6 +353,7 @@ mod macos {
                 position_ms: (f[4].replace(',', ".").parse::<f64>().unwrap_or(0.0) * 1000.0) as i64,
                 length_ms,
                 can_seek: true,
+                art_url: String::new(),
             }))
         }
 

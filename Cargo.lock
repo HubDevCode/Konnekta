@@ -2674,6 +2674,8 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
+ "wayland-client",
+ "wayland-protocols-wlr",
 ]
 
 [[package]]

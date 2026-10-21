@@ -35,6 +35,7 @@ import org.konnekta.app.approve.ApproveKeys
 import org.konnekta.app.approve.PendingApprovals
 import org.konnekta.app.core.Core
 import org.konnekta.app.core.Types
+import org.konnekta.app.state.Settings
 import org.konnekta.app.state.Store
 import org.konnekta.app.ui.MainActivity
 import java.io.File
@@ -70,6 +71,12 @@ class KonnektaService : Service() {
         private const val ACTION_DECLINE_STREAM = "org.konnekta.app.DECLINE_STREAM"
         private const val ACTION_DECLINE_PHOTO = "org.konnekta.app.DECLINE_PHOTO"
         private const val ACTION_PAIR_ANSWER = "org.konnekta.app.PAIR_ANSWER"
+        private const val ACTION_PC_MEDIA_REFRESH = "org.konnekta.app.PC_MEDIA_REFRESH"
+
+        /** The "computer player" setting changed: subscribe or remove the controls. */
+        fun pcMediaChanged(context: Context) {
+            context.startService(Intent(context, KonnektaService::class.java).setAction(ACTION_PC_MEDIA_REFRESH))
+        }
 
         /**
          * The user accepted a stream request (the app is on screen, so the
@@ -148,6 +155,11 @@ class KonnektaService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP_RING) stopRing()
         if (intent?.action == PresenterRemote.ACTION_STOP) PresenterRemote.stop(this)
+        if (intent?.action == PcMediaControls.ACTION) PcMediaControls.onAction(intent.getStringExtra("device"), intent.getStringExtra("action"))
+        if (intent?.action == ACTION_PC_MEDIA_REFRESH) KonnektaApp.core?.let { c ->
+            if (Settings.pcMediaControls.value) Store.paired.filter { it.optBoolean("connected") }.forEach { PcMediaControls.subscribe(c, it.optString("id")) }
+            else PcMediaControls.clear(this)
+        }
         if (intent?.action == ACTION_REFRESH) restartFeatures()
         if (intent?.action == ACTION_ACCEPT_STREAM) onAcceptStream(intent)
         if (intent?.action == ACTION_DECLINE_STREAM) {
@@ -224,11 +236,18 @@ class KonnektaService : Service() {
                 pairPrompt.value = null
                 nm.cancel(N_PAIR)
             }
-            "unpaired" -> ApproveKeys(this).remove(e.optString("deviceId"))
-            "deviceDisconnected" -> Streams.stopAllFor(e.optString("deviceId"))
-            "deviceConnected" -> {
+            "unpaired" -> {
+                ApproveKeys(this).remove(e.optString("deviceId"))
+                PcMediaControls.remove(this, e.optString("deviceId"))
+            }
+            "deviceDisconnected" -> {
+                Streams.stopAllFor(e.optString("deviceId"))
+                PcMediaControls.remove(this, e.optString("deviceId"))
+            }
+            "deviceConnected", "paired" -> {
                 lastBattery?.let { b -> sendToAll(core, Types.BATTERY, b) }
                 dnd?.sendState(e.optString("deviceId"))
+                PcMediaControls.subscribe(core, e.optString("deviceId"))
             }
         }
         when (e.optString("event")) {
@@ -258,6 +277,7 @@ class KonnektaService : Service() {
             }
             Types.CLIPBOARD -> body.optString("content").takeIf { it.isNotEmpty() }?.let { text ->
                 main.post {
+                    ClipboardSync.fromComputer = text
                     getSystemService(ClipboardManager::class.java)?.setPrimaryClip(ClipData.newPlainText("Konnekta", text))
                 }
                 Store.item(deviceId, "clipboard", "Appunti", text)
@@ -273,9 +293,12 @@ class KonnektaService : Service() {
                 body.optJSONArray("playerList")?.let { l ->
                     Store.put(Store.pcPlayers, deviceId, (0 until l.length()).map { l.optString(it) })
                 }
-                val merged = JSONObject((Store.pcMedia.value[deviceId] ?: JSONObject()).toString())
-                body.keys().forEach { k -> if (k != "playerList") merged.put(k, body.get(k)) }
-                Store.put(Store.pcMedia, deviceId, merged)
+                if (!body.optBoolean("transferringAlbumArt")) {
+                    val merged = JSONObject((Store.pcMedia.value[deviceId] ?: JSONObject()).toString())
+                    body.keys().forEach { k -> if (k != "playerList") merged.put(k, body.get(k)) }
+                    Store.put(Store.pcMedia, deviceId, merged)
+                }
+                PcMediaControls.onMedia(this, core, deviceId, Store.name(deviceId), body, payloadKey)
             }
             Types.MIXER -> Store.put(Store.pcMixer, deviceId, body)
             Types.COMMANDS -> {
@@ -332,6 +355,7 @@ class KonnektaService : Service() {
                 ?.joinToString(prefix = "In uso: ") { STREAM_NAMES[it.plugin] ?: it.plugin } ?: "Pronto a collegarsi ai tuoi computer",
         )
         .setContentIntent(openApp())
+        .addAction(0, "Invia appunti", org.konnekta.app.ui.ClipboardSendActivity.pending(this))
         .setOngoing(true)
         .build()
 
@@ -402,6 +426,7 @@ class KonnektaService : Service() {
     private fun onShare(core: Core, deviceId: String, body: JSONObject, payloadKey: String?) {
         body.optString("text").takeIf { it.isNotEmpty() }?.let { text ->
             main.post {
+                ClipboardSync.fromComputer = text
                 getSystemService(ClipboardManager::class.java)?.setPrimaryClip(ClipData.newPlainText("Konnekta", text))
             }
             Store.item(deviceId, "text", "Testo ricevuto", text)

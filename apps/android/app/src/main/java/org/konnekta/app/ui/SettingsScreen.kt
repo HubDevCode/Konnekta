@@ -15,6 +15,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.GridView
+import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Slideshow
 import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.filled.Tune
@@ -85,6 +86,18 @@ fun SettingsScreen(onBack: () -> Unit) {
             }
             Slider(v, { v = it }, valueRange = Settings.SCROLL_MIN..Settings.SCROLL_MAX,
                 onValueChangeFinished = { Settings.setScrollSpeed(ctx, v) })
+        }
+
+        SectionTitle("Lettore del computer")
+        val pcMedia by Settings.pcMediaControls.collectAsState()
+        ActionCard(
+            Icons.Filled.MusicNote, "Nel centro di controllo e sulla schermata di blocco",
+            if (pcMedia) "Copertina, titolo, comandi e barra di avanzamento di ciò che suona sul computer"
+            else "Spento: il lettore del computer resta solo nella pagina Media",
+            trailing = { Switch(pcMedia, { Settings.setPcMediaControls(ctx, it); org.konnekta.app.service.KonnektaService.pcMediaChanged(ctx) }) },
+        ) {
+            Settings.setPcMediaControls(ctx, !pcMedia)
+            org.konnekta.app.service.KonnektaService.pcMediaChanged(ctx)
         }
 
         SectionTitle("Presentazione")

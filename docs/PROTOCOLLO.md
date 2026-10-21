@@ -106,7 +106,12 @@ controllo multimediale.
 
 Video del desktop remoto: un frame per immagine completa (Annex B), inviato appena l'encoder lo
 scrive. Il computer legge l'uscita FLV della cattura, che ha un tag per immagine, e manda SPS/PPS
-(flag config) prima di ogni keyframe.
+(flag config) prima di ogni keyframe. Nessun frame viene scartato: se la rete rallenta l'invio
+aspetta (buffer TCP di 256 KB) e lo strumento di cattura salta da sé le immagini vecchie.
+
+Lettore del computer: `media` porta anche `albumArtUrl`. La copertina arriva come payload di un
+`media` con `transferringAlbumArt: true`, una volta per brano. Senza `player` nella richiesta il
+computer descrive il lettore che sta suonando.
 
 ```
 u8 kind (1 audio, 2 video, 3 controllo) | u8 flags (1 keyframe, 2 config)

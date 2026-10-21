@@ -175,13 +175,22 @@ impl Handle {
         let s = if write {
             Stream::Writer(FrameSender::new(ch, 30))
         } else {
-            let (tx, rx) = mpsc::sync_channel::<Frame>(60);
+            // A short queue: when the app falls behind, reading pauses and
+            // TCP slows the sender down. Frames are never dropped here (a
+            // missing video frame breaks the picture until the next keyframe).
+            let (tx, rx) = mpsc::sync_channel::<Frame>(8);
             let mut ch = ch;
             tokio::spawn(async move {
-                while let Ok(Some(f)) = read_frame(&mut ch).await {
-                    // Drop when the app is not reading fast enough.
-                    if let Err(mpsc::TrySendError::Disconnected(_)) = tx.try_send(f) {
-                        break;
+                while let Ok(Some(mut f)) = read_frame(&mut ch).await {
+                    loop {
+                        match tx.try_send(f) {
+                            Ok(()) => break,
+                            Err(mpsc::TrySendError::Full(back)) => {
+                                f = back;
+                                tokio::time::sleep(Duration::from_millis(2)).await;
+                            }
+                            Err(mpsc::TrySendError::Disconnected(_)) => return,
+                        }
                     }
                 }
             });

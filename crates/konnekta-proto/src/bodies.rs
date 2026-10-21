@@ -110,6 +110,20 @@ pub struct MprisBody {
     pub pos: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub length: Option<i64>,
+    /// Cover of the current track (MPRIS `mpris:artUrl`); the picture itself
+    /// follows as the payload of a packet with `transferringAlbumArt`.
+    #[serde(
+        rename = "albumArtUrl",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub album_art_url: Option<String>,
+    #[serde(
+        rename = "transferringAlbumArt",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub transferring_album_art: Option<bool>,
     #[serde(rename = "canPause", default, skip_serializing_if = "Option::is_none")]
     pub can_pause: Option<bool>,
     #[serde(rename = "canPlay", default, skip_serializing_if = "Option::is_none")]

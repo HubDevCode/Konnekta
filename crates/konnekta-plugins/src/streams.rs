@@ -400,61 +400,55 @@ impl StreamPlugin {
     // --- producer side (computer produces) ----------------------------------
 
     /// The computer's screen: one frame per encoded picture, sent the moment
-    /// the encoder writes it. Quality is fixed for the session (constant
-    /// quality encoding keeps the bitrate low on a still screen); a short
-    /// queue drops stale pictures up to the next keyframe instead of piling
-    /// up delay.
+    /// the encoder writes it, like Flux. Nothing is dropped: when the network
+    /// is slower, sending waits, the capture's pipe fills and the capture
+    /// tool skips pictures by itself, so what arrives is always current and
+    /// clean. Quality is fixed for the session (constant-quality encoding
+    /// keeps a still screen almost free).
     async fn produce_desktop(ch: SecureChannel, params: StreamParams) -> Result<()> {
-        let sender = FrameSender::new(ch, 6);
+        let sender = FrameSender::new(ch, 2);
         let level = DEFAULT_LADDER
             .iter()
             .rposition(|q| params.height == 0 || q.height <= params.height)
             .unwrap_or(0)
             .min(3);
         let q = DEFAULT_LADDER[level];
-        sender.push(Frame::control(&json!({ "quality": q })));
+        sender.send(Frame::control(&json!({ "quality": q }))).await;
         let (prog, args) = screen_capture_command(q)?;
         tracing::info!(program = %prog, height = q.height, fps = q.fps, "screen capture");
         let mut proc = ProcessPipeline::spawn(&prog, &args, false, true)?;
         let out = proc.stdout.take().context("capture has no output")?;
         let mut flv = FlvReader::new(out);
         let mut config: Option<bytes::Bytes> = None;
-        let mut tick = tokio::time::interval(Duration::from_secs(1));
+        let config_frame = |c: &bytes::Bytes| {
+            let mut f = Frame::new(FrameKind::Video, now_us(), c.clone()).keyframe();
+            f.flags |= FLAG_CONFIG;
+            f
+        };
         loop {
-            tokio::select! {
-                v = flv.next() => {
-                    match v? {
-                        None => bail!("screen capture stopped ({prog})"),
-                        Some(FlvVideo::Config(c)) => {
-                            let mut f = Frame::new(FrameKind::Video, now_us(), c.clone()).keyframe();
-                            f.flags |= FLAG_CONFIG;
-                            sender.push(f);
-                            config = Some(c);
-                        }
-                        Some(FlvVideo::Picture { data, key }) => {
-                            // SPS/PPS again before each keyframe: a decoder that
-                            // dropped frames (or joined late) restarts there.
-                            if key && let Some(c) = &config {
-                                let mut f = Frame::new(FrameKind::Video, now_us(), c.clone()).keyframe();
-                                f.flags |= FLAG_CONFIG;
-                                sender.push(f);
-                            }
-                            let mut f = Frame::new(FrameKind::Video, now_us(), data);
-                            if key {
-                                f = f.keyframe();
-                            }
-                            sender.push(f);
-                        }
-                    }
-                    if sender.is_closed() {
-                        return Ok(());
-                    }
+            let ok = match flv.next().await? {
+                None => bail!("screen capture stopped ({prog})"),
+                Some(FlvVideo::Config(c)) => {
+                    let ok = sender.send(config_frame(&c)).await;
+                    config = Some(c);
+                    ok
                 }
-                _ = tick.tick() => {
-                    if sender.is_closed() {
-                        return Ok(());
+                Some(FlvVideo::Picture { data, key }) => {
+                    // SPS/PPS again before each keyframe, for a decoder that
+                    // (re)starts there.
+                    let mut ok = true;
+                    if key && let Some(c) = &config {
+                        ok = sender.send(config_frame(c)).await;
                     }
+                    let mut f = Frame::new(FrameKind::Video, now_us(), data);
+                    if key {
+                        f = f.keyframe();
+                    }
+                    ok && sender.send(f).await
                 }
+            };
+            if !ok || sender.is_closed() {
+                return Ok(());
             }
         }
     }

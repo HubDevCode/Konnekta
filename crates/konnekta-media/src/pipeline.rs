@@ -38,12 +38,14 @@ impl ProcessPipeline {
     }
 }
 
-/// Hardware H.264 encoder usable by ffmpeg, checked once: NVENC when an
-/// NVIDIA GPU is present. `KONNEKTA_ENCODER=x264` forces the software one.
+/// Hardware H.264 encoder, checked once: NVENC only with
+/// `KONNEKTA_ENCODER=nvenc` and an NVIDIA GPU present.
 fn nvenc() -> bool {
     static NVENC: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *NVENC.get_or_init(|| {
-        if std::env::var("KONNEKTA_ENCODER").is_ok_and(|e| e == "x264") {
+        // x264 ultrafast/zerolatency (what Flux uses) by default: it answers
+        // fastest picture by picture. NVENC only on request.
+        if std::env::var("KONNEKTA_ENCODER").map_or(true, |e| e != "nvenc") {
             return false;
         }
         let gpu = cfg!(windows) || std::path::Path::new("/dev/nvidia0").exists();
@@ -130,11 +132,12 @@ pub fn screen_capture_command(q: Quality) -> Result<(String, Vec<String>)> {
         }
         if std::env::var_os("WAYLAND_DISPLAY").is_some() {
             if which("wf-recorder") {
-                let mut a: Vec<String> =
-                    ["-y", "-m", "flv", "-c", codec, "-x", "yuv420p", "-r", &fps]
-                        .into_iter()
-                        .map(String::from)
-                        .collect();
+                // No -r: wf-recorder then captures only when the screen
+                // changes, and skips pictures while the stream catches up.
+                let mut a: Vec<String> = ["-y", "-m", "flv", "-c", codec, "-x", "yuv420p"]
+                    .into_iter()
+                    .map(String::from)
+                    .collect();
                 a.extend(["-F".into(), scale_filter(q.height)]);
                 for (k, v) in codec_opts
                     .iter()

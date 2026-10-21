@@ -80,6 +80,15 @@ impl FrameSender {
         *self.request_keyframe.lock().await = Some(Box::new(f));
     }
 
+    /// Queue a frame, waiting for room instead of dropping it: the
+    /// producer slows down to the network (back-pressure), so every picture
+    /// that goes out decodes cleanly and nothing waits for a keyframe.
+    /// Returns false when the channel is closed.
+    pub async fn send(&self, mut f: Frame) -> bool {
+        f.seq = self.seq.fetch_add(1, Ordering::Relaxed);
+        self.tx.send((Instant::now(), f)).await.is_ok()
+    }
+
     /// Queue a frame. Returns false if it was dropped.
     pub fn push(&self, mut f: Frame) -> bool {
         if f.kind == FrameKind::Video && self.need_keyframe.load(Ordering::Relaxed) {

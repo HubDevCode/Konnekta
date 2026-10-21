@@ -45,9 +45,11 @@ class PhoneMedia(private val ctx: Context) {
         io.shutdown()
     }
 
-    private fun track(list: List<MediaController>) {
+    private fun track(all: List<MediaController>) {
         callbacks.forEach { (c, cb) -> c.unregisterCallback(cb) }
         callbacks.clear()
+        // Our own sessions mirror the computers' players: never send them back.
+        val list = all.filter { it.packageName != ctx.packageName }
         controllers = list
         for (c in list) {
             val cb = object : MediaController.Callback() {
