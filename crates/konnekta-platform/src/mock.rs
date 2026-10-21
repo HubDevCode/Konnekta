@@ -111,6 +111,9 @@ impl ClipboardBackend for MockPlatform {
         *self.png.lock().unwrap() = Some(png.to_vec());
         Ok(())
     }
+    async fn get_png(&self) -> Result<Option<Vec<u8>>> {
+        Ok(self.png.lock().unwrap().clone())
+    }
 }
 
 impl InputBackend for MockPlatform {

@@ -4,7 +4,7 @@ use crate::store::JsonStore;
 use anyhow::{Result, bail};
 use async_trait::async_trait;
 use konnekta_core::proto::{Packet, bodies::DndBody, packet::now_millis, types};
-use konnekta_core::{CoreHandle, DeviceHandle, Permission, Plugin, PluginInfo, PluginOrigin};
+use konnekta_core::{CoreHandle, DeviceHandle, Permission, Plugin, PluginInfo};
 use konnekta_platform::Platform;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -109,7 +109,7 @@ impl DndPlugin {
         for d in core.devices() {
             if d.has_permission(Permission::DoNotDisturb) {
                 let _ = d
-                    .send_if_supported(Packet::new(types::K_DND, b.clone()))
+                    .send_if_supported(Packet::new(types::DND, b.clone()))
                     .await;
             }
         }
@@ -129,10 +129,9 @@ impl Plugin for DndPlugin {
             id: "dnd",
             name: "Do Not Disturb sync",
             description: "Keep Do Not Disturb in sync between phone and computer",
-            origin: PluginOrigin::Konnekta,
             permission: Permission::DoNotDisturb,
-            incoming: &[types::K_DND],
-            outgoing: &[types::K_DND],
+            incoming: &[types::DND],
+            outgoing: &[types::DND],
         }
     }
 
@@ -170,7 +169,7 @@ impl Plugin for DndPlugin {
 
     async fn on_connected(&self, dev: &DeviceHandle) {
         if let Some(b) = self.body(false) {
-            let _ = dev.send_if_supported(Packet::new(types::K_DND, b)).await;
+            let _ = dev.send_if_supported(Packet::new(types::DND, b)).await;
         }
     }
 
@@ -186,7 +185,7 @@ impl Plugin for DndPlugin {
             Decision::Apply => self.set_local(remote.enabled, remote.changed_at).await?,
             Decision::KeepLocal => {
                 if let Some(b) = self.body(true) {
-                    dev.send(Packet::new(types::K_DND, b)).await?;
+                    dev.send(Packet::new(types::DND, b)).await?;
                 }
             }
             Decision::Ignore => {}

@@ -10,7 +10,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use konnekta_core::proto::{Packet, types};
-use konnekta_core::{DeviceHandle, Permission, Plugin, PluginInfo, PluginOrigin};
+use konnekta_core::{DeviceHandle, Permission, Plugin, PluginInfo};
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -65,12 +65,11 @@ impl Plugin for BridgePlugin {
 }
 
 macro_rules! bridge {
-    ($id:literal, $name:literal, $origin:ident, $perm:ident, [$($in:expr),*], [$($out:expr),*]) => {
+    ($id:literal, $name:literal, $perm:ident, [$($in:expr),*], [$($out:expr),*]) => {
         PluginInfo {
             id: $id,
             name: $name,
             description: $name,
-            origin: PluginOrigin::$origin,
             permission: Permission::$perm,
             incoming: &[$($in),*],
             outgoing: &[$($out),*],
@@ -82,65 +81,58 @@ macro_rules! bridge {
 pub fn mobile(pending: Arc<PendingPayloads>, call_control: bool) -> Vec<Arc<dyn Plugin>> {
     use types::*;
     let telephony_in: &'static [&'static str] = if call_control {
-        &[TELEPHONY_REQUEST_MUTE, K_CALL_ACTION]
+        &[CALL_MUTE, CALL_ACTION]
     } else {
-        &[TELEPHONY_REQUEST_MUTE]
+        &[CALL_MUTE]
     };
     let mut infos = vec![
-        bridge!("ping", "Ping", KdeConnect, Ping, [PING], [PING]),
-        bridge!("battery", "Battery", KdeConnect, Battery, [], [BATTERY]),
+        bridge!("ping", "Ping", Ping, [PING], [PING]),
+        bridge!("battery", "Battery", Battery, [], [BATTERY]),
         bridge!(
             "clipboard",
             "Clipboard",
-            KdeConnect,
             Clipboard,
-            [CLIPBOARD, CLIPBOARD_CONNECT],
-            [CLIPBOARD, CLIPBOARD_CONNECT]
+            [CLIPBOARD, CLIPBOARD_INITIAL],
+            [CLIPBOARD, CLIPBOARD_INITIAL]
         ),
         bridge!(
             "share",
             "Share",
-            KdeConnect,
             Files,
-            [SHARE_REQUEST, SHARE_REQUEST_UPDATE],
-            [SHARE_REQUEST, SHARE_REQUEST_UPDATE]
+            [SHARE, SHARE_UPDATE],
+            [SHARE, SHARE_UPDATE]
         ),
         bridge!(
-            "mpris",
+            "media",
             "Media control",
-            KdeConnect,
             MediaControl,
-            [MPRIS, MPRIS_REQUEST],
-            [MPRIS_REQUEST, MPRIS]
+            [MEDIA, MEDIA_REQUEST],
+            [MEDIA_REQUEST, MEDIA]
         ),
         bridge!(
-            "mousepad",
+            "input",
             "Remote input",
-            KdeConnect,
             RemoteInput,
-            [MOUSEPAD_KEYBOARDSTATE, MOUSEPAD_ECHO],
-            [MOUSEPAD_REQUEST]
+            [INPUT_STATE, INPUT_ECHO],
+            [INPUT]
         ),
         bridge!(
             "presenter",
             "Presentation remote",
-            KdeConnect,
             Presenter,
             [],
             [PRESENTER]
         ),
         bridge!(
-            "runcommand",
+            "commands",
             "Custom commands",
-            KdeConnect,
             Commands,
-            [RUNCOMMAND],
-            [RUNCOMMAND_REQUEST]
+            [COMMANDS],
+            [COMMANDS_REQUEST]
         ),
         bridge!(
             "notifications",
             "Notifications",
-            KdeConnect,
             Notifications,
             [
                 NOTIFICATION_REQUEST,
@@ -150,79 +142,74 @@ pub fn mobile(pending: Arc<PendingPayloads>, call_control: bool) -> Vec<Arc<dyn 
             [NOTIFICATION]
         ),
         bridge!(
-            "findmyphone",
+            "sms",
+            "Messages",
+            Messages,
+            [SMS_SEND, SMS_CONVERSATIONS_REQUEST, SMS_THREAD_REQUEST],
+            [SMS_MESSAGES]
+        ),
+        bridge!(
+            "photo",
+            "Camera and scanner",
+            Files,
+            [PHOTO_REQUEST],
+            [PHOTO]
+        ),
+        bridge!("appupdate", "App update", Files, [APP_UPDATE], []),
+        bridge!(
+            "finddevice",
             "Find my phone",
-            KdeConnect,
             FindMyPhone,
-            [FINDMYPHONE_REQUEST],
+            [FIND_DEVICE],
             []
         ),
-        bridge!(
-            "deck",
-            "Mobile Deck",
-            Konnekta,
-            Deck,
-            [K_DECK],
-            [K_DECK_REQUEST]
-        ),
-        bridge!(
-            "dnd",
-            "Do Not Disturb sync",
-            Konnekta,
-            DoNotDisturb,
-            [K_DND],
-            [K_DND]
-        ),
+        bridge!("deck", "Mobile Deck", Deck, [DECK], [DECK_REQUEST]),
+        bridge!("dnd", "Do Not Disturb sync", DoNotDisturb, [DND], [DND]),
         bridge!(
             "screenshot",
             "Screenshots",
-            Konnekta,
             Screenshots,
-            [K_SCREENSHOT],
-            [K_SCREENSHOT]
+            [SCREENSHOT],
+            [SCREENSHOT]
+        ),
+        bridge!(
+            "browse",
+            "Browse PC",
+            BrowseFiles,
+            [BROWSE],
+            [BROWSE_REQUEST]
         ),
         bridge!(
             "microphone",
             "Microphone",
-            Konnekta,
             Microphone,
-            [K_MICROPHONE],
-            [K_MICROPHONE]
+            [MICROPHONE],
+            [MICROPHONE]
         ),
-        bridge!("camera", "Camera", Konnekta, Camera, [K_CAMERA], [K_CAMERA]),
+        bridge!("camera", "Camera", Camera, [CAMERA], [CAMERA]),
         bridge!(
             "phonescreen",
             "Phone screen",
-            Konnekta,
             Desktop,
-            [K_PHONE_SCREEN],
-            [K_PHONE_SCREEN]
+            [PHONE_SCREEN],
+            [PHONE_SCREEN]
         ),
-        bridge!(
-            "desktop",
-            "Remote desktop",
-            Konnekta,
-            Desktop,
-            [K_DESKTOP],
-            [K_DESKTOP]
-        ),
+        bridge!("desktop", "Remote desktop", Desktop, [DESKTOP], [DESKTOP]),
         bridge!(
             "systemaudio",
             "Computer audio",
-            Konnekta,
             SystemAudio,
-            [K_SYSTEM_AUDIO],
-            [K_SYSTEM_AUDIO]
+            [SYSTEM_AUDIO],
+            [SYSTEM_AUDIO]
         ),
     ];
     infos.push(PluginInfo {
-        id: "telephony",
+        id: "calls",
         name: "Calls",
         description: "Calls",
-        origin: PluginOrigin::KdeConnect,
         permission: Permission::Telephony,
         incoming: telephony_in,
-        outgoing: &[TELEPHONY],
+        outgoing: &[CALL],
     });
     infos
         .into_iter()

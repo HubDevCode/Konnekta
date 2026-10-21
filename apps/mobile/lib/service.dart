@@ -167,7 +167,7 @@ class KonnektaService extends ChangeNotifier {
   Future<void> _sendInitialState() async {
     try {
       final b = await native.invokeMapMethod<String, dynamic>('battery');
-      if (b != null) await broadcast('kdeconnect.battery', {'currentCharge': b['level'], 'isCharging': b['charging'], 'thresholdEvent': 0});
+      if (b != null) await broadcast('konnekta.battery', {'currentCharge': b['level'], 'isCharging': b['charging'], 'thresholdEvent': 0});
     } catch (_) {}
   }
 
@@ -175,36 +175,36 @@ class KonnektaService extends ChangeNotifier {
     final type = data['type'] as String;
     final body = Map<String, dynamic>.from(data['body'] as Map? ?? {});
     switch (type) {
-      case 'kdeconnect.ping':
+      case 'konnekta.ping':
         messages.add('Ping: ${body['message'] ?? ''}');
-      case 'kdeconnect.clipboard':
-      case 'kdeconnect.clipboard.connect':
+      case 'konnekta.clipboard':
+      case 'konnekta.clipboard.initial':
         final text = body['content'] as String? ?? '';
         _lastClipboard = text;
         await Clipboard.setData(ClipboardData(text: text));
-      case 'kdeconnect.share.request':
+      case 'konnekta.share':
         await _onShare(dev, body, data['payloadKey'] as String?);
-      case 'kdeconnect.mpris':
+      case 'konnekta.media':
         if (body['playerList'] != null) pcPlayers[dev] = List<String>.from(body['playerList']);
         if (body['title'] != null || body['isPlaying'] != null) pcMedia[dev] = {...?pcMedia[dev], ...body};
         notifyListeners();
-      case 'kdeconnect.mpris.request':
+      case 'konnekta.media.request':
         await _nativeSafe('mediaControl', body);
-      case 'kdeconnect.runcommand':
+      case 'konnekta.commands':
         remoteCommands[dev] = Map<String, dynamic>.from(await _decodeCommandList(body['commandList'] as String? ?? '{}'));
         notifyListeners();
-      case 'kdeconnect.notification.request':
+      case 'konnekta.notification.request':
         if (body['request'] == true) await _nativeSafe('resendNotifications');
         if (body['cancel'] != null) await _nativeSafe('dismissNotification', {'id': body['cancel']});
-      case 'kdeconnect.notification.reply':
+      case 'konnekta.notification.reply':
         await _nativeSafe('replyNotification', body);
-      case 'kdeconnect.notification.action':
+      case 'konnekta.notification.action':
         await _nativeSafe('notificationAction', body);
-      case 'kdeconnect.findmyphone.request':
+      case 'konnekta.finddevice':
         await _nativeSafe('ring');
-      case 'kdeconnect.telephony.request_mute':
+      case 'konnekta.call.mute':
         await _nativeSafe('muteRinger');
-      case 'konnekta.telephony.action':
+      case 'konnekta.call.action':
         await _nativeSafe('callAction', body);
       case 'konnekta.deck':
         if (body['type'] == 'layout') deckLayout[dev] = body;
@@ -363,22 +363,22 @@ class KonnektaService extends ChangeNotifier {
   void _onNativeEvent(Map<String, dynamic> e) {
     switch (e['type']) {
       case 'notification':
-        broadcast('kdeconnect.notification', Map<String, dynamic>.from(e['body'] as Map));
+        broadcast('konnekta.notification', Map<String, dynamic>.from(e['body'] as Map));
       case 'call':
-        broadcast('kdeconnect.telephony', Map<String, dynamic>.from(e['body'] as Map));
+        broadcast('konnekta.call', Map<String, dynamic>.from(e['body'] as Map));
       case 'battery':
-        broadcast('kdeconnect.battery', {'currentCharge': e['level'], 'isCharging': e['charging'], 'thresholdEvent': e['low'] == true ? 1 : 0});
+        broadcast('konnekta.battery', {'currentCharge': e['level'], 'isCharging': e['charging'], 'thresholdEvent': e['low'] == true ? 1 : 0});
       case 'dnd':
         if (dndSync) {
           broadcast('konnekta.dnd', {'enabled': e['enabled'], 'changedAt': DateTime.now().millisecondsSinceEpoch, 'userInitiated': true});
         }
       case 'media':
-        broadcast('kdeconnect.mpris', Map<String, dynamic>.from(e['body'] as Map));
+        broadcast('konnekta.media', Map<String, dynamic>.from(e['body'] as Map));
       case 'clipboard':
         final t = e['text'] as String?;
         if (t != null && t != _lastClipboard) {
           _lastClipboard = t;
-          broadcast('kdeconnect.clipboard', {'content': t});
+          broadcast('konnekta.clipboard', {'content': t});
         }
       case 'screenshot':
         if (screenshotAutoTransfer) _sendScreenshot(e['path'] as String, e['sha256'] as String?);
@@ -441,6 +441,6 @@ class KonnektaService extends ChangeNotifier {
 
   Future<void> sendClipboard(String dev) async {
     final data = await Clipboard.getData(Clipboard.kTextPlain);
-    if (data?.text != null) await send(dev, 'kdeconnect.clipboard', {'content': data!.text});
+    if (data?.text != null) await send(dev, 'konnekta.clipboard', {'content': data!.text});
   }
 }

@@ -41,6 +41,25 @@ impl Default for Limits {
     }
 }
 
+/// Optional interop adapter for another ecosystem (KDE Connect, Flux). Off
+/// by default; ports 0 = ephemeral (tests).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Adapter {
+    pub enabled: bool,
+    pub udp_port: u16,
+    pub tcp_port: u16,
+}
+
+impl Adapter {
+    pub fn off(p: Protocol) -> Self {
+        Self {
+            enabled: false,
+            udp_port: p.udp_port(),
+            tcp_port: *p.tcp_ports().start(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -59,10 +78,10 @@ pub struct Config {
     /// Native protocol ports (0 = ephemeral, used by tests).
     pub udp_port: u16,
     pub tcp_port: u16,
-    /// KDE Connect compatibility mode (off by default).
-    pub kde_compat: bool,
-    pub kde_udp_port: u16,
-    pub kde_tcp_port: u16,
+    /// Lets KDE Connect / GSConnect apps connect (off by default).
+    pub kde_connect: Adapter,
+    /// Lets Flux apps connect (off by default).
+    pub flux: Adapter,
     /// Broadcast / unicast targets for announcements (port added per protocol).
     pub broadcast_targets: Vec<IpAddr>,
     /// Re-announce interval in seconds (0 = only at start / on demand).
@@ -90,15 +109,38 @@ impl Default for Config {
             bind_addr: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             udp_port: Protocol::Konnekta.udp_port(),
             tcp_port: *Protocol::Konnekta.tcp_ports().start(),
-            kde_compat: false,
-            kde_udp_port: Protocol::KdeConnect.udp_port(),
-            kde_tcp_port: *Protocol::KdeConnect.tcp_ports().start(),
+            kde_connect: Adapter::off(Protocol::KdeConnect),
+            flux: Adapter::off(Protocol::Flux),
             broadcast_targets: vec![IpAddr::V4(Ipv4Addr::BROADCAST)],
             announce_interval_secs: 60,
             reconnect_interval_secs: 10,
             disabled_plugins: BTreeSet::new(),
             limits: Limits::default(),
         }
+    }
+}
+
+impl Config {
+    /// Settings of an interop adapter (`None` for the native protocol).
+    pub fn adapter(&self, p: Protocol) -> Option<&Adapter> {
+        match p {
+            Protocol::Konnekta => None,
+            Protocol::KdeConnect => Some(&self.kde_connect),
+            Protocol::Flux => Some(&self.flux),
+        }
+    }
+
+    pub fn adapter_mut(&mut self, p: Protocol) -> Option<&mut Adapter> {
+        match p {
+            Protocol::Konnekta => None,
+            Protocol::KdeConnect => Some(&mut self.kde_connect),
+            Protocol::Flux => Some(&mut self.flux),
+        }
+    }
+
+    /// The native protocol is always on; adapters only when enabled.
+    pub fn speaks(&self, p: Protocol) -> bool {
+        self.adapter(p).is_none_or(|a| a.enabled)
     }
 }
 

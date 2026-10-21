@@ -11,7 +11,7 @@ use anyhow::{Result, bail};
 use async_trait::async_trait;
 use konnekta_core::proto::{Packet, types};
 use konnekta_core::util::{sanitize_filename, unique_path};
-use konnekta_core::{CoreHandle, DeviceHandle, Permission, Plugin, PluginInfo, PluginOrigin};
+use konnekta_core::{CoreHandle, DeviceHandle, Permission, Plugin, PluginInfo};
 use konnekta_platform::{DesktopNotification, Platform};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -94,7 +94,7 @@ impl ScreenshotPlugin {
         let auto = self.config.with(|c| c.auto_transfer);
         let _ = dev
             .send_if_supported(Packet::new(
-                types::K_SCREENSHOT,
+                types::SCREENSHOT,
                 json!({ "config": { "autoTransfer": auto } }),
             ))
             .await;
@@ -112,10 +112,9 @@ impl Plugin for ScreenshotPlugin {
             id: "screenshot",
             name: "Screenshots",
             description: "Receive phone screenshots automatically and paste them right away",
-            origin: PluginOrigin::Konnekta,
             permission: Permission::Screenshots,
-            incoming: &[types::K_SCREENSHOT],
-            outgoing: &[types::K_SCREENSHOT],
+            incoming: &[types::SCREENSHOT],
+            outgoing: &[types::SCREENSHOT],
         }
     }
 

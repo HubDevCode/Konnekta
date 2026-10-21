@@ -1,4 +1,4 @@
-//! Custom commands (KDE Connect `runcommand`, extended).
+//! Custom commands (`konnekta.commands`).
 //!
 //! Commands are created on this computer by the local user: a name, icon,
 //! description, group and a list of [`Action`]s (shell, launch app, open,
@@ -13,7 +13,7 @@ use anyhow::{Result, bail};
 use async_trait::async_trait;
 use konnekta_core::proto::bodies::{RunCommandBody, RunCommandEntry, RunCommandRequestBody};
 use konnekta_core::proto::{Packet, types};
-use konnekta_core::{CoreHandle, DeviceHandle, Permission, Plugin, PluginInfo, PluginOrigin};
+use konnekta_core::{CoreHandle, DeviceHandle, Permission, Plugin, PluginInfo};
 use konnekta_platform::{DesktopNotification, Platform};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -68,15 +68,15 @@ pub struct CommandsConfig {
     pub commands: Vec<CommandEntry>,
 }
 
-pub struct RunCommandPlugin {
+pub struct CommandsPlugin {
     platform: Platform,
-    me: Weak<RunCommandPlugin>,
+    me: Weak<CommandsPlugin>,
     core: OnceLock<CoreHandle>,
     pub config: JsonStore<CommandsConfig>,
     remote: Mutex<HashMap<String, BTreeMap<String, RunCommandEntry>>>,
 }
 
-impl RunCommandPlugin {
+impl CommandsPlugin {
     pub fn new(platform: Platform) -> Arc<Self> {
         Arc::new_cyclic(|me| Self {
             platform,
@@ -138,7 +138,7 @@ impl RunCommandPlugin {
                 })
                 .collect()
         });
-        Packet::new(types::RUNCOMMAND, RunCommandBody::from_map(&map))
+        Packet::new(types::COMMANDS, RunCommandBody::from_map(&map))
     }
 
     async fn push_list(&self) {
@@ -168,21 +168,20 @@ impl RunCommandPlugin {
 }
 
 #[async_trait]
-impl Plugin for RunCommandPlugin {
+impl Plugin for CommandsPlugin {
     fn info(&self) -> PluginInfo {
         PluginInfo {
-            id: "runcommand",
+            id: "commands",
             name: "Custom commands",
             description: "Run commands configured on this computer from the phone",
-            origin: PluginOrigin::KdeConnect,
             permission: Permission::Commands,
-            incoming: &[types::RUNCOMMAND_REQUEST, types::RUNCOMMAND],
-            outgoing: &[types::RUNCOMMAND, types::RUNCOMMAND_REQUEST],
+            incoming: &[types::COMMANDS_REQUEST, types::COMMANDS],
+            outgoing: &[types::COMMANDS, types::COMMANDS_REQUEST],
         }
     }
 
     async fn start(self: Arc<Self>, core: CoreHandle) {
-        self.config.attach(&core, "runcommand", "commands.json");
+        self.config.attach(&core, "commands", "commands.json");
         let _ = self.core.set(core);
     }
 
@@ -196,7 +195,7 @@ impl Plugin for RunCommandPlugin {
 
     async fn handle_packet(&self, dev: &DeviceHandle, p: Packet) -> Result<()> {
         match p.packet_type.as_str() {
-            types::RUNCOMMAND_REQUEST => {
+            types::COMMANDS_REQUEST => {
                 let req: RunCommandRequestBody = p.body_as()?;
                 if req.request_command_list == Some(true) {
                     dev.send(self.list_packet()).await?;
@@ -205,21 +204,21 @@ impl Plugin for RunCommandPlugin {
                     tracing::info!(device = %dev.name(), command = %key, "remote command request");
                     let result = self.run(&key).await;
                     dev.emit(
-                        "runcommand",
+                        "commands",
                         "executed",
                         json!({ "id": key, "ok": result.is_ok(), "error": result.as_ref().err().map(|e| e.to_string()) }),
                     );
                     result?;
                 }
                 if p.get_bool("setup") {
-                    dev.emit("runcommand", "setupRequested", Value::Null);
+                    dev.emit("commands", "setupRequested", Value::Null);
                 }
             }
-            types::RUNCOMMAND => {
+            types::COMMANDS => {
                 let body: RunCommandBody = p.body_as()?;
                 let entries = body.entries();
                 dev.emit(
-                    "runcommand",
+                    "commands",
                     "remoteCommands",
                     serde_json::to_value(&entries)?,
                 );
@@ -289,7 +288,7 @@ impl Plugin for RunCommandPlugin {
             "remoteList" => {
                 let d = crate::need_dev(dev)?;
                 d.send(Packet::new(
-                    types::RUNCOMMAND_REQUEST,
+                    types::COMMANDS_REQUEST,
                     RunCommandRequestBody {
                         key: None,
                         request_command_list: Some(true),
@@ -308,7 +307,7 @@ impl Plugin for RunCommandPlugin {
                     .to_owned();
                 crate::need_dev(dev)?
                     .send(Packet::new(
-                        types::RUNCOMMAND_REQUEST,
+                        types::COMMANDS_REQUEST,
                         RunCommandRequestBody {
                             key: Some(key),
                             request_command_list: None,
@@ -330,7 +329,7 @@ mod tests {
     #[tokio::test]
     async fn crud_and_run() {
         let mock = MockPlatform::new();
-        let p = RunCommandPlugin::new(mock.platform());
+        let p = CommandsPlugin::new(mock.platform());
         let r = p
             .handle_action(None, "add", json!({"name": "Lock", "actions": [{"type": "shell", "command": "loginctl lock-session"}]}))
             .await

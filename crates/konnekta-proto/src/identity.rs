@@ -13,7 +13,7 @@ pub enum DeviceType {
     Unknown,
 }
 
-/// Body of `kdeconnect.identity`.
+/// Body of `konnekta.identity` (and of the bridges' identity packets).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct IdentityBody {
     #[serde(rename = "deviceId")]
@@ -30,7 +30,7 @@ pub struct IdentityBody {
     pub outgoing_capabilities: Vec<String>,
     #[serde(rename = "tcpPort", default, skip_serializing_if = "Option::is_none")]
     pub tcp_port: Option<u16>,
-    /// Program name ("Konnekta"); absent for KDE Connect peers.
+    /// Program name ("Konnekta"); other apps may send their own or none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app: Option<String>,
     #[serde(
@@ -69,7 +69,7 @@ impl IdentityBody {
     }
 }
 
-/// KDE Connect v8 device ids: 32..=38 chars of `[A-Za-z0-9_]`.
+/// Device ids: 32..=38 chars of `[A-Za-z0-9_-]` (Konnekta uses 32 hex).
 /// Older peers used UUIDs with dashes; we accept those too but never generate them.
 pub fn is_valid_device_id(id: &str) -> bool {
     (32..=38).contains(&id.len())

@@ -8,12 +8,13 @@
 //! ([`PeerExpectation::Deferred`]) and the core checks it against the
 //! announced identity and the trust store before the link carries anything.
 //!
-//! **KDE Connect compatibility**: the KDE Connect v8 handshake — clear text
+//! **Interop adapters** (KDE Connect, Flux): the "v8" handshake — clear text
 //! identity, then TLS with inverted roles, then identity again inside TLS.
+//! Packet types and bodies are translated here, at the boundary.
 
 use anyhow::{Context, Result, bail};
 use konnekta_crypto::{LocalIdentity, PeerExpectation, client_config, server_config};
-use konnekta_proto::{IdentityBody, Packet, Protocol, kde};
+use konnekta_proto::{IdentityBody, Packet, Protocol, interop};
 use rustls_pki_types::ServerName;
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -69,8 +70,8 @@ pub async fn read_line_limited<R: AsyncBufRead + Unpin>(
     }
 }
 
-/// Parse and validate an identity packet of `proto`. Capabilities of KDE
-/// Connect peers are translated to canonical names.
+/// Parse and validate an identity packet of `proto`. Capabilities of
+/// foreign peers are translated to Konnekta types.
 pub fn identity_from_packet(p: &Packet, proto: Protocol) -> Result<IdentityBody> {
     if p.packet_type != proto.identity_type() {
         bail!("expected {} identity, got {}", proto.label(), p.packet_type);
@@ -78,15 +79,18 @@ pub fn identity_from_packet(p: &Packet, proto: Protocol) -> Result<IdentityBody>
     let mut body: IdentityBody = p.body_as()?;
     body.validate().map_err(anyhow::Error::msg)?;
     match proto {
-        Protocol::KdeConnect => {
+        Protocol::KdeConnect | Protocol::Flux => {
             if body.protocol_version < 8 {
                 bail!(
-                    "KDE Connect protocol {} not supported (need 8)",
+                    "{} protocol {} not supported (need 8)",
+                    proto.label(),
                     body.protocol_version
                 );
             }
-            body.incoming_capabilities = kde::caps_from_kde(&body.incoming_capabilities);
-            body.outgoing_capabilities = kde::caps_from_kde(&body.outgoing_capabilities);
+            body.incoming_capabilities =
+                interop::caps_from_wire(proto, &body.incoming_capabilities);
+            body.outgoing_capabilities =
+                interop::caps_from_wire(proto, &body.outgoing_capabilities);
         }
         Protocol::Konnekta => {
             if body.protocol_version != konnekta_proto::PROTOCOL_VERSION {
@@ -144,10 +148,10 @@ pub async fn accept_native(local: &LocalIdentity, tcp: TcpStream) -> Result<Secu
     Ok(TlsStream::Server(tls))
 }
 
-// --- KDE Connect compatibility ----------------------------------------------------
+// --- Interop adapters (v8 handshake) ------------------------------------------------
 
-/// Read the clear-text identity a KDE Connect peer sends before TLS.
-pub async fn read_plain_identity(stream: &mut TcpStream) -> Result<IdentityBody> {
+/// Read the clear-text identity a KDE Connect or Flux peer sends before TLS.
+pub async fn read_plain_identity(stream: &mut TcpStream, proto: Protocol) -> Result<IdentityBody> {
     // Capacity 1: never read past the identity line into the TLS stream.
     let mut reader = BufReader::with_capacity(1, stream);
     let line = tokio::time::timeout(
@@ -157,11 +161,11 @@ pub async fn read_plain_identity(stream: &mut TcpStream) -> Result<IdentityBody>
     .await
     .context("identity timeout")??
     .context("connection closed before identity")?;
-    identity_from_packet(&Packet::from_line(&line)?, Protocol::KdeConnect)
+    identity_from_packet(&Packet::from_line(&line)?, proto)
 }
 
-/// KDE: TCP client sends its identity, then becomes TLS **server**.
-pub async fn dial_kde(
+/// v8: TCP client sends its identity, then becomes TLS **server**.
+pub async fn dial_v8(
     local: &LocalIdentity,
     my_identity: &Packet,
     addr: SocketAddr,
@@ -176,8 +180,8 @@ pub async fn dial_kde(
     Ok(TlsStream::Server(tls))
 }
 
-/// KDE: identity already read from the TCP client; we become TLS **client**.
-pub async fn accept_kde(
+/// v8: identity already read from the TCP client; we become TLS **client**.
+pub async fn accept_v8(
     local: &LocalIdentity,
     tcp: TcpStream,
     expect: PeerExpectation,
@@ -235,11 +239,14 @@ pub async fn read_packet<R: AsyncBufRead + Unpin>(
         return Ok(Some(None));
     }
     let mut p = Packet::from_line(&line)?;
-    if proto == Protocol::KdeConnect {
-        match kde::from_kde(&p.packet_type) {
-            Some(t) => p.packet_type = t,
+    if proto.is_v8() {
+        match interop::from_wire(proto, &p.packet_type) {
+            Some(t) => {
+                p.packet_type = t.to_owned();
+                interop::body_in(proto, t, &mut p.body, konnekta_proto::packet::now_millis());
+            }
             None => {
-                tracing::debug!(packet = %p.packet_type, "ignoring KDE Connect packet without Konnekta equivalent");
+                tracing::debug!(packet = %p.packet_type, "ignoring {} packet without Konnekta equivalent", proto.label());
                 return Ok(Some(None));
             }
         }
@@ -247,10 +254,12 @@ pub async fn read_packet<R: AsyncBufRead + Unpin>(
     Ok(Some(Some(p)))
 }
 
-/// Map a canonical packet to the wire name of `proto` (None = not sendable).
+/// Map a Konnekta packet to the wire form of `proto` (None = not sendable).
 pub fn to_wire(mut p: Packet, proto: Protocol) -> Option<Packet> {
-    if proto == Protocol::KdeConnect {
-        p.packet_type = kde::to_kde(&p.packet_type)?;
+    if proto.is_v8() {
+        let wire = interop::to_wire(proto, &p.packet_type)?;
+        interop::body_out(proto, &p.packet_type, &mut p.body);
+        p.packet_type = wire;
     }
     Some(p)
 }
@@ -299,7 +308,7 @@ mod tests {
         );
         assert!(
             to_wire(
-                Packet::empty(konnekta_proto::types::K_DECK),
+                Packet::empty(konnekta_proto::types::DECK),
                 Protocol::KdeConnect
             )
             .is_none()

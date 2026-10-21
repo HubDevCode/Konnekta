@@ -21,7 +21,11 @@ struct Node {
 }
 
 async fn node(name: &str) -> Node {
-    let dir = tempfile::tempdir().unwrap();
+    // Not ".tmpXXXX": folders inside dot folders are never browsable.
+    let dir = tempfile::Builder::new()
+        .prefix("konnekta-e2e")
+        .tempdir()
+        .unwrap();
     let mock = MockPlatform::new();
     let cfg = Config {
         device_name: name.into(),
@@ -153,7 +157,7 @@ async fn commands_need_permission_and_run_by_key() {
     let r =
         a.k.plugin_action(
             None,
-            "runcommand",
+            "commands",
             "add",
             json!({ "name": "Lock", "actions": [{ "type": "shell", "command": "lock-now" }] }),
         )
@@ -163,21 +167,21 @@ async fn commands_need_permission_and_run_by_key() {
     // Phone grants itself the right to send, desktop has not granted it yet.
     b.k.set_permission(&aid, Permission::Commands, true)
         .unwrap();
-    b.k.plugin_action(Some(&aid), "runcommand", "runRemote", json!({ "key": key }))
+    b.k.plugin_action(Some(&aid), "commands", "runRemote", json!({ "key": key }))
         .await
         .unwrap();
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert!(!a.mock.calls().iter().any(|c| c == "shell:lock-now"));
     a.k.set_permission(&bid, Permission::Commands, true)
         .unwrap();
-    b.k.plugin_action(Some(&aid), "runcommand", "runRemote", json!({ "key": key }))
+    b.k.plugin_action(Some(&aid), "commands", "runRemote", json!({ "key": key }))
         .await
         .unwrap();
     eventually(|| a.mock.calls().iter().any(|c| c == "shell:lock-now")).await;
     // Unknown keys never execute anything.
     b.k.plugin_action(
         Some(&aid),
-        "runcommand",
+        "commands",
         "runRemote",
         json!({ "key": "rm -rf /" }),
     )
@@ -214,7 +218,7 @@ async fn deck_press_from_phone_runs_macro() {
     // The phone side has no Deck UI in tests: send the raw request packet.
     let h = b.k.device_handle(&aid).unwrap();
     h.send(Packet::new(
-        types::K_DECK_REQUEST,
+        types::DECK_REQUEST,
         json!({ "request": "press", "profile": "work", "page": page["id"], "button": next["id"] }),
     ))
     .await
@@ -239,7 +243,7 @@ async fn screenshots_are_saved_deduplicated_and_copied() {
     let h = b.k.device_handle(&aid).unwrap();
     for _ in 0..2 {
         let p = Packet::new(
-            types::K_SCREENSHOT,
+            types::SCREENSHOT,
             json!({ "filename": "Screenshot_1.png", "sha256": hash }),
         );
         let t = h
@@ -360,6 +364,295 @@ async fn desktop_interoperates_with_mobile_bridge() {
             .unwrap()
             .incoming_capabilities
             .iter()
-            .all(|c| c != types::MOUSEPAD_REQUEST)
+            .all(|c| c != types::INPUT)
     );
+}
+
+/// A desktop node and a phone running the mobile bridge, paired.
+async fn desktop_and_bridge_phone() -> (
+    Node,
+    Konnekta,
+    broadcast::Receiver<Event>,
+    tempfile::TempDir,
+) {
+    use konnekta_plugins::bridge::{PendingPayloads, mobile};
+    let mut desk = node("Desktop").await;
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = Config {
+        device_name: "Phone".into(),
+        device_type: konnekta_core::proto::DeviceType::Phone,
+        bind_addr: LO,
+        tcp_port: 0,
+        udp_port: 0,
+        announce: false,
+        mdns: false,
+        ..Config::default()
+    };
+    let phone = Konnekta::builder(cfg)
+        .data_dir(dir.path())
+        .plugins(mobile(Arc::new(PendingPayloads::default()), true))
+        .build()
+        .unwrap();
+    let mut pev = phone.subscribe();
+    phone.start().await.unwrap();
+    phone
+        .announce_to(SocketAddr::new(LO, desk.k.udp_port()), Protocol::Konnekta)
+        .await
+        .unwrap();
+    wait(&mut pev, |e| matches!(e, Event::DeviceConnected { .. })).await;
+    let (did, pid) = (
+        desk.k.device_id().to_string(),
+        phone.device_id().to_string(),
+    );
+    let key = phone.request_pair(&did).await.unwrap();
+    wait(&mut desk.ev, |e| matches!(e, Event::PairRequested { .. })).await;
+    desk.k.accept_pair(&pid, Some(&key)).await.unwrap();
+    wait(&mut pev, |e| matches!(e, Event::PairConfirm { .. })).await;
+    phone.accept_pair(&did, Some(&key)).await.unwrap();
+    wait(&mut pev, |e| matches!(e, Event::Paired { .. })).await;
+    (desk, phone, pev, dir)
+}
+
+/// Next packet of `plugin_id` delivered to the phone app.
+async fn bridge_packet(pev: &mut broadcast::Receiver<Event>, plugin_id: &str) -> serde_json::Value {
+    let e = wait(pev, |e| matches!(e, Event::Plugin { plugin, kind, .. } if plugin == plugin_id && kind == "packet")).await;
+    let Event::Plugin { data, .. } = e else {
+        unreachable!()
+    };
+    data
+}
+
+#[tokio::test]
+async fn phone_browses_computer_read_only() {
+    let (mut desk, phone, mut pev, _pdir) = desktop_and_bridge_phone().await;
+    let (did, pid) = (
+        desk.k.device_id().to_string(),
+        phone.device_id().to_string(),
+    );
+    phone
+        .set_permission(&did, Permission::BrowseFiles, true)
+        .unwrap();
+    let dl = desk.k.config().download_dir.clone();
+    std::fs::create_dir_all(dl.join("Viaggi")).unwrap();
+    std::fs::write(dl.join("Viaggi/biglietto.pdf"), b"%PDF-1.7 ticket").unwrap();
+    std::fs::write(dl.join(".segreto"), b"no").unwrap();
+    let send = |body: serde_json::Value| {
+        let h = phone.device_handle(&did).unwrap();
+        async move {
+            h.send(Packet::new(types::BROWSE_REQUEST, body))
+                .await
+                .unwrap()
+        }
+    };
+
+    // High-risk permission: nothing is served until the computer grants it.
+    send(json!({ "action": "roots" })).await;
+    assert!(
+        tokio::time::timeout(
+            Duration::from_millis(500),
+            bridge_packet(&mut pev, "browse")
+        )
+        .await
+        .is_err(),
+        "served without permission"
+    );
+    desk.k
+        .set_permission(&pid, Permission::BrowseFiles, true)
+        .unwrap();
+
+    // Off by default.
+    send(json!({ "action": "roots" })).await;
+    let r = bridge_packet(&mut pev, "browse").await;
+    assert_eq!(r["body"]["action"], "error");
+
+    desk.k
+        .plugin_action(None, "browse", "setConfig", json!({ "shareHome": true }))
+        .await
+        .unwrap();
+    send(json!({ "action": "roots" })).await;
+    let r = bridge_packet(&mut pev, "browse").await;
+    assert!(
+        r["body"]["roots"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|x| x["id"] == "downloads")
+    );
+    wait(&mut desk.ev, |e| matches!(e, Event::Plugin { plugin, kind, .. } if plugin == "browse" && kind == "started")).await;
+
+    send(json!({ "action": "list", "root": "downloads", "path": "Viaggi" })).await;
+    let r = bridge_packet(&mut pev, "browse").await;
+    let names: Vec<&str> = r["body"]["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["biglietto.pdf"]);
+
+    send(json!({ "action": "get", "root": "downloads", "path": ".segreto" })).await;
+    assert_eq!(
+        bridge_packet(&mut pev, "browse").await["body"]["action"],
+        "error"
+    );
+    send(json!({ "action": "list", "root": "downloads", "path": "../data" })).await;
+    assert_eq!(
+        bridge_packet(&mut pev, "browse").await["body"]["action"],
+        "error"
+    );
+
+    send(json!({ "action": "get", "root": "downloads", "path": "Viaggi/biglietto.pdf" })).await;
+    let r = bridge_packet(&mut pev, "browse").await;
+    assert_eq!(r["body"]["action"], "file");
+    assert_eq!(r["payloadSize"], 15);
+
+    // Stopping from the computer ends the session.
+    desk.k
+        .plugin_action(None, "browse", "stop", json!({}))
+        .await
+        .unwrap();
+    let s = desk
+        .k
+        .plugin_action(None, "browse", "sessions", json!({}))
+        .await
+        .unwrap();
+    assert!(s.as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn sms_conversations_and_send() {
+    let (mut desk, phone, mut pev, _pdir) = desktop_and_bridge_phone().await;
+    let (did, pid) = (
+        desk.k.device_id().to_string(),
+        phone.device_id().to_string(),
+    );
+    phone
+        .set_permission(&did, Permission::Messages, true)
+        .unwrap();
+    desk.k
+        .set_permission(&pid, Permission::Messages, true)
+        .unwrap();
+
+    let cached = desk
+        .k
+        .plugin_action(Some(&pid), "sms", "conversations", json!({}))
+        .await
+        .unwrap();
+    assert_eq!(cached, json!([]));
+    assert_eq!(
+        bridge_packet(&mut pev, "sms").await["type"],
+        types::SMS_CONVERSATIONS_REQUEST
+    );
+    phone
+        .device_handle(&did)
+        .unwrap()
+        .send(Packet::new(
+            types::SMS_MESSAGES,
+            json!({ "version": 2, "messages": [{
+                "_id": 41, "thread_id": 9, "date": 1_760_000_000_000i64, "type": 1, "read": 0, "event": 1,
+                "body": "Arrivo alle 8", "addresses": [{ "address": "+393330000000" }]
+            }] }),
+        ))
+        .await
+        .unwrap();
+    wait(
+        &mut desk.ev,
+        |e| matches!(e, Event::Plugin { plugin, kind, .. } if plugin == "sms" && kind == "updated"),
+    )
+    .await;
+    let list = desk
+        .k
+        .plugin_action(Some(&pid), "sms", "conversations", json!({}))
+        .await
+        .unwrap();
+    assert_eq!(list[0]["threadId"], 9);
+    assert_eq!(list[0]["last"]["body"], "Arrivo alle 8");
+    assert_eq!(list[0]["unread"], true);
+
+    desk.k
+        .plugin_action(
+            Some(&pid),
+            "sms",
+            "send",
+            json!({ "threadId": 9, "text": "Perfetto" }),
+        )
+        .await
+        .unwrap();
+    let r = loop {
+        let r = bridge_packet(&mut pev, "sms").await;
+        if r["type"] == types::SMS_SEND {
+            break r;
+        }
+    };
+    assert_eq!(r["body"]["messageBody"], "Perfetto");
+    assert_eq!(r["body"]["addresses"][0]["address"], "+393330000000");
+}
+
+#[tokio::test]
+async fn phone_camera_scan_and_photo_only_when_asked() {
+    use konnekta_core::payload::PayloadSource;
+    let (mut desk, phone, mut pev, _pdir) = desktop_and_bridge_phone().await;
+    let (did, pid) = (
+        desk.k.device_id().to_string(),
+        phone.device_id().to_string(),
+    );
+    let h = phone.device_handle(&did).unwrap();
+    let jpeg = b"\xFF\xD8\xFF\xE0 fake jpeg".to_vec();
+    let photo = |name: &str| Packet::new(types::PHOTO, json!({ "filename": name }));
+
+    // Unsolicited photo: refused, nothing written.
+    h.send_with_payload(photo("spam.jpg"), PayloadSource::Bytes(jpeg.clone()), None)
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let dl = desk.k.config().download_dir.clone();
+    assert!(!dl.join("spam.jpg").exists());
+
+    // Document scan: the recognised text lands on the clipboard.
+    desk.k
+        .plugin_action(Some(&pid), "photo", "take", json!({ "mode": "scan" }))
+        .await
+        .unwrap();
+    let r = bridge_packet(&mut pev, "photo").await;
+    assert_eq!(r["body"]["mode"], "scan");
+    h.send(Packet::new(
+        types::PHOTO,
+        json!({ "text": "Fattura n. 12" }),
+    ))
+    .await
+    .unwrap();
+    wait(
+        &mut desk.ev,
+        |e| matches!(e, Event::Plugin { plugin, kind, .. } if plugin == "photo" && kind == "text"),
+    )
+    .await;
+    assert_eq!(
+        desk.mock.clipboard.lock().unwrap().as_deref(),
+        Some("Fattura n. 12")
+    );
+    // One answer per request.
+    h.send(Packet::new(types::PHOTO, json!({ "text": "again" })))
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        desk.mock.clipboard.lock().unwrap().as_deref(),
+        Some("Fattura n. 12")
+    );
+
+    // Photo: saved in the download folder.
+    desk.k
+        .plugin_action(Some(&pid), "photo", "take", json!({}))
+        .await
+        .unwrap();
+    bridge_packet(&mut pev, "photo").await;
+    h.send_with_payload(
+        photo("../IMG_1.jpg"),
+        PayloadSource::Bytes(jpeg.clone()),
+        None,
+    )
+    .await
+    .unwrap();
+    wait(&mut desk.ev, |e| matches!(e, Event::Plugin { plugin, kind, .. } if plugin == "photo" && kind == "received")).await;
+    assert_eq!(std::fs::read(dl.join("IMG_1.jpg")).unwrap(), jpeg);
 }

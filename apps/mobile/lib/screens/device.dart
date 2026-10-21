@@ -60,18 +60,18 @@ class _DeviceScreenState extends State<DeviceScreen> {
         padding: const EdgeInsets.all(12),
         crossAxisCount: 3,
         children: [
-          tile(Icons.touch_app, 'Touchpad e tastiera', cap('kdeconnect.mousepad.request') ? () => _open(TouchpadScreen(deviceId: id)) : null),
+          tile(Icons.touch_app, 'Touchpad e tastiera', cap('konnekta.input') ? () => _open(TouchpadScreen(deviceId: id)) : null),
           tile(Icons.dashboard_customize, 'Mobile Deck', cap('konnekta.deck.request') ? () => _open(DeckScreen(deviceId: id)) : null),
-          tile(Icons.slideshow, 'Presentazione', cap('kdeconnect.presenter') ? () => _open(PresenterScreen(deviceId: id)) : null),
-          tile(Icons.music_note, 'Media', cap('kdeconnect.mpris.request') ? () => _open(MediaScreen(deviceId: id)) : null),
-          tile(Icons.terminal, 'Comandi', cap('kdeconnect.runcommand.request') ? () => _open(CommandsScreen(deviceId: id)) : null),
+          tile(Icons.slideshow, 'Presentazione', cap('konnekta.presenter') ? () => _open(PresenterScreen(deviceId: id)) : null),
+          tile(Icons.music_note, 'Media', cap('konnekta.media.request') ? () => _open(MediaScreen(deviceId: id)) : null),
+          tile(Icons.terminal, 'Comandi', cap('konnekta.commands.request') ? () => _open(CommandsScreen(deviceId: id)) : null),
           tile(Icons.upload_file, 'Invia file', () async {
             final r = await FilePicker.platform.pickFiles(allowMultiple: true);
             final paths = r?.files.map((f) => f.path).whereType<String>().toList() ?? [];
             if (paths.isNotEmpty) await service.sendFiles(id, paths);
           }),
           tile(Icons.content_paste_go, 'Invia appunti', () => service.sendClipboard(id)),
-          tile(Icons.notifications_active, 'Ping', () => service.send(id, 'kdeconnect.ping', {'message': 'Ping dal telefono'})),
+          tile(Icons.notifications_active, 'Ping', () => service.send(id, 'konnekta.ping', {'message': 'Ping dal telefono'})),
           tile(Icons.desktop_windows, 'Desktop remoto', cap('konnekta.desktop') ? () => _open(DesktopScreen(deviceId: id)) : null,
               active: service.streaming('desktop', id)),
           tile(service.streaming('systemaudio', id) ? Icons.volume_up : Icons.speaker, 'Audio del PC',
@@ -171,7 +171,7 @@ class _CommandsScreenState extends State<CommandsScreen> {
   void initState() {
     super.initState();
     service.addListener(_changed);
-    service.send(widget.deviceId, 'kdeconnect.runcommand.request', {'requestCommandList': true});
+    service.send(widget.deviceId, 'konnekta.commands.request', {'requestCommandList': true});
   }
 
   @override
@@ -195,7 +195,7 @@ class _CommandsScreenState extends State<CommandsScreen> {
                   leading: const Icon(Icons.play_circle),
                   title: Text((e.value as Map)['name'] as String? ?? e.key),
                   subtitle: Text((e.value as Map)['command'] as String? ?? ''),
-                  onTap: () => service.send(widget.deviceId, 'kdeconnect.runcommand.request', {'key': e.key}),
+                  onTap: () => service.send(widget.deviceId, 'konnekta.commands.request', {'key': e.key}),
                 ),
             ]),
     );

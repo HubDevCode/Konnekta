@@ -18,7 +18,7 @@ use crate::store::JsonStore;
 use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use konnekta_core::proto::{Packet, types};
-use konnekta_core::{CoreHandle, DeviceHandle, Permission, Plugin, PluginInfo, PluginOrigin};
+use konnekta_core::{CoreHandle, DeviceHandle, Permission, Plugin, PluginInfo};
 use konnekta_platform::Platform;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -499,7 +499,7 @@ impl DeckPlugin {
         for d in core.devices() {
             if d.has_permission(Permission::Deck) {
                 let _ = d
-                    .send_if_supported(Packet::new(types::K_DECK, layout.clone()))
+                    .send_if_supported(Packet::new(types::DECK, layout.clone()))
                     .await;
             }
         }
@@ -610,10 +610,9 @@ impl Plugin for DeckPlugin {
             id: "deck",
             name: "Mobile Deck",
             description: "Customisable grid of buttons, macros and profiles on the phone",
-            origin: PluginOrigin::Konnekta,
             permission: Permission::Deck,
-            incoming: &[types::K_DECK_REQUEST],
-            outgoing: &[types::K_DECK],
+            incoming: &[types::DECK_REQUEST],
+            outgoing: &[types::DECK],
         }
     }
 
@@ -627,7 +626,7 @@ impl Plugin for DeckPlugin {
                 let devs: Vec<_> = core
                     .devices()
                     .into_iter()
-                    .filter(|d| d.has_permission(Permission::Deck) && d.supports(types::K_DECK))
+                    .filter(|d| d.has_permission(Permission::Deck) && d.supports(types::DECK))
                     .collect();
                 if devs.is_empty() {
                     continue;
@@ -636,7 +635,7 @@ impl Plugin for DeckPlugin {
                 if changed.is_empty() {
                     continue;
                 }
-                let p = Packet::new(types::K_DECK, json!({ "type": "state", "states": changed }));
+                let p = Packet::new(types::DECK, json!({ "type": "state", "states": changed }));
                 for d in devs {
                     let _ = d.send(p.clone()).await;
                 }
@@ -647,13 +646,13 @@ impl Plugin for DeckPlugin {
     async fn on_connected(&self, dev: &DeviceHandle) {
         let layout = self.config.with(DeckConfig::public_layout);
         let _ = dev
-            .send_if_supported(Packet::new(types::K_DECK, layout))
+            .send_if_supported(Packet::new(types::DECK, layout))
             .await;
         let states = self.states.lock().unwrap().clone();
         if !states.is_empty() {
             let _ = dev
                 .send_if_supported(Packet::new(
-                    types::K_DECK,
+                    types::DECK,
                     json!({ "type": "state", "states": states }),
                 ))
                 .await;
@@ -664,10 +663,10 @@ impl Plugin for DeckPlugin {
         match p.get_str("request").unwrap_or_default() {
             "layout" => {
                 let layout = self.config.with(DeckConfig::public_layout);
-                dev.send(Packet::new(types::K_DECK, layout)).await?;
+                dev.send(Packet::new(types::DECK, layout)).await?;
                 let states = self.states.lock().unwrap().clone();
                 dev.send(Packet::new(
-                    types::K_DECK,
+                    types::DECK,
                     json!({ "type": "state", "states": states }),
                 ))
                 .await?;
@@ -684,7 +683,7 @@ impl Plugin for DeckPlugin {
                 let changed = self.refresh_states().await;
                 if !changed.is_empty() {
                     dev.send(Packet::new(
-                        types::K_DECK,
+                        types::DECK,
                         json!({ "type": "state", "states": changed }),
                     ))
                     .await?;
@@ -808,12 +807,12 @@ impl Plugin for DeckPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runcommand::RunCommandPlugin;
+    use crate::commands::CommandsPlugin;
     use konnekta_platform::mock::MockPlatform;
 
     fn plugin(mock: &Arc<MockPlatform>) -> DeckPlugin {
         let platform = mock.platform();
-        let exec = Executor::new(platform.clone(), RunCommandPlugin::new(platform.clone()));
+        let exec = Executor::new(platform.clone(), CommandsPlugin::new(platform.clone()));
         DeckPlugin::new(platform, exec)
     }
 

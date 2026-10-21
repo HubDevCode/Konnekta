@@ -1,60 +1,74 @@
-//! Canonical packet types. Plugins use only these names; KDE Connect links
-//! translate them (see [`crate::kde`]).
+//! Packet types of the Konnekta protocol. Plugins use only these names; the
+//! optional interop adapters (see [`crate::interop`]) translate them for
+//! KDE Connect and Flux peers.
 
-// --- Core -----------------------------------------------------------------------
+// --- Link ----------------------------------------------------------------------
 pub const IDENTITY: &str = "konnekta.identity";
 pub const PAIR: &str = "konnekta.pair";
 
-// --- Features shared with KDE Connect (translated in compatibility mode) --------
+// --- Basics --------------------------------------------------------------------
 pub const PING: &str = "konnekta.ping";
 pub const BATTERY: &str = "konnekta.battery";
+/// Ring the device to find it.
+pub const FIND_DEVICE: &str = "konnekta.finddevice";
+
+// --- Clipboard -----------------------------------------------------------------
 pub const CLIPBOARD: &str = "konnekta.clipboard";
-pub const CLIPBOARD_CONNECT: &str = "konnekta.clipboard.connect";
-pub const SHARE_REQUEST: &str = "konnekta.share.request";
-pub const SHARE_REQUEST_UPDATE: &str = "konnekta.share.request.update";
-pub const MPRIS: &str = "konnekta.mpris";
-pub const MPRIS_REQUEST: &str = "konnekta.mpris.request";
-pub const MOUSEPAD_REQUEST: &str = "konnekta.mousepad.request";
-pub const MOUSEPAD_ECHO: &str = "konnekta.mousepad.echo";
-pub const MOUSEPAD_KEYBOARDSTATE: &str = "konnekta.mousepad.keyboardstate";
+/// Current clipboard sent right after connecting (with its timestamp).
+pub const CLIPBOARD_INITIAL: &str = "konnekta.clipboard.initial";
+pub const CLIPBOARD_IMAGE: &str = "konnekta.clipboard.image";
+
+// --- Files ---------------------------------------------------------------------
+pub const SHARE: &str = "konnekta.share";
+pub const SHARE_UPDATE: &str = "konnekta.share.update";
+/// The phone reads selected folders of the computer.
+pub const BROWSE: &str = "konnekta.browse";
+pub const BROWSE_REQUEST: &str = "konnekta.browse.request";
+pub const SCREENSHOT: &str = "konnekta.screenshot";
+/// Ask the phone for a camera photo, with `mode`: photo, scan (OCR, the
+/// answer carries `text`) or qr (the answer carries `text`).
+pub const PHOTO_REQUEST: &str = "konnekta.photo.request";
+pub const PHOTO: &str = "konnekta.photo";
+pub const APP_UPDATE: &str = "konnekta.app.update";
+
+// --- Media and control ---------------------------------------------------------
+pub const MEDIA: &str = "konnekta.media";
+pub const MEDIA_REQUEST: &str = "konnekta.media.request";
+/// Pointer, clicks, scroll and keys.
+pub const INPUT: &str = "konnekta.input";
+pub const INPUT_ECHO: &str = "konnekta.input.echo";
+pub const INPUT_STATE: &str = "konnekta.input.state";
 pub const PRESENTER: &str = "konnekta.presenter";
-pub const RUNCOMMAND: &str = "konnekta.runcommand";
-pub const RUNCOMMAND_REQUEST: &str = "konnekta.runcommand.request";
+/// List of the computer's custom commands.
+pub const COMMANDS: &str = "konnekta.commands";
+pub const COMMANDS_REQUEST: &str = "konnekta.commands.request";
+pub const COMMAND_STATE: &str = "konnekta.command.state";
+pub const DECK: &str = "konnekta.deck";
+pub const DECK_REQUEST: &str = "konnekta.deck.request";
+
+// --- Phone ---------------------------------------------------------------------
 pub const NOTIFICATION: &str = "konnekta.notification";
 pub const NOTIFICATION_REQUEST: &str = "konnekta.notification.request";
 pub const NOTIFICATION_REPLY: &str = "konnekta.notification.reply";
 pub const NOTIFICATION_ACTION: &str = "konnekta.notification.action";
-pub const TELEPHONY: &str = "konnekta.telephony";
-pub const TELEPHONY_REQUEST_MUTE: &str = "konnekta.telephony.request_mute";
-pub const FINDMYPHONE_REQUEST: &str = "konnekta.findmyphone.request";
+pub const CALL: &str = "konnekta.call";
+pub const CALL_MUTE: &str = "konnekta.call.mute";
+/// Answer, reject or hang up, where the phone OS allows it.
+pub const CALL_ACTION: &str = "konnekta.call.action";
 pub const SMS_MESSAGES: &str = "konnekta.sms.messages";
-pub const SMS_REQUEST: &str = "konnekta.sms.request";
-pub const SMS_REQUEST_CONVERSATIONS: &str = "konnekta.sms.request_conversations";
-pub const SMS_REQUEST_CONVERSATION: &str = "konnekta.sms.request_conversation";
+pub const SMS_SEND: &str = "konnekta.sms.send";
+pub const SMS_CONVERSATIONS_REQUEST: &str = "konnekta.sms.conversations.request";
+pub const SMS_THREAD_REQUEST: &str = "konnekta.sms.thread.request";
+pub const DND: &str = "konnekta.dnd";
 
-// --- Konnekta-only features ----------------------------------------------------
-pub const K_DECK: &str = "konnekta.deck";
-pub const K_DECK_REQUEST: &str = "konnekta.deck.request";
-pub const K_DND: &str = "konnekta.dnd";
-pub const K_SCREENSHOT: &str = "konnekta.screenshot";
-pub const K_CALL_ACTION: &str = "konnekta.telephony.action";
-pub const K_COMMAND_STATE: &str = "konnekta.command.state";
-pub const K_CLIPBOARD_IMAGE: &str = "konnekta.clipboard.image";
-pub const K_BROWSE: &str = "konnekta.browse";
-pub const K_BROWSE_REQUEST: &str = "konnekta.browse.request";
-pub const K_APPROVE: &str = "konnekta.approve";
-pub const K_APPROVE_REQUEST: &str = "konnekta.approve.request";
-pub const K_APP_UPDATE: &str = "konnekta.app.update";
+// --- Security ------------------------------------------------------------------
+pub const APPROVE: &str = "konnekta.approve";
+pub const APPROVE_REQUEST: &str = "konnekta.approve.request";
 
 /// Real-time streams: one packet type per stream kind so each is guarded by
 /// its own permission. Body: [`crate::bodies::StreamMessage`].
-pub const K_MICROPHONE: &str = "konnekta.microphone";
-pub const K_CAMERA: &str = "konnekta.camera";
-pub const K_DESKTOP: &str = "konnekta.desktop";
-pub const K_SYSTEM_AUDIO: &str = "konnekta.systemaudio";
-pub const K_PHONE_SCREEN: &str = "konnekta.phonescreen";
-
-/// True for types that only exist in the native protocol.
-pub fn is_native_only(packet_type: &str) -> bool {
-    crate::kde::to_kde(packet_type).is_none()
-}
+pub const MICROPHONE: &str = "konnekta.microphone";
+pub const CAMERA: &str = "konnekta.camera";
+pub const DESKTOP: &str = "konnekta.desktop";
+pub const SYSTEM_AUDIO: &str = "konnekta.systemaudio";
+pub const PHONE_SCREEN: &str = "konnekta.phonescreen";

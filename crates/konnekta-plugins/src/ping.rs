@@ -1,7 +1,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use konnekta_core::proto::{Packet, bodies::PingBody, types};
-use konnekta_core::{DeviceHandle, Permission, Plugin, PluginInfo, PluginOrigin};
+use konnekta_core::{DeviceHandle, Permission, Plugin, PluginInfo};
 use konnekta_platform::{DesktopNotification, Platform};
 use serde_json::{Value, json};
 
@@ -22,7 +22,6 @@ impl Plugin for PingPlugin {
             id: "ping",
             name: "Ping",
             description: "Send and receive pings",
-            origin: PluginOrigin::KdeConnect,
             permission: Permission::Ping,
             incoming: &[types::PING],
             outgoing: &[types::PING],

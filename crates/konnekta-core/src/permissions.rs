@@ -30,6 +30,12 @@ pub enum Permission {
     DoNotDisturb,
     Screenshots,
     FindMyPhone,
+    /// Read-only browsing of the computer's folders from the phone.
+    BrowseFiles,
+    /// Text messages (SMS) of the phone.
+    Messages,
+    /// Approve `sudo` / polkit requests with the phone's fingerprint.
+    Approve,
 }
 
 impl Permission {
@@ -52,6 +58,9 @@ impl Permission {
         Self::DoNotDisturb,
         Self::Screenshots,
         Self::FindMyPhone,
+        Self::BrowseFiles,
+        Self::Messages,
+        Self::Approve,
     ];
 
     /// High-risk permissions require an explicit user grant.
@@ -65,6 +74,9 @@ impl Permission {
                 | Self::Camera
                 | Self::Desktop
                 | Self::SystemAudio
+                | Self::BrowseFiles
+                | Self::Messages
+                | Self::Approve
         )
     }
 
@@ -96,6 +108,9 @@ impl Permission {
             Self::DoNotDisturb => "Do Not Disturb sync",
             Self::Screenshots => "Screenshots",
             Self::FindMyPhone => "Find my device",
+            Self::BrowseFiles => "Browse computer files",
+            Self::Messages => "Text messages",
+            Self::Approve => "Fingerprint approval (sudo)",
         }
     }
 }

@@ -9,8 +9,8 @@ import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 
 /**
- * Mirrors notifications to paired computers (KDE Connect notification
- * protocol) and executes dismiss / reply / action requests coming back.
+ * Mirrors notifications to paired computers (`konnekta.notification`
+ * packets) and executes dismiss / reply / action requests coming back.
  */
 class KonnektaNotificationListener : NotificationListenerService() {
     companion object {

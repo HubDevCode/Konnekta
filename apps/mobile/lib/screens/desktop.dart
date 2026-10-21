@@ -34,7 +34,7 @@ class _DesktopScreenState extends State<DesktopScreen> {
   void _changed() => mounted ? setState(() {}) : null;
 
   void _pointer(Offset local, Size box, Map<String, dynamic> extra) {
-    service.send(widget.deviceId, 'kdeconnect.mousepad.request', {
+    service.send(widget.deviceId, 'konnekta.input', {
       'konnektaAbsX': (local.dx / box.width).clamp(0.0, 1.0),
       'konnektaAbsY': (local.dy / box.height).clamp(0.0, 1.0),
       ...extra,
@@ -66,7 +66,7 @@ class _DesktopScreenState extends State<DesktopScreen> {
                     onLongPressStart: (d) => _pointer(d.localPosition, box, {'rightclick': true}),
                     onPanStart: (d) => _pointer(d.localPosition, box, {'singlehold': true}),
                     onPanUpdate: (d) => _pointer(d.localPosition, box, {}),
-                    onPanEnd: (_) => service.send(widget.deviceId, 'kdeconnect.mousepad.request', {'singlerelease': true}),
+                    onPanEnd: (_) => service.send(widget.deviceId, 'konnekta.input', {'singlerelease': true}),
                     child: Texture(textureId: tex),
                   );
                 }),

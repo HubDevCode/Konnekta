@@ -1,4 +1,4 @@
-//! File / text / URL sharing (KDE Connect `share`) with a transfer manager.
+//! File / text / URL sharing (`konnekta.share`) with a transfer manager.
 //!
 //! Files travel over a dedicated pinned-TLS socket. Between Konnekta peers
 //! transfers carry a SHA-256 (integrity check) and can resume: the partial
@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use konnekta_core::payload::{PayloadSource, Progress};
 use konnekta_core::proto::{Packet, bodies::ShareBody, packet::now_millis, types};
 use konnekta_core::util::{sanitize_filename, unique_path};
-use konnekta_core::{CoreHandle, DeviceHandle, Permission, Plugin, PluginInfo, PluginOrigin};
+use konnekta_core::{CoreHandle, DeviceHandle, Permission, Plugin, PluginInfo};
 use konnekta_platform::{DesktopNotification, Platform};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -79,12 +79,68 @@ impl Default for ShareConfig {
     }
 }
 
+/// Something to deliver when the device is reachable again.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum OutboxContent {
+    Files { paths: Vec<PathBuf> },
+    Folder { path: PathBuf },
+    Text { text: String },
+    Url { url: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OutboxItem {
+    pub id: String,
+    pub device_id: String,
+    pub content: OutboxContent,
+    pub queued_at: i64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Outbox {
+    pub items: Vec<OutboxItem>,
+}
+
 pub struct SharePlugin {
     platform: Platform,
     me: std::sync::Weak<SharePlugin>,
     core: OnceLock<CoreHandle>,
     pub config: JsonStore<ShareConfig>,
+    pub outbox: JsonStore<Outbox>,
     transfers: Arc<Mutex<Vec<Transfer>>>,
+}
+
+/// Only `http(s)://host...` links are shared as links.
+pub fn is_web_url(s: &str) -> bool {
+    let rest = s
+        .strip_prefix("https://")
+        .or_else(|| s.strip_prefix("http://"));
+    rest.is_some_and(|r| {
+        let host = r.split(['/', '?', '#']).next().unwrap_or("");
+        !host.is_empty() && !host.chars().any(|c| c.is_whitespace() || c.is_control())
+    })
+}
+
+/// Pack a folder into `<out_dir>/<name>.tar.gz` (symlinks are stored as
+/// links, never followed outside the folder).
+pub fn archive_folder(dir: &Path, out_dir: &Path) -> Result<PathBuf> {
+    let name = dir
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| "cartella".into());
+    std::fs::create_dir_all(out_dir)?;
+    let out = unique_path(out_dir, &format!("{name}.tar.gz"));
+    let file = std::fs::File::create(&out)?;
+    let enc = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+    let mut tar = tar::Builder::new(enc);
+    tar.follow_symlinks(false);
+    tar.append_dir_all(&name, dir)?;
+    tar.into_inner()?.finish()?;
+    Ok(out)
 }
 
 pub async fn sha256_file(path: &Path) -> Result<String> {
@@ -117,8 +173,98 @@ impl SharePlugin {
             me: me.clone(),
             core: OnceLock::new(),
             config: JsonStore::default(),
+            outbox: JsonStore::default(),
             transfers: Arc::default(),
         })
+    }
+
+    async fn send_text(&self, dev: &DeviceHandle, text: String) -> Result<()> {
+        dev.send(Packet::new(
+            types::SHARE,
+            ShareBody {
+                text: Some(text.clone()),
+                ..Default::default()
+            },
+        ))
+        .await?;
+        dev.emit(
+            "share",
+            "sent",
+            json!({ "kind": "text", "text": text.chars().take(400).collect::<String>() }),
+        );
+        Ok(())
+    }
+
+    async fn send_url(&self, dev: &DeviceHandle, url: String) -> Result<()> {
+        if !is_web_url(&url) {
+            bail!("only http and https links with a host can be shared as links");
+        }
+        dev.send(Packet::new(
+            types::SHARE,
+            ShareBody {
+                url: Some(url.clone()),
+                ..Default::default()
+            },
+        ))
+        .await?;
+        dev.emit("share", "sent", json!({ "kind": "url", "text": url }));
+        Ok(())
+    }
+
+    fn temp_dir(&self) -> PathBuf {
+        self.core
+            .get()
+            .and_then(|c| c.plugin_data_dir("share"))
+            .unwrap_or_else(std::env::temp_dir)
+            .join("archives")
+    }
+
+    async fn send_folder(self: &Arc<Self>, dev: DeviceHandle, path: PathBuf) -> Result<()> {
+        if !tokio::fs::metadata(&path).await?.is_dir() {
+            bail!("{} is not a folder", path.display());
+        }
+        let out_dir = self.temp_dir();
+        let archive =
+            tokio::task::spawn_blocking(move || archive_folder(&path, &out_dir)).await??;
+        let me = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = me.send_file(&dev, archive.clone(), 1, 0).await {
+                tracing::warn!("folder send failed: {e:#}");
+            }
+            let _ = tokio::fs::remove_file(&archive).await;
+        });
+        Ok(())
+    }
+
+    async fn deliver(self: &Arc<Self>, dev: DeviceHandle, content: OutboxContent) -> Result<()> {
+        match content {
+            OutboxContent::Files { paths } => self.send_files(dev, paths).await,
+            OutboxContent::Folder { path } => self.send_folder(dev, path).await,
+            OutboxContent::Text { text } => self.send_text(&dev, text).await,
+            OutboxContent::Url { url } => self.send_url(&dev, url).await,
+        }
+    }
+
+    async fn flush_outbox(self: Arc<Self>, dev: DeviceHandle) {
+        let items: Vec<OutboxItem> = self.outbox.with(|o| {
+            o.items
+                .iter()
+                .filter(|i| i.device_id == dev.id())
+                .cloned()
+                .collect()
+        });
+        for item in items {
+            match self.deliver(dev.clone(), item.content.clone()).await {
+                Ok(()) => {
+                    self.outbox.update(|o| o.items.retain(|i| i.id != item.id));
+                    dev.emit("share", "outboxSent", json!({ "id": item.id }));
+                }
+                Err(e) => {
+                    tracing::warn!("outbox delivery failed: {e:#}");
+                    break;
+                }
+            }
+        }
     }
 
     fn destination(&self) -> PathBuf {
@@ -369,7 +515,7 @@ impl SharePlugin {
         };
         let task = dev
             .send_with_payload(
-                Packet::new(types::SHARE_REQUEST, body),
+                Packet::new(types::SHARE, body),
                 PayloadSource::File(path),
                 Some(self.progress(&id)),
             )
@@ -410,7 +556,7 @@ impl SharePlugin {
         if n > 1 {
             let _ = dev
                 .send_if_supported(Packet::new(
-                    types::SHARE_REQUEST_UPDATE,
+                    types::SHARE_UPDATE,
                     json!({ "numberOfFiles": n, "totalPayloadSize": total }),
                 ))
                 .await;
@@ -434,16 +580,22 @@ impl Plugin for SharePlugin {
             id: "share",
             name: "Share",
             description: "Send and receive files, text and links",
-            origin: PluginOrigin::KdeConnect,
             permission: Permission::Files,
-            incoming: &[types::SHARE_REQUEST, types::SHARE_REQUEST_UPDATE],
-            outgoing: &[types::SHARE_REQUEST, types::SHARE_REQUEST_UPDATE],
+            incoming: &[types::SHARE, types::SHARE_UPDATE],
+            outgoing: &[types::SHARE, types::SHARE_UPDATE],
         }
     }
 
     async fn start(self: Arc<Self>, core: CoreHandle) {
         self.config.attach(&core, "share", "config.json");
+        self.outbox.attach(&core, "share", "outbox.json");
         let _ = self.core.set(core);
+    }
+
+    async fn on_connected(&self, dev: &DeviceHandle) {
+        if let Some(me) = self.me.upgrade() {
+            tokio::spawn(me.flush_outbox(dev.clone()));
+        }
     }
 
     async fn on_disconnected(&self, id: &str) {
@@ -464,7 +616,7 @@ impl Plugin for SharePlugin {
     }
 
     async fn handle_packet(&self, dev: &DeviceHandle, p: Packet) -> Result<()> {
-        if p.packet_type == types::SHARE_REQUEST_UPDATE {
+        if p.packet_type == types::SHARE_UPDATE {
             dev.emit("share", "incomingBatch", Value::Object(p.body.clone()));
             return Ok(());
         }
@@ -548,15 +700,7 @@ impl Plugin for SharePlugin {
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .to_owned();
-                crate::need_dev(dev)?
-                    .send(Packet::new(
-                        types::SHARE_REQUEST,
-                        ShareBody {
-                            text: Some(text),
-                            ..Default::default()
-                        },
-                    ))
-                    .await?;
+                self.send_text(crate::need_dev(dev)?, text).await?;
                 Ok(Value::Null)
             }
             "sendUrl" => {
@@ -565,15 +709,59 @@ impl Plugin for SharePlugin {
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .to_owned();
-                crate::need_dev(dev)?
-                    .send(Packet::new(
-                        types::SHARE_REQUEST,
-                        ShareBody {
-                            url: Some(url),
-                            ..Default::default()
-                        },
-                    ))
+                self.send_url(crate::need_dev(dev)?, url).await?;
+                Ok(Value::Null)
+            }
+            "sendFolder" => {
+                let path = args
+                    .get("path")
+                    .and_then(Value::as_str)
+                    .context("missing path")?;
+                let shared = self.me.upgrade().context("plugin dropped")?;
+                shared
+                    .send_folder(crate::need_dev(dev)?.clone(), PathBuf::from(path))
                     .await?;
+                Ok(Value::Null)
+            }
+            // Deliver now if the device is connected, otherwise keep it in
+            // the outbox until it comes back.
+            "queue" => {
+                let device_id = args
+                    .get("deviceId")
+                    .and_then(Value::as_str)
+                    .context("missing deviceId")?
+                    .to_owned();
+                let content: OutboxContent =
+                    crate::args(args.get("content").cloned().unwrap_or_default())?;
+                if let OutboxContent::Url { url } = &content
+                    && !is_web_url(url)
+                {
+                    bail!("only http and https links with a host can be shared as links");
+                }
+                let me = self.me.upgrade().context("plugin dropped")?;
+                if let Some(d) = self.core.get().and_then(|c| c.device(&device_id)) {
+                    me.deliver(d, content).await?;
+                    return Ok(json!({ "queued": false }));
+                }
+                let id = uuid::Uuid::new_v4().simple().to_string()[..12].to_string();
+                self.outbox.update(|o| {
+                    o.items.push(OutboxItem {
+                        id: id.clone(),
+                        device_id,
+                        content,
+                        queued_at: now_millis(),
+                    })
+                });
+                Ok(json!({ "queued": true, "id": id }))
+            }
+            "outbox" => Ok(serde_json::to_value(self.outbox.get().items)?),
+            "outboxRemove" => {
+                let id = args
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned();
+                self.outbox.update(|o| o.items.retain(|i| i.id != id));
                 Ok(Value::Null)
             }
             "transfers" => Ok(serde_json::to_value(&*self.transfers.lock().unwrap())?),
@@ -616,6 +804,36 @@ impl Plugin for SharePlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn web_urls() {
+        assert!(is_web_url("https://omarchy.org/flux"));
+        assert!(is_web_url("http://192.168.1.1"));
+        assert!(!is_web_url("file:///etc/passwd"));
+        assert!(!is_web_url("https://"));
+        assert!(!is_web_url("javascript:alert(1)"));
+    }
+
+    #[test]
+    fn folder_archive() {
+        let src = tempfile::tempdir().unwrap();
+        let dir = src.path().join("Progetto");
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("a.txt"), b"ciao").unwrap();
+        std::fs::write(dir.join("sub/b.txt"), b"mondo").unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let archive = archive_folder(&dir, out.path()).unwrap();
+        assert!(archive.ends_with("Progetto.tar.gz"));
+        let mut tar = tar::Archive::new(flate2::read::GzDecoder::new(
+            std::fs::File::open(&archive).unwrap(),
+        ));
+        let names: Vec<String> = tar
+            .entries()
+            .unwrap()
+            .map(|e| e.unwrap().path().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert!(names.iter().any(|n| n == "Progetto/sub/b.txt"));
+    }
 
     #[test]
     fn sha_validation() {

@@ -12,6 +12,8 @@ macro_rules! println {
     }};
 }
 
+mod waybar;
+
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use konnekta_core::{Config, Konnekta};
@@ -42,9 +44,12 @@ enum Cmd {
         /// Do not broadcast our presence (paired devices are still dialed).
         #[arg(long)]
         no_announce: bool,
-        /// Also accept KDE Connect apps (compatibility mode, saved).
+        /// Also let KDE Connect / GSConnect apps connect (saved).
         #[arg(long)]
-        kde_compat: bool,
+        kde_connect: bool,
+        /// Also let Flux apps connect (saved).
+        #[arg(long)]
+        flux: bool,
         #[arg(short, long)]
         verbose: bool,
     },
@@ -104,6 +109,8 @@ enum Cmd {
     },
     /// Stream events as JSON lines.
     Events,
+    /// Status for a Waybar `custom` module (JSON lines, keeps running).
+    Waybar,
 }
 
 fn data_dir(cli: &Cli) -> PathBuf {
@@ -116,7 +123,7 @@ async fn run_daemon(
     dir: PathBuf,
     name: Option<String>,
     no_announce: bool,
-    kde_compat: bool,
+    adapters: &[konnekta_core::proto::Protocol],
 ) -> Result<()> {
     std::fs::create_dir_all(&dir)?;
     let cfg_path = dir.join("config.json");
@@ -127,8 +134,10 @@ async fn run_daemon(
     if no_announce {
         cfg.announce = false;
     }
-    if kde_compat {
-        cfg.kde_compat = true;
+    for p in adapters {
+        if let Some(a) = cfg.adapter_mut(*p) {
+            a.enabled = true;
+        }
     }
     cfg.save(&cfg_path)?;
     let platform = konnekta_platform::Platform::native();
@@ -292,7 +301,8 @@ async fn main() -> Result<()> {
     if let Cmd::Daemon {
         name,
         no_announce,
-        kde_compat,
+        kde_connect,
+        flux,
         verbose,
     } = cli.cmd
     {
@@ -307,11 +317,19 @@ async fn main() -> Result<()> {
                     .unwrap_or_else(|_| filter.into()),
             )
             .init();
-        return run_daemon(dir, name, no_announce, kde_compat).await;
+        use konnekta_core::proto::Protocol;
+        let adapters: Vec<Protocol> = [(kde_connect, Protocol::KdeConnect), (flux, Protocol::Flux)]
+            .into_iter()
+            .filter_map(|(on, p)| on.then_some(p))
+            .collect();
+        return run_daemon(dir, name, no_announce, &adapters).await;
+    }
+    if let Cmd::Waybar = cli.cmd {
+        return waybar::run(dir).await;
     }
     let mut c = ipc::Client::connect(&ipc::endpoint(&dir)).await?;
     match cli.cmd {
-        Cmd::Daemon { .. } => unreachable!(),
+        Cmd::Daemon { .. } | Cmd::Waybar => unreachable!(),
         Cmd::Info => print(&c.call("info", Value::Null).await?),
         Cmd::Devices => print_devices(&c.call("devices", Value::Null).await?),
         Cmd::Connect { address } => {
@@ -507,7 +525,7 @@ async fn main() -> Result<()> {
         }
         Cmd::Ring { device } => {
             let id = resolve(&mut c, &device).await?;
-            action(&mut c, Some(id), "findmyphone", "ring", Value::Null).await?;
+            action(&mut c, Some(id), "finddevice", "ring", Value::Null).await?;
         }
         Cmd::Plugins => {
             for p in c
@@ -518,14 +536,21 @@ async fn main() -> Result<()> {
                 .unwrap_or_default()
             {
                 println!(
-                    "[{}] {:<14} {:<10} {}",
+                    "[{}] {:<14} {:<16} {}",
                     if p["enabled"].as_bool() == Some(true) {
                         "x"
                     } else {
                         " "
                     },
                     p["id"].as_str().unwrap_or_default(),
-                    p["origin"].as_str().unwrap_or_default(),
+                    p["interop"]
+                        .as_array()
+                        .map(|a| a
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .collect::<Vec<_>>()
+                            .join(","))
+                        .unwrap_or_default(),
                     p["description"].as_str().unwrap_or_default()
                 );
             }

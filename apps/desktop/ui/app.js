@@ -78,7 +78,12 @@ const fmtBytes = (n) => {
 const clone = (o) => JSON.parse(JSON.stringify(o));
 
 const fmtKey = (k) => (k || '').replace(/(.{4})(?=.)/g, '$1 ');
-const protoBadge = (p) => p === 'kdeConnect' ? h('span', { class: 'badge' }, 'KDE Connect') : h('span', { class: 'badge k' }, 'Konnekta');
+const PROTO_LABEL = { konnekta: 'Konnekta', kdeConnect: 'via KDE Connect', flux: 'via Flux' };
+const protoBadge = (p) => h('span', { class: `badge ${p === 'konnekta' ? 'k' : ''}` }, PROTO_LABEL[p] || p);
+// Which other apps a plugin also works with (interop adapters).
+const interopNote = (list) => (list && list.length)
+  ? h('span', { class: 'small muted' }, ` · funziona anche con ${list.map((x) => ({ kdeConnect: 'KDE Connect', flux: 'Flux' }[x] || x)).join(' e ')}`)
+  : null;
 
 const typeIcon = (t) => ({ phone: '📱', tablet: '📟', laptop: '💻', desktop: '🖥️', tv: '📺' }[t] || '🔗');
 
@@ -380,23 +385,23 @@ function actionsTab(d) {
       }, 'primary'),
       btn('📋 Invia appunti', () => run(act('clipboard', 'send', null, d.id), 'Appunti inviati')),
       btn('🔔 Ping', () => run(act('ping', 'send', { message: 'Ping da Konnekta' }, d.id))),
-      hasCap(d, 'konnekta.findmyphone.request') ? btn('📳 Fai squillare', () => run(act('findmyphone', 'ring', null, d.id))) : null),
+      hasCap(d, 'konnekta.finddevice') ? btn('📳 Fai squillare', () => run(act('finddevice', 'ring', null, d.id))) : null),
     h('h3', {}, 'Condividi testo'),
     text,
     h('div', { class: 'row', style: 'margin-top:6px' },
       btn('Invia testo', () => run(act('share', 'sendText', { text: text.value }, d.id), 'Inviato')),
       btn('Invia come link', () => run(act('share', 'sendUrl', { url: text.value.trim() }, d.id), 'Inviato'))),
-    hasCap(d, 'konnekta.runcommand') ? remoteCommands(d) : null,
+    hasCap(d, 'konnekta.commands') ? remoteCommands(d) : null,
     transfers.length ? h('div', {}, h('h3', {}, 'Trasferimenti recenti'), transfers.map(transferItem)) : null);
 }
 
 function remoteCommands(d) {
   const box = h('div', {}, h('h3', {}, 'Comandi del dispositivo'));
-  act('runcommand', 'remoteList', null, d.id).then((list) => {
+  act('commands', 'remoteList', null, d.id).then((list) => {
     const entries = Object.entries(list || {});
     box.append(entries.length
       ? h('div', { class: 'row' }, entries.map(([key, c]) =>
-        btn(c.name, () => run(act('runcommand', 'runRemote', { key }, d.id)))))
+        btn(c.name, () => run(act('commands', 'runRemote', { key }, d.id)))))
       : h('p', { class: 'small muted' }, 'Nessun comando esposto da questo dispositivo.'));
   }).catch(() => {});
   return box;
@@ -404,9 +409,9 @@ function remoteCommands(d) {
 
 function mediaTab(d) {
   const m = S.phoneMedia[d.id] || {};
-  const control = (action) => run(act('mpris', 'remoteControl', { action, player: m.player }, d.id));
+  const control = (action) => run(act('media', 'remoteControl', { action, player: m.player }, d.id));
   const vol = h('input', { type: 'range', min: 0, max: 100, value: m.volume ?? 50,
-    onchange: (e) => act('mpris', 'remoteVolume', { volume: +e.target.value, player: m.player }, d.id) });
+    onchange: (e) => act('media', 'remoteVolume', { volume: +e.target.value, player: m.player }, d.id) });
   return h('div', {},
     h('p', { class: 'muted small' }, 'Controlla ciò che è in riproduzione sul telefono. Dal telefono puoi controllare i lettori di questo computer.'),
     h('div', { class: 'card', style: 'background:var(--panel-2)' },
@@ -419,7 +424,7 @@ function mediaTab(d) {
         btn('⏭', () => control('Next')),
         h('span', { class: 'small muted' }, '🔊'), vol)),
     h('div', { class: 'row', style: 'margin-top:8px' },
-      btn('Aggiorna', () => run(act('mpris', 'remoteRefresh', null, d.id)))));
+      btn('Aggiorna', () => run(act('media', 'remoteRefresh', null, d.id)))));
 }
 
 function replyModal(deviceId, n) {
@@ -447,17 +452,17 @@ function notificationsTab(d) {
 
 function callsTab(d) {
   const c = S.calls[d.id];
-  const ctrl = hasCap(d, 'konnekta.telephony.action');
+  const ctrl = hasCap(d, 'konnekta.call.action');
   return h('div', {},
     c ? h('div', { class: 'card', style: 'background:var(--panel-2)' },
       h('div', { style: 'font-size:16px;font-weight:600' },
         c.event === 'ringing' ? '📞 Chiamata in arrivo' : c.event === 'talking' ? '📞 In chiamata' : 'Chiamata persa'),
       h('div', {}, c.caller),
       h('div', { class: 'row', style: 'margin-top:10px' },
-        ctrl && c.event === 'ringing' ? btn('Rispondi', () => run(act('telephony', 'accept', null, d.id)), 'primary') : null,
-        ctrl && c.event === 'ringing' ? btn('Rifiuta', () => run(act('telephony', 'reject', null, d.id)), 'danger') : null,
-        ctrl && c.event === 'talking' ? btn('Riaggancia', () => run(act('telephony', 'hangup', null, d.id)), 'danger') : null,
-        btn('Silenzia suoneria', () => run(act('telephony', 'mute', null, d.id)))))
+        ctrl && c.event === 'ringing' ? btn('Rispondi', () => run(act('calls', 'accept', null, d.id)), 'primary') : null,
+        ctrl && c.event === 'ringing' ? btn('Rifiuta', () => run(act('calls', 'reject', null, d.id)), 'danger') : null,
+        ctrl && c.event === 'talking' ? btn('Riaggancia', () => run(act('calls', 'hangup', null, d.id)), 'danger') : null,
+        btn('Silenzia suoneria', () => run(act('calls', 'mute', null, d.id)))))
       : h('p', { class: 'muted' }, 'Nessuna chiamata in corso.'),
     !ctrl ? h('p', { class: 'small muted' }, 'Questo telefono permette solo di silenziare la suoneria (iOS non consente ad altre app di rispondere o rifiutare le chiamate).') : null);
 }
@@ -509,7 +514,7 @@ async function devicePluginsTab(d) {
   return h('div', {},
     h('p', { class: 'small muted' }, 'Disattiva singole funzioni solo per questo dispositivo.'),
     plugins.map((p) => h('div', { class: 'perm' },
-      h('div', {}, p.name, ' ', h('span', { class: `badge ${p.origin === 'konnekta' ? 'k' : ''}` }, p.origin === 'konnekta' ? 'Konnekta' : 'KDE Connect')),
+      h('div', {}, p.name, interopNote(p.interop)),
       sw(!d.disabledPlugins.includes(p.id), (v) => run(api('setDevicePlugin', { deviceId: d.id, plugin: p.id, enabled: v }))))));
 }
 
@@ -638,26 +643,26 @@ function commandModal(cmd) {
     actionsEditor(c.actions),
     h('p', { class: 'small muted' }, 'I dispositivi associati ricevono solo nome e descrizione e possono avviare il comando solo con il permesso "Run commands".')),
   [['Annulla'], ['Salva', async () => {
-    await run(act('runcommand', cmd ? 'update' : 'add', c), 'Comando salvato');
+    await run(act('commands', cmd ? 'update' : 'add', c), 'Comando salvato');
     render();
   }, 'primary']]);
 }
 
 async function renderCommands() {
-  commandsCache = await act('runcommand', 'list').catch(() => []);
+  commandsCache = await act('commands', 'list').catch(() => []);
   const groups = {};
   for (const c of commandsCache) (groups[c.group || 'Altro'] ||= []).push(c);
   return h('div', {},
     h('div', { class: 'row' }, h('h1', { class: 'grow' }, 'Comandi personalizzati'), btn('+ Nuovo comando', () => commandModal(), 'primary')),
-    h('p', { class: 'muted' }, 'Comandi shell, avvio di applicazioni, scorciatoie e macro richiamabili dal telefono (compatibile con "Esegui comando" di KDE Connect) o dal Mobile Deck.'),
+    h('p', { class: 'muted' }, 'Comandi shell, avvio di applicazioni, scorciatoie e macro richiamabili dal telefono o dal Mobile Deck.'),
     commandsCache.length ? Object.entries(groups).map(([g, list]) => h('div', {},
       h('h3', {}, g),
       h('div', { class: 'list' }, list.map((c) => h('div', { class: 'item' },
         h('div', { style: 'font-size:20px;width:28px;text-align:center' }, c.icon || '⌘'),
         h('div', { class: 'grow' }, h('b', {}, c.name), h('div', { class: 'small muted' }, c.description || `${c.actions.length} azioni`)),
-        btn('▶ Esegui', () => run(act('runcommand', 'run', { id: c.id }), 'Eseguito'), 'small'),
+        btn('▶ Esegui', () => run(act('commands', 'run', { id: c.id }), 'Eseguito'), 'small'),
         btn('Modifica', () => commandModal(c), 'small'),
-        btn('Elimina', () => run(act('runcommand', 'delete', { id: c.id })).then(render), 'small danger'))))))
+        btn('Elimina', () => run(act('commands', 'delete', { id: c.id })).then(render), 'small danger'))))))
       : h('div', { class: 'card empty' }, 'Nessun comando. Creane uno per controllare il computer dal telefono.'));
 }
 
@@ -771,14 +776,11 @@ async function renderDeck() {
 
 async function renderPlugins() {
   const plugins = await api('plugins');
-  const section = (origin, title, desc) => h('div', {},
-    h('h2', {}, title), h('p', { class: 'small muted' }, desc),
-    h('div', { class: 'card' }, plugins.filter((p) => p.origin === origin).map((p) => h('div', { class: 'perm' },
-      h('div', {}, h('div', { style: 'font-weight:600' }, p.name), h('div', { class: 'small muted' }, p.description)),
-      sw(p.enabled, (v) => run(api('setPluginEnabled', { plugin: p.id, enabled: v })))))));
   return h('div', {}, h('h1', {}, 'Plugin'),
-    section('kdeConnect', 'Compatibili con KDE Connect', 'Funzionano anche con KDE Connect, GSConnect e altre app compatibili.'),
-    section('konnekta', 'Estensioni Konnekta', 'Funzioni avanzate disponibili tra dispositivi con Konnekta.'));
+    h('p', { class: 'small muted' }, 'Ogni funzione è un plugin indipendente: disattivalo per tutti i dispositivi qui, o per un solo dispositivo nella sua pagina. Con i ponti attivi (Impostazioni) alcuni plugin funzionano anche con le app KDE Connect e Flux.'),
+    h('div', { class: 'card' }, plugins.map((p) => h('div', { class: 'perm' },
+      h('div', {}, h('div', { style: 'font-weight:600' }, p.name), h('div', { class: 'small muted' }, p.description, interopNote(p.interop))),
+      sw(p.enabled, (v) => run(api('setPluginEnabled', { plugin: p.id, enabled: v })))))));
 }
 
 // --- settings ---------------------------------------------------------------------
@@ -787,8 +789,9 @@ async function renderSettings() {
   const cfg = await api('getConfig');
   const get = (p) => act(p, 'getConfig').catch(() => null);
   const [share, clip, shot, filter, dnd, pres, tel] = await Promise.all([
-    get('share'), get('clipboard'), get('screenshot'), act('notifications', 'getFilter').catch(() => null), get('dnd'), get('presenter'), get('telephony')]);
-  const general = { deviceName: cfg.device_name, downloadDir: cfg.download_dir, announce: cfg.announce, mdns: cfg.mdns, kdeCompat: cfg.kde_compat };
+    get('share'), get('clipboard'), get('screenshot'), act('notifications', 'getFilter').catch(() => null), get('dnd'), get('presenter'), get('calls')]);
+  const general = { deviceName: cfg.device_name, downloadDir: cfg.download_dir, announce: cfg.announce, mdns: cfg.mdns,
+    kdeConnect: !!cfg.kde_connect?.enabled, flux: !!cfg.flux?.enabled };
   const txt = (o, k, label) => h('label', { class: 'field' }, label, h('input', { type: 'text', value: o[k] ?? '', oninput: (e) => { o[k] = e.target.value; } }));
   const chk = (o, k, label) => h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: o[k], onchange: (e) => { o[k] = e.target.checked; } }), label);
   const folder = (o, k, label) => {
@@ -808,7 +811,9 @@ async function renderSettings() {
       folder(general, 'downloadDir', 'Cartella predefinita per i file ricevuti'),
       chk(general, 'announce', 'Annuncia questo computer sulla rete locale (disattiva sulle reti pubbliche: i dispositivi associati vengono comunque contattati)'),
       chk(general, 'mdns', 'Trova i dispositivi con mDNS (_konnekta._tcp)'),
-      chk(general, 'kdeCompat', 'Compatibilità KDE Connect: permetti di usare l\'app KDE Connect sul telefono (porta 1716; richiede il riavvio)')),
+      h('h3', {}, 'Ponti verso altre app (facoltativi)'),
+      chk(general, 'kdeConnect', 'Accetta le app KDE Connect e GSConnect (porte 1716; solo le funzioni comuni; richiede il riavvio)'),
+      chk(general, 'flux', 'Accetta le app Flux (porte 12100; solo le funzioni comuni; richiede il riavvio)')),
     () => api('setConfig', general)),
     share && card('File', h('div', { class: 'list' },
       folder(share, 'destination', 'Cartella di destinazione (vuoto = predefinita)'),
@@ -847,7 +852,7 @@ async function renderSettings() {
     tel && card('Chiamate', h('div', { class: 'list' },
       chk(tel, 'pauseMedia', 'Metti in pausa la musica durante le chiamate'),
       chk(tel, 'showNumber', 'Mostra il numero del chiamante')),
-    () => act('telephony', 'setConfig', tel)));
+    () => act('calls', 'setConfig', tel)));
 }
 
 // --- security ---------------------------------------------------------------------
@@ -859,7 +864,7 @@ async function renderSecurity() {
       h('h2', { style: 'margin-top:0' }, 'Questo computer'),
       h('p', {}, 'ID dispositivo: ', h('span', { class: 'mono' }, me.deviceId)),
       h('p', {}, 'Impronta del certificato (SHA-256):'), h('div', { class: 'mono' }, me.fingerprint),
-      h('p', { class: 'small muted' }, `Protocollo KDE Connect v${me.protocolVersion} · Konnekta ${me.version}`)),
+      h('p', { class: 'small muted' }, `Protocollo Konnekta v${me.protocolVersion} · versione ${me.version}`)),
     h('div', { class: 'card', style: 'margin-top:14px' },
       h('h2', { style: 'margin-top:0' }, 'Come sono protetti i tuoi dati'),
       h('ul', {},

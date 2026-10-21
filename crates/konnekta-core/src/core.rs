@@ -13,7 +13,7 @@ use crate::trust::{TrustStore, TrustedDevice};
 use anyhow::{Context, Result, bail};
 use konnekta_crypto::{FileKeyStore, KeyStore, LocalIdentity, PeerExpectation, verification_key};
 use konnekta_proto::bodies::PairBody;
-use konnekta_proto::{IdentityBody, Packet, Protocol, kde, types};
+use konnekta_proto::{IdentityBody, Packet, Protocol, interop, types};
 use serde_json::Value;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr};
@@ -44,8 +44,17 @@ pub(crate) struct LinkEntry {
 struct Ports {
     tcp: u16,
     udp: u16,
-    kde_tcp: u16,
-    kde_udp: u16,
+    /// (tcp, udp) of each interop adapter, by [`adapter_index`].
+    adapters: [(u16, u16); 2],
+}
+
+/// Slot of an interop adapter in per-adapter arrays.
+fn adapter_index(p: Protocol) -> usize {
+    match p {
+        Protocol::KdeConnect => 0,
+        Protocol::Flux => 1,
+        Protocol::Konnekta => unreachable!("the native protocol is not an adapter"),
+    }
 }
 
 pub(crate) struct Inner {
@@ -59,7 +68,7 @@ pub(crate) struct Inner {
     ports: Mutex<Ports>,
     next_link_id: AtomicU64,
     udp: Mutex<Option<Arc<UdpSocket>>>,
-    kde_udp: Mutex<Option<Arc<UdpSocket>>>,
+    adapter_udp: Mutex<[Option<Arc<UdpSocket>>; 2]>,
     dialing: Mutex<HashMap<String, Instant>>,
     pending: Mutex<HashMap<IpAddr, usize>>,
     discovered: Mutex<HashMap<String, (Announcement, Instant)>>,
@@ -115,10 +124,12 @@ impl KonnektaBuilder {
             (None, Some(dir)) => FileKeyStore::new(dir).load_or_create()?,
             (None, None) => LocalIdentity::generate(&konnekta_crypto::generate_device_id())?,
         };
-        let trust = match &self.data_dir {
+        let mut trust = match &self.data_dir {
             Some(d) => TrustStore::open(d.join("devices.json"))?,
             None => TrustStore::in_memory(),
         };
+        let mut config = self.config;
+        migrate_plugin_ids(self.data_dir.as_deref(), &mut config, &mut trust);
         let mut seen = HashSet::new();
         for p in &self.plugins {
             if !seen.insert(p.info().id) {
@@ -128,7 +139,7 @@ impl KonnektaBuilder {
         let (events, _) = broadcast::channel(1024);
         let inner = Arc::new(Inner {
             identity,
-            config: RwLock::new(self.config),
+            config: RwLock::new(config),
             data_dir: self.data_dir,
             trust: Mutex::new(trust),
             links: Mutex::new(HashMap::new()),
@@ -137,7 +148,7 @@ impl KonnektaBuilder {
             ports: Mutex::default(),
             next_link_id: AtomicU64::new(1),
             udp: Mutex::new(None),
-            kde_udp: Mutex::new(None),
+            adapter_udp: Mutex::new([None, None]),
             dialing: Mutex::default(),
             pending: Mutex::default(),
             discovered: Mutex::default(),
@@ -146,6 +157,60 @@ impl KonnektaBuilder {
             mdns: Mutex::new(None),
         });
         Ok(Konnekta { inner })
+    }
+}
+
+/// Plugin ids renamed when Konnekta got its own names (old, new).
+const RENAMED_PLUGINS: &[(&str, &str)] = &[
+    ("mpris", "media"),
+    ("mousepad", "input"),
+    ("runcommand", "commands"),
+    ("telephony", "calls"),
+    ("findmyphone", "finddevice"),
+];
+
+/// Move the data folder and the "disabled" marks of renamed plugins, once.
+fn migrate_plugin_ids(dir: Option<&std::path::Path>, config: &mut Config, trust: &mut TrustStore) {
+    let rename = |set: &mut std::collections::BTreeSet<String>| {
+        let mut changed = false;
+        for (old, new) in RENAMED_PLUGINS {
+            if set.remove(*old) {
+                set.insert((*new).to_owned());
+                changed = true;
+            }
+        }
+        changed
+    };
+    if rename(&mut config.disabled_plugins)
+        && let Some(d) = dir
+        && let Err(e) = config.save(&d.join("config.json"))
+    {
+        tracing::warn!("cannot save migrated config: {e:#}");
+    }
+    let ids: Vec<String> = trust
+        .all()
+        .filter(|t| {
+            RENAMED_PLUGINS
+                .iter()
+                .any(|(old, _)| t.disabled_plugins.contains(*old))
+        })
+        .map(|t| t.device_id.clone())
+        .collect();
+    for id in ids {
+        trust.update(&id, |t| {
+            rename(&mut t.disabled_plugins);
+        });
+    }
+    if let Some(plugins) = dir.map(|d| d.join("plugins")) {
+        for (old, new) in RENAMED_PLUGINS {
+            let (from, to) = (plugins.join(old), plugins.join(new));
+            if from.is_dir() && !to.exists() {
+                match std::fs::rename(&from, &to) {
+                    Ok(()) => tracing::info!("moved plugin data {old} -> {new}"),
+                    Err(e) => tracing::warn!("cannot move plugin data {old}: {e}"),
+                }
+            }
+        }
     }
 }
 
@@ -218,6 +283,11 @@ impl Konnekta {
         &self.inner.identity.device_id
     }
 
+    /// Our certificate (DER, public).
+    pub fn certificate_der(&self) -> Vec<u8> {
+        self.inner.identity.cert_der.clone()
+    }
+
     pub fn fingerprint(&self) -> String {
         self.inner.identity.fingerprint()
     }
@@ -232,10 +302,9 @@ impl Konnekta {
         self.inner.ports.lock().unwrap().udp
     }
 
-    /// KDE Connect compatibility ports (tcp, udp); 0 when disabled.
-    pub fn kde_ports(&self) -> (u16, u16) {
-        let p = *self.inner.ports.lock().unwrap();
-        (p.kde_tcp, p.kde_udp)
+    /// Ports (tcp, udp) of an interop adapter; 0 when disabled.
+    pub fn adapter_ports(&self, p: Protocol) -> (u16, u16) {
+        self.inner.ports.lock().unwrap().adapters[adapter_index(p)]
     }
 
     pub fn config(&self) -> Config {
@@ -295,24 +364,31 @@ impl Konnekta {
             Protocol::Konnekta,
         ));
 
-        // KDE Connect compatibility (opt-in).
-        if cfg.kde_compat {
-            let kde_range = Protocol::KdeConnect.tcp_ports();
-            match bind_tcp(cfg.bind_addr, cfg.kde_tcp_port, *kde_range.end()).await {
+        // Interop adapters (opt-in).
+        let mut protos = vec![(Protocol::Konnekta, cfg.udp_port)];
+        for p in Protocol::FOREIGN {
+            let Some(a) = cfg.adapter(p).filter(|a| a.enabled) else {
+                continue;
+            };
+            match bind_tcp(cfg.bind_addr, a.tcp_port, *p.tcp_ports().end()).await {
                 Ok(l) => {
-                    inner.ports.lock().unwrap().kde_tcp = l.local_addr()?.port();
-                    self.spawn_bg(accept_loop(Arc::downgrade(inner), l, Protocol::KdeConnect));
+                    inner.ports.lock().unwrap().adapters[adapter_index(p)].0 =
+                        l.local_addr()?.port();
+                    self.spawn_bg(accept_loop(Arc::downgrade(inner), l, p));
+                    protos.push((p, a.udp_port));
                 }
-                Err(e) => tracing::warn!("KDE Connect compatibility unavailable: {e:#}"),
+                Err(e) => tracing::warn!("{} interop unavailable: {e:#}", p.label()),
             }
         }
-        tracing::info!(port = self.tcp_port(), kde = cfg.kde_compat, device_id = %self.device_id(), "listening");
+        tracing::info!(
+            port = self.tcp_port(),
+            kde = cfg.kde_connect.enabled,
+            flux = cfg.flux.enabled,
+            device_id = %self.device_id(),
+            "listening"
+        );
 
         // UDP discovery per protocol.
-        let mut protos = vec![(Protocol::Konnekta, cfg.udp_port)];
-        if cfg.kde_compat {
-            protos.push((Protocol::KdeConnect, cfg.kde_udp_port));
-        }
         for (proto, port) in protos {
             let addr = SocketAddr::new(cfg.bind_addr, if cfg.listen_udp { port } else { 0 });
             match discovery::bind_udp(addr) {
@@ -323,12 +399,14 @@ impl Konnekta {
                         let mut p = inner.ports.lock().unwrap();
                         match proto {
                             Protocol::Konnekta => p.udp = local,
-                            Protocol::KdeConnect => p.kde_udp = local,
+                            p2 => p.adapters[adapter_index(p2)].1 = local,
                         }
                     }
                     match proto {
                         Protocol::Konnekta => *inner.udp.lock().unwrap() = Some(sock.clone()),
-                        Protocol::KdeConnect => *inner.kde_udp.lock().unwrap() = Some(sock.clone()),
+                        p => {
+                            inner.adapter_udp.lock().unwrap()[adapter_index(p)] = Some(sock.clone())
+                        }
                     }
                     if cfg.listen_udp {
                         let weak = Arc::downgrade(inner);
@@ -371,19 +449,31 @@ impl Konnekta {
         if cfg.mdns {
             match discovery::mdns::Mdns::start() {
                 Ok(mut m) => {
-                    if cfg.announce
-                        && let Err(e) = m.advertise(
-                            self.device_id(),
-                            &cfg.device_name,
-                            cfg.device_type,
-                            self.tcp_port(),
-                        )
-                    {
-                        tracing::warn!("mDNS advertisement failed: {e:#}");
-                    }
                     let (tx, mut rx) = mpsc::unbounded_channel();
-                    if let Err(e) = m.browse(tx) {
-                        tracing::warn!("mDNS browse failed: {e:#}");
+                    // Native service, plus Flux's when its adapter is on
+                    // (Flux apps find computers through it).
+                    for p in [Protocol::Konnekta, Protocol::Flux] {
+                        if !cfg.speaks(p) {
+                            continue;
+                        }
+                        let port = match p {
+                            Protocol::Konnekta => self.tcp_port(),
+                            p => self.adapter_ports(p).0,
+                        };
+                        if cfg.announce
+                            && let Err(e) = m.advertise(
+                                p,
+                                self.device_id(),
+                                &cfg.device_name,
+                                cfg.device_type,
+                                port,
+                            )
+                        {
+                            tracing::warn!("{} mDNS advertisement failed: {e:#}", p.label());
+                        }
+                        if let Err(e) = m.browse(p, tx.clone()) {
+                            tracing::warn!("{} mDNS browse failed: {e:#}", p.label());
+                        }
                     }
                     *inner.mdns.lock().unwrap() = Some(m);
                     let weak = Arc::downgrade(inner);
@@ -449,8 +539,8 @@ impl Konnekta {
     }
 
     /// Connect to a device at a known address (`ip`, `ip:port`, host name).
-    /// Native: dial it directly. With KDE compatibility on, also ask a KDE
-    /// Connect device at that address to connect back.
+    /// Native: dial it directly. With the adapters on, also dial a Flux
+    /// device there and ask a KDE Connect device to connect back.
     pub async fn connect_to(&self, address: &str) -> Result<()> {
         let (host, port) = parse_host_port(address, *Protocol::Konnekta.tcp_ports().start());
         let addrs: Vec<SocketAddr> = tokio::net::lookup_host((host.as_str(), port))
@@ -458,23 +548,27 @@ impl Konnekta {
             .with_context(|| format!("cannot resolve {host}"))?
             .collect();
         let addr = *addrs.first().context("no address")?;
-        if self.config().kde_compat {
-            let sock = self.inner.kde_udp.lock().unwrap().clone();
-            if let Some(sock) = sock {
-                let _ = sock
-                    .send_to(
-                        &self.inner.identity_packet(Protocol::KdeConnect).to_line(),
-                        SocketAddr::new(addr.ip(), Protocol::KdeConnect.udp_port()),
-                    )
-                    .await;
-            }
+        let cfg = self.config();
+        if cfg.kde_connect.enabled {
+            self.inner
+                .ask_dial_back(Protocol::KdeConnect, addr.ip())
+                .await;
         }
-        let inner = self.inner.clone();
-        tokio::spawn(async move {
-            if let Err(e) = inner.clone().dial(Protocol::Konnekta, None, addr).await {
-                tracing::info!(%addr, "manual connection failed: {e:#}");
-            }
-        });
+        let mut targets = vec![(Protocol::Konnekta, addr)];
+        if cfg.flux.enabled {
+            targets.push((
+                Protocol::Flux,
+                SocketAddr::new(addr.ip(), *Protocol::Flux.tcp_ports().start()),
+            ));
+        }
+        for (proto, addr) in targets {
+            let inner = self.inner.clone();
+            tokio::spawn(async move {
+                if let Err(e) = inner.clone().dial(proto, None, addr).await {
+                    tracing::info!(%addr, "manual {} connection failed: {e:#}", proto.label());
+                }
+            });
+        }
         Ok(())
     }
 
@@ -486,9 +580,9 @@ impl Konnekta {
                 self.inner.udp.lock().unwrap().clone(),
                 self.inner.native_announcement(),
             ),
-            Protocol::KdeConnect => (
-                self.inner.kde_udp.lock().unwrap().clone(),
-                self.inner.identity_packet(Protocol::KdeConnect),
+            p => (
+                self.inner.adapter_udp.lock().unwrap()[adapter_index(p)].clone(),
+                self.inner.identity_packet(p),
             ),
         };
         sock.context("UDP socket not bound")?
@@ -643,7 +737,7 @@ async fn accept_loop(weak: std::sync::Weak<Inner>, listener: TcpListener, proto:
         tokio::spawn(async move {
             let r = match proto {
                 Protocol::Konnekta => inner.clone().handle_incoming_native(tcp, from).await,
-                Protocol::KdeConnect => inner.clone().handle_incoming_kde(tcp, from).await,
+                p => inner.clone().handle_incoming_v8(tcp, from, p).await,
             };
             drop(guard);
             if let Err(e) = r {
@@ -716,17 +810,17 @@ impl Inner {
         (inc.into_iter().collect(), out.into_iter().collect())
     }
 
-    /// Full identity, sent inside TLS (and in clear for KDE Connect).
+    /// Full identity, sent inside TLS (and also in clear for the adapters).
     pub(crate) fn identity_packet(&self, proto: Protocol) -> Packet {
         let cfg = self.config.read().unwrap();
         let (incoming, outgoing) = self.capabilities();
         let ports = *self.ports.lock().unwrap();
         let (incoming, outgoing, port) = match proto {
             Protocol::Konnekta => (incoming, outgoing, ports.tcp),
-            Protocol::KdeConnect => (
-                kde::caps_to_kde(&incoming),
-                kde::caps_to_kde(&outgoing),
-                ports.kde_tcp,
+            p => (
+                interop::caps_to_wire(p, &incoming),
+                interop::caps_to_wire(p, &outgoing),
+                ports.adapters[adapter_index(p)].0,
             ),
         };
         Packet::new(
@@ -739,8 +833,8 @@ impl Inner {
                 incoming_capabilities: incoming,
                 outgoing_capabilities: outgoing,
                 tcp_port: Some(port),
-                app: (proto == Protocol::Konnekta).then(|| "Konnekta".into()),
-                app_version: (proto == Protocol::Konnekta)
+                app: (proto != Protocol::KdeConnect).then(|| "Konnekta".into()),
+                app_version: (proto != Protocol::KdeConnect)
                     .then(|| env!("CARGO_PKG_VERSION").into()),
             },
         )
@@ -757,9 +851,9 @@ impl Inner {
     }
 
     async fn announce(&self) {
-        let (targets, kde) = {
+        let (targets, cfg) = {
             let c = self.config.read().unwrap();
-            (c.broadcast_targets.clone(), c.kde_compat)
+            (c.broadcast_targets.clone(), c.clone())
         };
         let udp = self.udp.lock().unwrap().clone();
         if let Some(sock) = udp {
@@ -770,16 +864,28 @@ impl Inner {
                 .collect();
             discovery::announce(&sock, &self.native_announcement(), &t).await;
         }
-        if kde {
-            let udp = self.kde_udp.lock().unwrap().clone();
+        for p in Protocol::FOREIGN.into_iter().filter(|p| cfg.speaks(*p)) {
+            let udp = self.adapter_udp.lock().unwrap()[adapter_index(p)].clone();
             if let Some(sock) = udp {
-                let port = Protocol::KdeConnect.udp_port();
                 let t: Vec<SocketAddr> = targets
                     .iter()
-                    .map(|ip| SocketAddr::new(*ip, port))
+                    .map(|ip| SocketAddr::new(*ip, p.udp_port()))
                     .collect();
-                discovery::announce(&sock, &self.identity_packet(Protocol::KdeConnect), &t).await;
+                discovery::announce(&sock, &self.identity_packet(p), &t).await;
             }
+        }
+    }
+
+    /// KDE Connect devices connect back after receiving our identity.
+    async fn ask_dial_back(&self, p: Protocol, ip: IpAddr) {
+        let sock = self.adapter_udp.lock().unwrap()[adapter_index(p)].clone();
+        if let Some(sock) = sock {
+            let _ = sock
+                .send_to(
+                    &self.identity_packet(p).to_line(),
+                    SocketAddr::new(ip, p.udp_port()),
+                )
+                .await;
         }
     }
 
@@ -808,7 +914,7 @@ impl Inner {
         if a.device_id == self.identity.device_id {
             return;
         }
-        if a.protocol == Protocol::KdeConnect && !self.config.read().unwrap().kde_compat {
+        if !self.config.read().unwrap().speaks(a.protocol) {
             return;
         }
         {
@@ -857,9 +963,9 @@ impl Inner {
         };
         let tls = match proto {
             Protocol::Konnekta => link::dial_native(&self.identity, addr, expect).await,
-            Protocol::KdeConnect => {
-                let me = self.identity_packet(Protocol::KdeConnect);
-                link::dial_kde(&self.identity, &me, addr, expect).await
+            p => {
+                let me = self.identity_packet(p);
+                link::dial_v8(&self.identity, &me, addr, expect).await
             }
         };
         match tls {
@@ -874,66 +980,54 @@ impl Inner {
     }
 
     async fn dial_paired(self: Arc<Self>) {
-        let kde_compat = self.config.read().unwrap().kde_compat;
-        let native_port = *Protocol::Konnekta.tcp_ports().start();
+        let cfg = self.config.read().unwrap().clone();
         let trusted: Vec<TrustedDevice> = self.trust.lock().unwrap().all().cloned().collect();
         for d in trusted {
-            if self.links.lock().unwrap().contains_key(&d.device_id) {
+            if !cfg.speaks(d.protocol) || self.links.lock().unwrap().contains_key(&d.device_id) {
                 continue;
             }
-            match d.protocol {
-                Protocol::Konnekta => {
-                    if !self.should_dial(&format!("paired:{}", d.device_id)) {
+            if d.protocol == Protocol::KdeConnect {
+                if let Some(ip) = d.last_address {
+                    self.ask_dial_back(Protocol::KdeConnect, ip).await;
+                }
+                continue;
+            }
+            // Konnekta and Flux devices listen: dial them.
+            if !self.should_dial(&format!("paired:{}", d.device_id)) {
+                continue;
+            }
+            let proto = d.protocol;
+            let default_port = *proto.tcp_ports().start();
+            let mut candidates: Vec<(String, u16)> = Vec::new();
+            if let (Some(ip), Some(port)) = (d.last_address, d.last_port) {
+                candidates.push((ip.to_string(), port));
+            }
+            for a in &d.extra_addresses {
+                candidates.push(parse_host_port(a, d.last_port.unwrap_or(default_port)));
+            }
+            let this = self.clone();
+            tokio::spawn(async move {
+                for (host, port) in candidates {
+                    let Ok(addrs) = tokio::net::lookup_host((host.as_str(), port)).await else {
                         continue;
-                    }
-                    let mut candidates: Vec<(String, u16)> = Vec::new();
-                    if let (Some(ip), Some(port)) = (d.last_address, d.last_port) {
-                        candidates.push((ip.to_string(), port));
-                    }
-                    for a in &d.extra_addresses {
-                        candidates.push(parse_host_port(a, d.last_port.unwrap_or(native_port)));
-                    }
-                    let this = self.clone();
-                    tokio::spawn(async move {
-                        for (host, port) in candidates {
-                            let Ok(addrs) = tokio::net::lookup_host((host.as_str(), port)).await
-                            else {
-                                continue;
-                            };
-                            for addr in addrs.take(2) {
-                                if this.links.lock().unwrap().contains_key(&d.device_id) {
-                                    return;
-                                }
-                                match this
-                                    .clone()
-                                    .dial(Protocol::Konnekta, Some(d.device_id.clone()), addr)
-                                    .await
-                                {
-                                    Ok(()) => return,
-                                    Err(e) => {
-                                        tracing::debug!(device = %d.name, %addr, "reconnect failed: {e:#}")
-                                    }
-                                }
+                    };
+                    for addr in addrs.take(2) {
+                        if this.links.lock().unwrap().contains_key(&d.device_id) {
+                            return;
+                        }
+                        match this
+                            .clone()
+                            .dial(proto, Some(d.device_id.clone()), addr)
+                            .await
+                        {
+                            Ok(()) => return,
+                            Err(e) => {
+                                tracing::debug!(device = %d.name, %addr, "reconnect failed: {e:#}")
                             }
                         }
-                    });
-                }
-                Protocol::KdeConnect if kde_compat => {
-                    // KDE Connect devices dial back after our identity.
-                    if let Some(ip) = d.last_address {
-                        let sock = self.kde_udp.lock().unwrap().clone();
-                        if let Some(sock) = sock {
-                            let _ = sock
-                                .send_to(
-                                    &self.identity_packet(Protocol::KdeConnect).to_line(),
-                                    SocketAddr::new(ip, Protocol::KdeConnect.udp_port()),
-                                )
-                                .await;
-                        }
                     }
                 }
-                Protocol::KdeConnect => {}
-            }
+            });
         }
     }
 
@@ -947,19 +1041,20 @@ impl Inner {
             .await
     }
 
-    async fn handle_incoming_kde(
+    async fn handle_incoming_v8(
         self: Arc<Self>,
         mut tcp: TcpStream,
         from: SocketAddr,
+        proto: Protocol,
     ) -> Result<()> {
-        let id = link::read_plain_identity(&mut tcp).await?;
+        let id = link::read_plain_identity(&mut tcp, proto).await?;
         if id.device_id == self.identity.device_id {
             bail!("connection from ourselves");
         }
         let expect = self.expectation_for(&id.device_id);
-        match link::accept_kde(&self.identity, tcp, expect).await {
+        match link::accept_v8(&self.identity, tcp, expect).await {
             Ok(tls) => {
-                self.establish(tls, Protocol::KdeConnect, Some(id.device_id), from, false)
+                self.establish(tls, proto, Some(id.device_id), from, false)
                     .await
             }
             Err(e) => {

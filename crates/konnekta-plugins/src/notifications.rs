@@ -1,4 +1,4 @@
-//! Phone notifications on the computer (KDE Connect `notification`).
+//! Phone notifications on the computer (`konnekta.notification`).
 //!
 //! Supports dismissing, replying (when the phone app offers a reply action)
 //! and triggering notification actions, with per-app filters, keyword muting
@@ -8,7 +8,7 @@ use crate::store::JsonStore;
 use anyhow::{Result, bail};
 use async_trait::async_trait;
 use konnekta_core::proto::{Packet, bodies::NotificationBody, types};
-use konnekta_core::{CoreHandle, DeviceHandle, Permission, Plugin, PluginInfo, PluginOrigin};
+use konnekta_core::{CoreHandle, DeviceHandle, Permission, Plugin, PluginInfo};
 use konnekta_platform::{DesktopNotification, Platform};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -107,7 +107,6 @@ impl Plugin for NotificationsPlugin {
             id: "notifications",
             name: "Notifications",
             description: "Show phone notifications on the computer, reply and dismiss",
-            origin: PluginOrigin::KdeConnect,
             permission: Permission::Notifications,
             incoming: &[types::NOTIFICATION],
             outgoing: &[

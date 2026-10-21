@@ -86,8 +86,14 @@ fn start(config_json: &str, data_dir: &str) -> Result<Handle> {
     if let Some(a) = v.get("mdns").and_then(Value::as_bool) {
         cfg.mdns = a;
     }
-    if let Some(a) = v.get("kdeCompat").and_then(Value::as_bool) {
-        cfg.kde_compat = a;
+    // Interop adapters: {"kdeConnect": bool, "flux": bool}.
+    for (key, p) in [
+        ("kdeConnect", konnekta_core::proto::Protocol::KdeConnect),
+        ("flux", konnekta_core::proto::Protocol::Flux),
+    ] {
+        if let (Some(on), Some(a)) = (v.get(key).and_then(Value::as_bool), cfg.adapter_mut(p)) {
+            a.enabled = on;
+        }
     }
     if let Some(p) = v.get("tcpPort").and_then(Value::as_u64) {
         cfg.tcp_port = p as u16;
@@ -204,7 +210,7 @@ impl Handle {
                 let ty = p
                     .get("type")
                     .and_then(Value::as_str)
-                    .unwrap_or(konnekta_core::proto::types::SHARE_REQUEST);
+                    .unwrap_or(konnekta_core::proto::types::SHARE);
                 let path = p
                     .get("path")
                     .and_then(Value::as_str)

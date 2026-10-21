@@ -1,7 +1,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use konnekta_core::proto::{Packet, bodies::BatteryBody, types};
-use konnekta_core::{DeviceHandle, Permission, Plugin, PluginInfo, PluginOrigin};
+use konnekta_core::{DeviceHandle, Permission, Plugin, PluginInfo};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -19,7 +19,6 @@ impl Plugin for BatteryPlugin {
             id: "battery",
             name: "Battery",
             description: "Show the battery level of connected devices",
-            origin: PluginOrigin::KdeConnect,
             permission: Permission::Battery,
             incoming: &[types::BATTERY],
             outgoing: &[],

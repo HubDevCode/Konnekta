@@ -1,6 +1,6 @@
 //! Out-of-band payload transfer over a dedicated mutually authenticated TLS
-//! socket (KDE Connect compatible: the sender listens, the receiver connects
-//! as TLS client; both pin the paired certificate).
+//! socket: the sender listens, the receiver connects as TLS client, and both
+//! pin the paired certificate (the same scheme works over the bridges).
 //!
 //! Konnekta extension (only when both peers advertise
 //! [`RESUME_CAPABILITY`]): right after the handshake the receiver sends an

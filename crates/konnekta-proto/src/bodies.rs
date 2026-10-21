@@ -1,4 +1,5 @@
-//! Typed packet bodies. Field names follow the KDE Connect wire format.
+//! Typed packet bodies. Where a bridge exists, field names match the other
+//! app so the bridge only has to rename the packet type.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -30,7 +31,7 @@ pub struct BatteryBody {
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct ClipboardBody {
     pub content: String,
-    /// Only present in `kdeconnect.clipboard.connect`.
+    /// Only present in `konnekta.clipboard.initial`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timestamp: Option<i64>,
 }
@@ -228,7 +229,7 @@ pub struct PresenterBody {
     pub stop: bool,
 }
 
-/// Entry inside the `commandList` JSON string of `kdeconnect.runcommand`.
+/// Entry inside the `commandList` JSON string of `konnekta.commands`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RunCommandEntry {
     pub name: String,
@@ -237,7 +238,7 @@ pub struct RunCommandEntry {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct RunCommandBody {
-    /// KDE Connect sends this as a JSON-encoded *string* of
+    /// Sent as a JSON-encoded *string* (as KDE Connect apps expect) of
     /// `{key: {name, command}}`.
     #[serde(rename = "commandList")]
     pub command_list: String,

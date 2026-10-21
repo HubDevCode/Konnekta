@@ -7,13 +7,18 @@ pub fn sanitize_filename(name: &str) -> String {
     let base = name.rsplit(['/', '\\']).next().unwrap_or("");
     let mut out: String = base
         .chars()
-        .filter(|c| !c.is_control())
+        // Control and text-direction characters (e.g. "invoice\u{202E}fdp.exe").
+        .filter(|c| !c.is_control() && !matches!(c, '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'))
         .map(|c| match c {
             '<' | '>' | ':' | '"' | '|' | '?' | '*' => '_',
             c => c,
         })
         .collect();
     out = out.trim().trim_matches('.').to_string();
+    // Never hidden, never mistaken for a command-line option.
+    if out.starts_with('-') {
+        out = format!("_{out}");
+    }
     const RESERVED: &[&str] = &[
         "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "LPT1", "LPT2", "LPT3",
     ];
@@ -58,6 +63,20 @@ pub fn unique_path(dir: &Path, name: &str) -> PathBuf {
     unreachable!()
 }
 
+/// Free space check before accepting a file: at least 1 GiB must stay free
+/// (5% of the disk on disks smaller than 20 GiB).
+pub fn enough_space(dir: &Path, incoming: u64) -> bool {
+    let (Ok(free), Ok(total)) = (fs2::available_space(dir), fs2::total_space(dir)) else {
+        return true; // cannot tell: do not block
+    };
+    let reserve = if total < 20 << 30 {
+        total / 20
+    } else {
+        1 << 30
+    };
+    free.saturating_sub(incoming) >= reserve
+}
+
 /// Truncate a string for logging without leaking full private content.
 pub fn redact(s: &str) -> String {
     format!("<{} chars redacted>", s.chars().count())
@@ -75,6 +94,11 @@ mod tests {
         assert_eq!(sanitize_filename("con.txt"), "file_con.txt");
         assert_eq!(sanitize_filename("a\u{0}b\nc.png"), "abc.png");
         assert_eq!(sanitize_filename("photo.jpg"), "photo.jpg");
+        assert_eq!(
+            sanitize_filename("fattura\u{202E}fdp.exe"),
+            "fatturafdp.exe"
+        );
+        assert_eq!(sanitize_filename("-rf"), "_-rf");
         let long = format!("{}.jpg", "a".repeat(500));
         let s = sanitize_filename(&long);
         assert!(s.len() <= 200 && s.ends_with(".jpg"));

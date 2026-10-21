@@ -1,22 +1,23 @@
-//! Remote touchpad and keyboard (KDE Connect `mousepad`), plus Konnekta's
-//! absolute pointer extension used by remote desktop.
+//! Remote touchpad and keyboard (`konnekta.input`), with the absolute
+//! pointer used by remote desktop.
 
 use anyhow::Result;
 use async_trait::async_trait;
 use konnekta_core::proto::{Packet, bodies::MousepadBody, types};
-use konnekta_core::{DeviceHandle, Permission, Plugin, PluginInfo, PluginOrigin};
+use konnekta_core::{DeviceHandle, Permission, Plugin, PluginInfo};
 use konnekta_platform::input::InputEvent;
 use konnekta_platform::{ButtonAction, Key, Modifiers, MouseButton, Platform, SpecialKey};
 use serde_json::{Value, json};
 use std::sync::Mutex;
 
-pub struct MousepadPlugin {
+pub struct InputPlugin {
     platform: Platform,
     /// Sub-pixel remainder of relative movements.
     acc: Mutex<(f64, f64)>,
 }
 
-/// KDE Connect `specialKey` codes.
+/// `specialKey` codes (the same numbers KDE Connect apps send through the
+/// bridge).
 pub fn special_key(code: u32) -> Option<SpecialKey> {
     use SpecialKey::*;
     Some(match code {
@@ -39,7 +40,7 @@ pub fn special_key(code: u32) -> Option<SpecialKey> {
     })
 }
 
-impl MousepadPlugin {
+impl InputPlugin {
     pub fn new(platform: Platform) -> Self {
         Self {
             platform,
@@ -137,25 +138,21 @@ impl MousepadPlugin {
 }
 
 #[async_trait]
-impl Plugin for MousepadPlugin {
+impl Plugin for InputPlugin {
     fn info(&self) -> PluginInfo {
         PluginInfo {
-            id: "mousepad",
+            id: "input",
             name: "Remote input",
             description: "Use the phone as touchpad and keyboard",
-            origin: PluginOrigin::KdeConnect,
             permission: Permission::RemoteInput,
-            incoming: &[types::MOUSEPAD_REQUEST],
-            outgoing: &[types::MOUSEPAD_ECHO, types::MOUSEPAD_KEYBOARDSTATE],
+            incoming: &[types::INPUT],
+            outgoing: &[types::INPUT_ECHO, types::INPUT_STATE],
         }
     }
 
     async fn on_connected(&self, dev: &DeviceHandle) {
         let _ = dev
-            .send_if_supported(Packet::new(
-                types::MOUSEPAD_KEYBOARDSTATE,
-                json!({ "state": true }),
-            ))
+            .send_if_supported(Packet::new(types::INPUT_STATE, json!({ "state": true })))
             .await;
     }
 
@@ -167,7 +164,7 @@ impl Plugin for MousepadPlugin {
         if body.send_ack {
             let mut echo = p.body.clone();
             echo.insert("isAck".into(), Value::Bool(true));
-            dev.send_if_supported(Packet::new(types::MOUSEPAD_ECHO, echo))
+            dev.send_if_supported(Packet::new(types::INPUT_ECHO, echo))
                 .await?;
         }
         Ok(())
@@ -179,8 +176,8 @@ mod tests {
     use super::*;
     use konnekta_platform::mock::MockPlatform;
 
-    fn plugin() -> MousepadPlugin {
-        MousepadPlugin::new(MockPlatform::new().platform())
+    fn plugin() -> InputPlugin {
+        InputPlugin::new(MockPlatform::new().platform())
     }
 
     #[test]

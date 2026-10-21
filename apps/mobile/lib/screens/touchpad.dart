@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../main.dart';
 
-/// Touchpad + keyboard (KDE Connect mousepad protocol).
+/// Touchpad + keyboard (konnekta.input).
 class TouchpadScreen extends StatefulWidget {
   const TouchpadScreen({super.key, required this.deviceId});
   final String deviceId;
@@ -19,7 +19,7 @@ class _TouchpadScreenState extends State<TouchpadScreen> {
   String _last = '';
   Offset _dragOrigin = Offset.zero;
 
-  void _send(Map<String, dynamic> b) => service.send(widget.deviceId, 'kdeconnect.mousepad.request', b);
+  void _send(Map<String, dynamic> b) => service.send(widget.deviceId, 'konnekta.input', b);
 
   Map<String, dynamic> get _mods => {
         if (ctrl) 'ctrl': true,
@@ -142,7 +142,7 @@ class PresenterScreen extends StatelessWidget {
   const PresenterScreen({super.key, required this.deviceId});
   final String deviceId;
 
-  void _cmd(String c) => service.send(deviceId, 'kdeconnect.presenter', {'konnektaKey': c});
+  void _cmd(String c) => service.send(deviceId, 'konnekta.presenter', {'konnektaKey': c});
 
   @override
   Widget build(BuildContext context) {
@@ -170,8 +170,8 @@ class PresenterScreen extends StatelessWidget {
         Expanded(
           flex: 2,
           child: GestureDetector(
-            onPanUpdate: (d) => service.send(deviceId, 'kdeconnect.presenter', {'dx': d.delta.dx / 1000, 'dy': d.delta.dy / 1000}),
-            onPanEnd: (_) => service.send(deviceId, 'kdeconnect.presenter', {'stop': true}),
+            onPanUpdate: (d) => service.send(deviceId, 'konnekta.presenter', {'dx': d.delta.dx / 1000, 'dy': d.delta.dy / 1000}),
+            onPanEnd: (_) => service.send(deviceId, 'konnekta.presenter', {'stop': true}),
             child: Container(
               margin: const EdgeInsets.all(12),
               decoration: BoxDecoration(color: Colors.red.withValues(alpha: .12), borderRadius: BorderRadius.circular(16)),

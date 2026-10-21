@@ -22,8 +22,8 @@ impl std::fmt::Debug for LocalIdentity {
     }
 }
 
-/// Generate a protocol-v8 style device id: 32 lowercase hex chars with `_`
-/// separators replaced (KDE uses a UUID with `-` replaced by `_`).
+/// Generate a device id: 32 random lowercase hex chars (also accepted by the
+/// KDE Connect and Flux apps).
 pub fn generate_device_id() -> String {
     let bytes: [u8; 16] = rand::thread_rng().r#gen();
     hex::encode(bytes)
@@ -119,7 +119,7 @@ pub fn public_key_der(cert_der: &[u8]) -> Result<Vec<u8>> {
 
 /// Code both users compare during pairing:
 /// `upper(hex(sha256(max(pkA,pkB) || min(pkA,pkB) || timestamp)))[..len]`.
-/// The native protocol uses 16 hex characters (64 bits); KDE Connect clients
+/// Konnekta and the Flux bridge use 16 hex characters (64 bits); KDE Connect apps
 /// show the first 8.
 ///
 /// Because it commits to *both* public keys, a man in the middle presenting

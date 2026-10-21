@@ -1,23 +1,22 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use konnekta_core::proto::{Packet, types};
-use konnekta_core::{DeviceHandle, Permission, Plugin, PluginInfo, PluginOrigin};
+use konnekta_core::{DeviceHandle, Permission, Plugin, PluginInfo};
 use serde_json::Value;
 
 /// Makes the phone ring loudly.
-pub struct FindMyPhonePlugin;
+pub struct FindDevicePlugin;
 
 #[async_trait]
-impl Plugin for FindMyPhonePlugin {
+impl Plugin for FindDevicePlugin {
     fn info(&self) -> PluginInfo {
         PluginInfo {
-            id: "findmyphone",
+            id: "finddevice",
             name: "Find my phone",
             description: "Make the phone ring",
-            origin: PluginOrigin::KdeConnect,
             permission: Permission::FindMyPhone,
             incoming: &[],
-            outgoing: &[types::FINDMYPHONE_REQUEST],
+            outgoing: &[types::FIND_DEVICE],
         }
     }
 
@@ -34,7 +33,7 @@ impl Plugin for FindMyPhonePlugin {
         match action {
             "ring" => {
                 crate::need_dev(dev)?
-                    .send(Packet::empty(types::FINDMYPHONE_REQUEST))
+                    .send(Packet::empty(types::FIND_DEVICE))
                     .await?;
                 Ok(Value::Null)
             }

@@ -3,6 +3,7 @@
 
 use crate::{Konnekta, Permission};
 use anyhow::{Context, Result, bail};
+use konnekta_proto::Protocol;
 use serde_json::{Value, json};
 
 fn s<'a>(p: &'a Value, k: &str) -> Result<&'a str> {
@@ -25,7 +26,11 @@ pub async fn call(k: &Konnekta, method: &str, p: Value) -> Result<Value> {
                 "deviceId": k.device_id(), "deviceName": c.device_name, "deviceType": c.device_type,
                 "fingerprint": k.fingerprint(), "tcpPort": k.tcp_port(), "udpPort": k.udp_port(),
                 "protocolVersion": konnekta_proto::PROTOCOL_VERSION, "version": env!("CARGO_PKG_VERSION"),
-                "kdeCompat": c.kde_compat, "kdeTcpPort": k.kde_ports().0, "mdns": c.mdns,
+                "mdns": c.mdns,
+                "interop": {
+                    "kdeConnect": { "enabled": c.kde_connect.enabled, "tcpPort": k.adapter_ports(Protocol::KdeConnect).0 },
+                    "flux": { "enabled": c.flux.enabled, "tcpPort": k.adapter_ports(Protocol::Flux).0 },
+                },
             })
         }
         "devices" => serde_json::to_value(k.devices())?,
@@ -82,8 +87,9 @@ pub async fn call(k: &Konnekta, method: &str, p: Value) -> Result<Value> {
             k.plugins()
                 .into_iter()
                 .map(|(i, enabled)| {
-                    let mut v = serde_json::to_value(i).unwrap_or_default();
+                    let mut v = serde_json::to_value(&i).unwrap_or_default();
                     v["enabled"] = json!(enabled);
+                    v["interop"] = json!(i.interop());
                     v
                 })
                 .collect(),
@@ -125,8 +131,16 @@ pub async fn call(k: &Konnekta, method: &str, p: Value) -> Result<Value> {
                 if let Some(a) = p.get("announce").and_then(Value::as_bool) {
                     c.announce = a;
                 }
-                if let Some(a) = p.get("kdeCompat").and_then(Value::as_bool) {
-                    c.kde_compat = a;
+                // Interop adapters: {"kdeConnect": bool, "flux": bool}.
+                for (key, proto) in [
+                    ("kdeConnect", Protocol::KdeConnect),
+                    ("flux", Protocol::Flux),
+                ] {
+                    if let (Some(on), Some(a)) =
+                        (p.get(key).and_then(Value::as_bool), c.adapter_mut(proto))
+                    {
+                        a.enabled = on;
+                    }
                 }
                 if let Some(a) = p.get("mdns").and_then(Value::as_bool) {
                     c.mdns = a;

@@ -1,7 +1,7 @@
 //! Presentation remote.
 //!
-//! KDE Connect's presenter sends pointer deltas (laser pointer). Konnekta
-//! adds `konnektaKey`: a *named* slide command mapped locally to a key
+//! Pointer deltas move a laser pointer (also from KDE Connect apps through
+//! the bridge). `konnektaKey` is a *named* slide command mapped locally to a key
 //! shortcut according to the selected presentation program, so the phone
 //! needs only the Presenter permission, not full remote input.
 
@@ -9,7 +9,7 @@ use crate::store::JsonStore;
 use anyhow::{Result, bail};
 use async_trait::async_trait;
 use konnekta_core::proto::{Packet, types};
-use konnekta_core::{CoreHandle, DeviceHandle, Permission, Plugin, PluginInfo, PluginOrigin};
+use konnekta_core::{CoreHandle, DeviceHandle, Permission, Plugin, PluginInfo};
 use konnekta_platform::input::InputEvent;
 use konnekta_platform::{Platform, parse_shortcut};
 use serde::{Deserialize, Serialize};
@@ -136,7 +136,6 @@ impl Plugin for PresenterPlugin {
             id: "presenter",
             name: "Presentation remote",
             description: "Control slides and use the phone as a laser pointer",
-            origin: PluginOrigin::KdeConnect,
             permission: Permission::Presenter,
             incoming: &[types::PRESENTER],
             outgoing: &[],

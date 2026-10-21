@@ -17,25 +17,31 @@ use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::{Arc, Weak};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub enum PluginOrigin {
-    /// Implements a standard KDE Connect plugin (interoperable).
-    KdeConnect,
-    /// Konnekta-only extension (`konnekta.*` packets).
-    Konnekta,
-}
-
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PluginInfo {
     pub id: &'static str,
     pub name: &'static str,
     pub description: &'static str,
-    pub origin: PluginOrigin,
     pub permission: Permission,
     pub incoming: &'static [&'static str],
     pub outgoing: &'static [&'static str],
+}
+
+impl PluginInfo {
+    /// Foreign protocols (interop adapters) that can use at least one of
+    /// this plugin's packet types.
+    pub fn interop(&self) -> Vec<konnekta_proto::Protocol> {
+        konnekta_proto::Protocol::FOREIGN
+            .into_iter()
+            .filter(|p| {
+                self.incoming
+                    .iter()
+                    .chain(self.outgoing)
+                    .any(|t| konnekta_proto::interop::to_wire(*p, t).is_some())
+            })
+            .collect()
+    }
 }
 
 #[async_trait]
@@ -75,6 +81,11 @@ pub struct CoreHandle {
 impl CoreHandle {
     pub(crate) fn upgrade(&self) -> Option<Arc<Inner>> {
         self.inner.upgrade()
+    }
+
+    /// Receive core events (e.g. to build a timeline of what devices sent).
+    pub fn subscribe(&self) -> Option<tokio::sync::broadcast::Receiver<Event>> {
+        self.upgrade().map(|i| i.events.subscribe())
     }
 
     /// False once the core has been dropped: background tasks must stop.

@@ -16,9 +16,7 @@ use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use konnekta_core::proto::bodies::{StreamAction, StreamMessage, StreamParams};
 use konnekta_core::proto::{Packet, types};
-use konnekta_core::{
-    CoreHandle, DeviceHandle, Permission, Plugin, PluginInfo, PluginOrigin, SecureChannel,
-};
+use konnekta_core::{CoreHandle, DeviceHandle, Permission, Plugin, PluginInfo, SecureChannel};
 use konnekta_media::abr::{DEFAULT_LADDER, NetworkSample};
 use konnekta_media::frame::{FLAG_CONFIG, Frame, FrameKind, read_frame};
 use konnekta_media::pipeline::{AnnexBSplitter, ProcessPipeline, screen_capture_command};
@@ -91,10 +89,9 @@ impl StreamPlugin {
                 id: "microphone",
                 name: "Phone microphone",
                 description: "Use the phone as a wireless microphone (Discord, Zoom, OBS...)",
-                origin: PluginOrigin::Konnekta,
                 permission: Permission::Microphone,
-                incoming: &[types::K_MICROPHONE],
-                outgoing: &[types::K_MICROPHONE],
+                incoming: &[types::MICROPHONE],
+                outgoing: &[types::MICROPHONE],
             },
         )
     }
@@ -106,10 +103,9 @@ impl StreamPlugin {
                 id: "camera",
                 name: "Phone webcam",
                 description: "Use the phone camera as a wireless webcam",
-                origin: PluginOrigin::Konnekta,
                 permission: Permission::Camera,
-                incoming: &[types::K_CAMERA],
-                outgoing: &[types::K_CAMERA],
+                incoming: &[types::CAMERA],
+                outgoing: &[types::CAMERA],
             },
         )
     }
@@ -121,10 +117,9 @@ impl StreamPlugin {
                 id: "phonescreen",
                 name: "Phone screen",
                 description: "Show the phone screen on the computer",
-                origin: PluginOrigin::Konnekta,
                 permission: Permission::Desktop,
-                incoming: &[types::K_PHONE_SCREEN],
-                outgoing: &[types::K_PHONE_SCREEN],
+                incoming: &[types::PHONE_SCREEN],
+                outgoing: &[types::PHONE_SCREEN],
             },
         )
     }
@@ -136,10 +131,9 @@ impl StreamPlugin {
                 id: "desktop",
                 name: "Remote desktop",
                 description: "Share this screen with the phone and control it by touch",
-                origin: PluginOrigin::Konnekta,
                 permission: Permission::Desktop,
-                incoming: &[types::K_DESKTOP],
-                outgoing: &[types::K_DESKTOP],
+                incoming: &[types::DESKTOP],
+                outgoing: &[types::DESKTOP],
             },
         )
     }
@@ -151,10 +145,9 @@ impl StreamPlugin {
                 id: "systemaudio",
                 name: "Computer audio on phone",
                 description: "Listen to the computer audio on the phone",
-                origin: PluginOrigin::Konnekta,
                 permission: Permission::SystemAudio,
-                incoming: &[types::K_SYSTEM_AUDIO],
-                outgoing: &[types::K_SYSTEM_AUDIO],
+                incoming: &[types::SYSTEM_AUDIO],
+                outgoing: &[types::SYSTEM_AUDIO],
             },
         )
     }

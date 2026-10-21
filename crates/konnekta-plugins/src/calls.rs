@@ -1,7 +1,7 @@
 //! Incoming call notifications and call control.
 //!
-//! KDE Connect only supports "mute ringer". Konnekta adds accept / reject /
-//! hang up (`konnekta.telephony.action`) where the phone OS allows it:
+//! Mute the ringer (`konnekta.call.mute`, also over the bridges) and accept /
+//! reject / hang up (`konnekta.call.action`) where the phone OS allows it:
 //! Android ≥ 9 with ANSWER_PHONE_CALLS; iOS does not allow third-party apps to
 //! control calls, so the iOS app does not advertise this capability.
 
@@ -10,7 +10,7 @@ use anyhow::{Result, bail};
 use async_trait::async_trait;
 use konnekta_core::proto::bodies::{CallAction, CallActionBody, TelephonyBody};
 use konnekta_core::proto::{Packet, types};
-use konnekta_core::{CoreHandle, DeviceHandle, Permission, Plugin, PluginInfo, PluginOrigin};
+use konnekta_core::{CoreHandle, DeviceHandle, Permission, Plugin, PluginInfo};
 use konnekta_platform::{DesktopNotification, MediaAction, Platform};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -19,14 +19,14 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
-pub struct TelephonyConfig {
+pub struct CallsConfig {
     /// Pause local media while a call is ringing / active.
     pub pause_media: bool,
     /// Show the caller's number (may be private).
     pub show_number: bool,
 }
 
-impl Default for TelephonyConfig {
+impl Default for CallsConfig {
     fn default() -> Self {
         Self {
             pause_media: true,
@@ -43,15 +43,15 @@ pub struct CallState {
     pub active: bool,
 }
 
-pub struct TelephonyPlugin {
+pub struct CallsPlugin {
     platform: Platform,
     core: OnceLock<CoreHandle>,
-    pub config: JsonStore<TelephonyConfig>,
+    pub config: JsonStore<CallsConfig>,
     calls: Mutex<HashMap<String, CallState>>,
     paused_by_us: Mutex<bool>,
 }
 
-impl TelephonyPlugin {
+impl CallsPlugin {
     pub fn new(platform: Platform) -> Self {
         Self {
             platform,
@@ -88,21 +88,20 @@ impl TelephonyPlugin {
 }
 
 #[async_trait]
-impl Plugin for TelephonyPlugin {
+impl Plugin for CallsPlugin {
     fn info(&self) -> PluginInfo {
         PluginInfo {
-            id: "telephony",
+            id: "calls",
             name: "Calls",
             description: "Incoming call alerts, mute, answer and reject",
-            origin: PluginOrigin::KdeConnect,
             permission: Permission::Telephony,
-            incoming: &[types::TELEPHONY],
-            outgoing: &[types::TELEPHONY_REQUEST_MUTE, types::K_CALL_ACTION],
+            incoming: &[types::CALL],
+            outgoing: &[types::CALL_MUTE, types::CALL_ACTION],
         }
     }
 
     async fn start(self: Arc<Self>, core: CoreHandle) {
-        self.config.attach(&core, "telephony", "config.json");
+        self.config.attach(&core, "calls", "config.json");
         let _ = self.core.set(core);
     }
 
@@ -126,7 +125,7 @@ impl Plugin for TelephonyPlugin {
         if b.is_cancel {
             self.calls.lock().unwrap().remove(dev.id());
             self.platform.notifier.close(&key);
-            dev.emit("telephony", "ended", json!({}));
+            dev.emit("calls", "ended", json!({}));
             self.resume_media().await;
             return Ok(());
         }
@@ -135,7 +134,7 @@ impl Plugin for TelephonyPlugin {
             caller: caller.clone(),
             active: b.event != "missedCall",
         };
-        dev.emit("telephony", "call", serde_json::to_value(&state)?);
+        dev.emit("calls", "call", serde_json::to_value(&state)?);
         match b.event.as_str() {
             "ringing" => {
                 self.calls
@@ -144,7 +143,7 @@ impl Plugin for TelephonyPlugin {
                     .insert(dev.id().to_owned(), state);
                 self.pause_media().await;
                 let mut actions = vec![("mute".to_string(), "Mute".to_string())];
-                if dev.supports(types::K_CALL_ACTION) {
+                if dev.supports(types::CALL_ACTION) {
                     actions.insert(0, ("accept".into(), "Answer".into()));
                     actions.insert(1, ("reject".into(), "Reject".into()));
                 }
@@ -166,7 +165,7 @@ impl Plugin for TelephonyPlugin {
                         };
                         rt.spawn(async move {
                             let _ = core
-                                .plugin_action(Some(&dev_id), "telephony", &a, Value::Null)
+                                .plugin_action(Some(&dev_id), "calls", &a, Value::Null)
                                 .await;
                         });
                     })),
@@ -205,16 +204,16 @@ impl Plugin for TelephonyPlugin {
         action: &str,
         args: Value,
     ) -> Result<Value> {
-        let call = |a| Packet::new(types::K_CALL_ACTION, CallActionBody { action: a });
+        let call = |a| Packet::new(types::CALL_ACTION, CallActionBody { action: a });
         match action {
             "mute" => {
                 crate::need_dev(dev)?
-                    .send(Packet::empty(types::TELEPHONY_REQUEST_MUTE))
+                    .send(Packet::empty(types::CALL_MUTE))
                     .await?
             }
             "accept" | "reject" | "hangup" => {
                 let d = crate::need_dev(dev)?;
-                if !d.supports(types::K_CALL_ACTION) {
+                if !d.supports(types::CALL_ACTION) {
                     bail!("the phone does not allow controlling calls (iOS or missing permission)");
                 }
                 let a = match action {
@@ -232,7 +231,7 @@ impl Plugin for TelephonyPlugin {
             }
             "getConfig" => return Ok(serde_json::to_value(self.config.get())?),
             "setConfig" => {
-                let c: TelephonyConfig = crate::args(args)?;
+                let c: CallsConfig = crate::args(args)?;
                 self.config.update(|v| *v = c);
             }
             _ => bail!("unknown action {action}"),

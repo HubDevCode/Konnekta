@@ -118,7 +118,7 @@ class _HomeScreenState extends State<HomeScreen> {
           if (devices.isEmpty)
             const Padding(
               padding: EdgeInsets.all(32),
-              child: Text('Nessun computer trovato. Avvia Konnekta (o KDE Connect) sul computer nella stessa rete Wi-Fi.',
+              child: Text('Nessun computer trovato. Avvia Konnekta sul computer nella stessa rete Wi-Fi.',
                   textAlign: TextAlign.center),
             ),
           for (final d in devices)

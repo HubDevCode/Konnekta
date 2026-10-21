@@ -20,5 +20,5 @@ if [ -f "$PL" ] && command -v /usr/libexec/PlistBuddy >/dev/null; then
     /usr/libexec/PlistBuddy -c "Add :${kv%%:*} string ${kv#*:}" "$PL" 2>/dev/null || true
   done
   /usr/libexec/PlistBuddy -c "Add :NSBonjourServices array" "$PL" 2>/dev/null || true
-  /usr/libexec/PlistBuddy -c "Add :NSBonjourServices:0 string _kdeconnect._udp" "$PL" 2>/dev/null || true
+  /usr/libexec/PlistBuddy -c "Add :NSBonjourServices:0 string _konnekta._tcp" "$PL" 2>/dev/null || true
 fi

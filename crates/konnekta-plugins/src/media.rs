@@ -1,4 +1,4 @@
-//! Media control in both directions (KDE Connect `mpris`):
+//! Media control in both directions (`konnekta.media`):
 //! * the phone controls players on this computer;
 //! * this computer controls media playing on the phone.
 
@@ -6,14 +6,14 @@ use anyhow::{Result, bail};
 use async_trait::async_trait;
 use konnekta_core::proto::bodies::{MprisBody, MprisRequestBody};
 use konnekta_core::proto::{Packet, types};
-use konnekta_core::{CoreHandle, DeviceHandle, Permission, Plugin, PluginInfo, PluginOrigin};
+use konnekta_core::{CoreHandle, DeviceHandle, Permission, Plugin, PluginInfo};
 use konnekta_platform::{MediaAction, MediaStatus, Platform};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-pub struct MprisPlugin {
+pub struct MediaPlugin {
     platform: Platform,
     /// Devices that asked for updates, with the player they watch.
     subscribers: Mutex<HashMap<String, Option<String>>>,
@@ -40,7 +40,7 @@ pub fn status_body(s: &MediaStatus, volume: Option<u8>) -> MprisBody {
     }
 }
 
-impl MprisPlugin {
+impl MediaPlugin {
     pub fn new(platform: Platform) -> Self {
         Self {
             platform,
@@ -59,7 +59,7 @@ impl MprisPlugin {
     async fn send_player_list(&self, dev: &DeviceHandle) -> Result<()> {
         let players = self.platform.media.players().await.unwrap_or_default();
         let mut p = Packet::new(
-            types::MPRIS,
+            types::MEDIA,
             MprisBody {
                 player_list: Some(players),
                 ..Default::default()
@@ -107,7 +107,7 @@ impl MprisPlugin {
                     .lock()
                     .unwrap()
                     .insert(dev.id().to_owned(), b.clone());
-                dev.send(Packet::new(types::MPRIS, b)).await?;
+                dev.send(Packet::new(types::MEDIA, b)).await?;
             }
         }
         Ok(())
@@ -115,16 +115,15 @@ impl MprisPlugin {
 }
 
 #[async_trait]
-impl Plugin for MprisPlugin {
+impl Plugin for MediaPlugin {
     fn info(&self) -> PluginInfo {
         PluginInfo {
-            id: "mpris",
+            id: "media",
             name: "Media control",
             description: "Control media playback and volume between devices",
-            origin: PluginOrigin::KdeConnect,
             permission: Permission::MediaControl,
-            incoming: &[types::MPRIS_REQUEST, types::MPRIS],
-            outgoing: &[types::MPRIS, types::MPRIS_REQUEST],
+            incoming: &[types::MEDIA_REQUEST, types::MEDIA],
+            outgoing: &[types::MEDIA, types::MEDIA_REQUEST],
         }
     }
 
@@ -160,7 +159,7 @@ impl Plugin for MprisPlugin {
                     if changed {
                         self.last_sent.lock().unwrap().insert(id.clone(), b.clone());
                         b.player = b.player.or(player);
-                        let _ = dev.send(Packet::new(types::MPRIS, b)).await;
+                        let _ = dev.send(Packet::new(types::MEDIA, b)).await;
                     }
                 }
             }
@@ -175,12 +174,12 @@ impl Plugin for MprisPlugin {
 
     async fn handle_packet(&self, dev: &DeviceHandle, p: Packet) -> Result<()> {
         match p.packet_type.as_str() {
-            types::MPRIS_REQUEST => self.handle_request(dev, p.body_as()?).await,
-            types::MPRIS => {
+            types::MEDIA_REQUEST => self.handle_request(dev, p.body_as()?).await,
+            types::MEDIA => {
                 // Phone media state.
                 let b: MprisBody = p.body_as()?;
                 let key = b.player.clone().unwrap_or_default();
-                dev.emit("mpris", "remoteStatus", Value::Object(p.body.clone()));
+                dev.emit("media", "remoteStatus", Value::Object(p.body.clone()));
                 if b.player_list.is_none() {
                     self.remote
                         .lock()
@@ -215,7 +214,7 @@ impl Plugin for MprisPlugin {
             "remoteRefresh" => {
                 crate::need_dev(dev)?
                     .send(Packet::new(
-                        types::MPRIS_REQUEST,
+                        types::MEDIA_REQUEST,
                         MprisRequestBody {
                             request_player_list: Some(true),
                             request_now_playing: Some(true),
@@ -236,7 +235,7 @@ impl Plugin for MprisPlugin {
                 }
                 crate::need_dev(dev)?
                     .send(Packet::new(
-                        types::MPRIS_REQUEST,
+                        types::MEDIA_REQUEST,
                         MprisRequestBody {
                             player,
                             action: Some(a.to_owned()),
@@ -254,7 +253,7 @@ impl Plugin for MprisPlugin {
                     .clamp(0, 100) as i32;
                 crate::need_dev(dev)?
                     .send(Packet::new(
-                        types::MPRIS_REQUEST,
+                        types::MEDIA_REQUEST,
                         MprisRequestBody {
                             player,
                             set_volume: Some(v),

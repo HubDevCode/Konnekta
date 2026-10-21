@@ -27,7 +27,7 @@
     "targets": "all",
     "category": "Utility",
     "shortDescription": "Connect your phone and computer",
-    "longDescription": "Konnekta links phones and computers: clipboard, files, media, notifications, calls, remote input, wireless microphone and webcam, remote desktop and a Stream Deck-like Mobile Deck. Compatible with KDE Connect.",
+    "longDescription": "Konnekta links phones and computers: clipboard, files, media, notifications, calls, remote input, wireless microphone and webcam, remote desktop and a Stream Deck-like Mobile Deck. Optional bridges let KDE Connect and Flux apps connect.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

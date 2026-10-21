@@ -3,7 +3,7 @@
 //! Actions are always defined by the *local* user. A remote device can only
 //! trigger them by id; it can never send command text to execute.
 
-use crate::runcommand::RunCommandPlugin;
+use crate::commands::CommandsPlugin;
 use anyhow::{Result, bail};
 use konnekta_core::CoreHandle;
 use konnekta_platform::input::InputEvent;
@@ -114,11 +114,11 @@ pub fn validate_all(actions: &[Action]) -> Result<()> {
 #[derive(Clone)]
 pub struct Executor {
     platform: Platform,
-    commands: Arc<RunCommandPlugin>,
+    commands: Arc<CommandsPlugin>,
 }
 
 impl Executor {
-    pub fn new(platform: Platform, commands: Arc<RunCommandPlugin>) -> Self {
+    pub fn new(platform: Platform, commands: Arc<CommandsPlugin>) -> Self {
         Self { platform, commands }
     }
 
@@ -226,7 +226,7 @@ mod tests {
     async fn runs_macro_in_order_with_delay() {
         let mock = MockPlatform::new();
         let platform = mock.platform();
-        let cmds = RunCommandPlugin::new(platform.clone());
+        let cmds = CommandsPlugin::new(platform.clone());
         let exec = Executor::new(platform, cmds);
         let start = std::time::Instant::now();
         exec.run(

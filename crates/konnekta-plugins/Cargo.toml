@@ -1,6 +1,6 @@
 [package]
 name = "konnekta-plugins"
-description = "Konnekta plugins: KDE Connect compatible features and Konnekta extensions"
+description = "Konnekta plugins: one independent plugin per feature"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -20,6 +20,8 @@ hex.workspace = true
 uuid.workspace = true
 directories.workspace = true
 bytes.workspace = true
+tar = "0.4"
+flate2 = "1"
 
 [dev-dependencies]
 tempfile.workspace = true

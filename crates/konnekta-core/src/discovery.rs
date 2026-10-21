@@ -4,7 +4,7 @@
 //! Receiving one never grants anything: it only causes an outgoing connection
 //! whose TLS handshake and pairing rules are then enforced.
 
-use konnekta_proto::{DeviceType, IdentityBody, Packet, Protocol, kde, types};
+use konnekta_proto::{DeviceType, IdentityBody, Packet, Protocol, types};
 use socket2::{Domain, Protocol as SockProto, Socket, Type};
 use std::net::SocketAddr;
 use tokio::net::UdpSocket;
@@ -36,11 +36,9 @@ pub fn parse_announcement(data: &[u8], from: SocketAddr) -> Option<Announcement>
         return None;
     }
     let packet = Packet::from_line(data).ok()?;
-    let protocol = match packet.packet_type.as_str() {
-        types::IDENTITY => Protocol::Konnekta,
-        kde::IDENTITY => Protocol::KdeConnect,
-        _ => return None,
-    };
+    let protocol = [Protocol::Konnekta, Protocol::KdeConnect, Protocol::Flux]
+        .into_iter()
+        .find(|p| p.identity_type() == packet.packet_type)?;
     let body: IdentityBody = packet.body_as().ok()?;
     body.validate().ok()?;
     let port = body.tcp_port?;
@@ -86,23 +84,27 @@ pub async fn announce(socket: &UdpSocket, packet: &Packet, targets: &[SocketAddr
 /// mDNS advertisement + browsing for `_konnekta._tcp`.
 pub mod mdns {
     use super::*;
+    use anyhow::Context as _;
     use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
 
     pub struct Mdns {
         daemon: ServiceDaemon,
-        fullname: Option<String>,
+        fullnames: Vec<String>,
     }
 
     impl Mdns {
         pub fn start() -> anyhow::Result<Self> {
             Ok(Self {
                 daemon: ServiceDaemon::new()?,
-                fullname: None,
+                fullnames: Vec::new(),
             })
         }
 
+        /// Publish this computer for `proto` (native, or Flux when its
+        /// adapter is on). TXT keys: id, name, type.
         pub fn advertise(
             &mut self,
+            proto: Protocol,
             id: &str,
             name: &str,
             ty: DeviceType,
@@ -113,32 +115,37 @@ pub mod mdns {
                 .ok()
                 .and_then(|v| v.as_str().map(str::to_owned))
                 .unwrap_or_default();
+            let version = proto.version().to_string();
             let props = [
                 ("id", id),
                 ("name", name),
                 ("type", ty_s.as_str()),
-                ("v", "1"),
+                (
+                    if proto == Protocol::Konnekta {
+                        "v"
+                    } else {
+                        "protocol"
+                    },
+                    version.as_str(),
+                ),
             ];
-            let info = ServiceInfo::new(
-                konnekta_proto::MDNS_SERVICE,
-                id,
-                &host,
-                "",
-                port,
-                &props[..],
-            )?
-            .enable_addr_auto();
-            self.fullname = Some(info.get_fullname().to_owned());
+            let service = proto.mdns_service().context("no mDNS service")?;
+            let info =
+                ServiceInfo::new(service, id, &host, "", port, &props[..])?.enable_addr_auto();
+            self.fullnames.push(info.get_fullname().to_owned());
             self.daemon.register(info)?;
             Ok(())
         }
 
-        /// Browse and forward resolved devices.
+        /// Browse the service of `proto` and forward resolved devices.
         pub fn browse(
             &self,
+            proto: Protocol,
             tx: tokio::sync::mpsc::UnboundedSender<Announcement>,
         ) -> anyhow::Result<()> {
-            let rx = self.daemon.browse(konnekta_proto::MDNS_SERVICE)?;
+            let rx = self
+                .daemon
+                .browse(proto.mdns_service().context("no mDNS service")?)?;
             std::thread::Builder::new()
                 .name("konnekta-mdns".into())
                 .spawn(move || {
@@ -158,7 +165,7 @@ pub mod mdns {
                             .unwrap_or_default();
                         for ip in info.get_addresses() {
                             let a = Announcement {
-                                protocol: Protocol::Konnekta,
+                                protocol: proto,
                                 device_id: id.clone(),
                                 device_name: name.chars().take(64).collect(),
                                 device_type,
@@ -176,7 +183,7 @@ pub mod mdns {
 
     impl Drop for Mdns {
         fn drop(&mut self) {
-            if let Some(f) = &self.fullname {
+            for f in &self.fullnames {
                 let _ = self.daemon.unregister(f);
             }
             let _ = self.daemon.shutdown();
@@ -203,8 +210,16 @@ mod tests {
         let a = parse_announcement(&p.to_line(), FROM).unwrap();
         assert_eq!(a.protocol, Protocol::Konnekta);
         assert_eq!(a.addr.port(), 17160);
+        let f = Packet::new(
+            "flux.identity",
+            json!({"deviceId":"0123456789abcdef0123456789abcdef","deviceName":"P","protocolVersion":8,"tcpPort":12100}),
+        );
+        assert_eq!(
+            parse_announcement(&f.to_line(), FROM).unwrap().protocol,
+            Protocol::Flux
+        );
         let k = Packet::new(
-            kde::IDENTITY,
+            "kdeconnect.identity",
             json!({"deviceId":"0123456789abcdef0123456789abcdef","deviceName":"P","protocolVersion":8,"tcpPort":1716}),
         );
         assert_eq!(

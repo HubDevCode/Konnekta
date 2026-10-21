@@ -9,6 +9,10 @@ pub trait ClipboardBackend: Send + Sync {
     async fn set_text(&self, text: &str) -> Result<()>;
     /// Put a PNG image on the clipboard (screenshots).
     async fn set_png(&self, png: &[u8]) -> Result<()>;
+    /// Current clipboard image as PNG, if the clipboard holds an image.
+    async fn get_png(&self) -> Result<Option<Vec<u8>>> {
+        Ok(None)
+    }
 }
 
 #[cfg(feature = "desktop")]
@@ -56,6 +60,28 @@ impl ClipboardBackend for WlClipboard {
     async fn set_png(&self, png: &[u8]) -> Result<()> {
         crate::cmd::with_stdin("wl-copy", &["--type", "image/png"], png).await
     }
+
+    async fn get_png(&self) -> Result<Option<Vec<u8>>> {
+        let types = crate::cmd::output("wl-paste", &["--list-types"])
+            .await
+            .unwrap_or_default();
+        // Text wins when both exist (e.g. spreadsheet cells).
+        if !types.lines().any(|t| t == "image/png")
+            || types.lines().any(|t| t.starts_with("text/plain"))
+        {
+            return Ok(None);
+        }
+        let out = tokio::process::Command::new("wl-paste")
+            .args(["--no-newline", "--type", "image/png"])
+            .kill_on_drop(true)
+            .output()
+            .await?;
+        Ok(out
+            .status
+            .success()
+            .then_some(out.stdout)
+            .filter(|b| !b.is_empty()))
+    }
 }
 
 #[cfg(feature = "desktop")]
@@ -65,7 +91,11 @@ mod arboard_backend {
     use std::sync::mpsc;
     use tokio::sync::oneshot;
 
+    /// RGBA pixels, width, height.
+    type Rgba = (Vec<u8>, usize, usize);
+
     enum Cmd {
+        GetImage(oneshot::Sender<Result<Option<Rgba>>>),
         Get(oneshot::Sender<Result<Option<String>>>),
         SetText(String, oneshot::Sender<Result<()>>),
         SetImage(Vec<u8>, usize, usize, oneshot::Sender<Result<()>>),
@@ -92,6 +122,7 @@ mod arboard_backend {
                             let err = || anyhow::anyhow!("clipboard unavailable");
                             match cmd {
                                 Cmd::Get(r) => drop(r.send(Err(err()))),
+                                Cmd::GetImage(r) => drop(r.send(Err(err()))),
                                 Cmd::SetText(_, r) | Cmd::SetImage(_, _, _, r) => {
                                     drop(r.send(Err(err())))
                                 }
@@ -101,6 +132,16 @@ mod arboard_backend {
                         match cmd {
                             Cmd::Get(r) => {
                                 let _ = r.send(Ok(c.get_text().ok()));
+                            }
+                            Cmd::GetImage(r) => {
+                                let img = if c.get_text().is_ok() {
+                                    None
+                                } else {
+                                    c.get_image()
+                                        .ok()
+                                        .map(|i| (i.bytes.into_owned(), i.width, i.height))
+                                };
+                                let _ = r.send(Ok(img));
                             }
                             Cmd::SetText(t, r) => {
                                 let _ = r.send(c.set_text(t).map_err(Into::into));
@@ -138,6 +179,21 @@ mod arboard_backend {
         async fn set_text(&self, text: &str) -> Result<()> {
             let t = text.to_owned();
             self.call(|r| Cmd::SetText(t, r)).await
+        }
+
+        async fn get_png(&self) -> Result<Option<Vec<u8>>> {
+            let Some((rgba, w, h)) = self.call(Cmd::GetImage).await? else {
+                return Ok(None);
+            };
+            let png = tokio::task::spawn_blocking(move || -> Result<Vec<u8>> {
+                let img = image::RgbaImage::from_raw(w as u32, h as u32, rgba)
+                    .ok_or_else(|| anyhow::anyhow!("bad image"))?;
+                let mut out = std::io::Cursor::new(Vec::new());
+                img.write_to(&mut out, image::ImageFormat::Png)?;
+                Ok(out.into_inner())
+            })
+            .await??;
+            Ok(Some(png))
         }
 
         async fn set_png(&self, png: &[u8]) -> Result<()> {

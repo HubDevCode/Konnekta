@@ -26,17 +26,21 @@
 1. **Un solo core Rust** per tutte le piattaforme: rete, crittografia, pairing, permessi e
    protocollo non sono mai reimplementati nelle UI.
 2. **Plugin indipendenti**: ogni funzione è un `Plugin` (`konnekta-core/src/plugin.rs`) che
-   dichiara i tipi di pacchetto in ingresso/uscita, l'origine (KDE Connect o Konnekta) e il
-   permesso che la protegge. Si attivano/disattivano globalmente o per singolo dispositivo.
+   dichiara i tipi di pacchetto in ingresso/uscita e il permesso che la protegge. Si
+   attivano/disattivano globalmente o per singolo dispositivo. `PluginInfo::interop()` calcola
+   dai tipi con quali app esterne (ponti KDE Connect e Flux) il plugin può funzionare.
 3. **Autorizzazione centralizzata**: il core consegna un pacchetto a un plugin solo se
    dispositivo associato → plugin attivo → plugin attivo per quel dispositivo → permesso concesso.
    Lo stesso controllo vale per i pacchetti in uscita (`DeviceHandle::send`).
 4. **Negoziazione delle capacità**: le capacità annunciate nell'identità sono l'unione dei
-   plugin attivi; un pacchetto viene inviato solo se il peer lo accetta. Le estensioni
-   `konnekta.*` sono quindi invisibili ai client KDE Connect.
-5. **Differenze tra OS isolate** in `konnekta-platform` (trait + implementazioni per OS, più
+   plugin attivi; un pacchetto viene inviato solo se il peer lo accetta.
+5. **Ponti ai bordi**: i ponti facoltativi verso KDE Connect e Flux
+   (`konnekta-proto/src/interop.rs`) traducono nomi e corpi dei pacchetti solo nel link
+   (`konnekta-core/src/link.rs`). Core e plugin vedono esclusivamente tipi `konnekta.*`; un tipo
+   senza traduzione non attraversa mai un ponte.
+6. **Differenze tra OS isolate** in `konnekta-platform` (trait + implementazioni per OS, più
    mock per i test) e nelle app native mobili.
-6. **Un'unica API** (`konnekta_core::api`) condivisa da app desktop, CLI/daemon e FFI mobile.
+7. **Un'unica API** (`konnekta_core::api`) condivisa da app desktop, CLI/daemon e FFI mobile.
 
 ## Aggiungere un plugin
 

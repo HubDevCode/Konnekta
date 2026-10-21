@@ -29,7 +29,7 @@ class _MediaScreenState extends State<MediaScreen> {
   void _changed() => mounted ? setState(() {}) : null;
 
   void _req(Map<String, dynamic> b) =>
-      service.send(widget.deviceId, 'kdeconnect.mpris.request', {if (player != null) 'player': player, ...b});
+      service.send(widget.deviceId, 'konnekta.media.request', {if (player != null) 'player': player, ...b});
 
   @override
   Widget build(BuildContext context) {

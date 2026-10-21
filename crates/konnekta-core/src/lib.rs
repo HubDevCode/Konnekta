@@ -1,7 +1,8 @@
 //! Konnekta core runtime.
 //!
 //! Responsibilities:
-//! * device discovery (UDP broadcast, KDE Connect compatible);
+//! * device discovery (UDP broadcast, mDNS, extra addresses);
+//! * optional bridges to KDE Connect and Flux apps, translated in the link;
 //! * secure links: TCP + mutual TLS with certificate pinning;
 //! * pairing with user-confirmed verification keys;
 //! * centralised, per-device, per-feature permissions;
@@ -27,10 +28,10 @@ pub mod util;
 
 pub use crate::core::{Konnekta, KonnektaBuilder};
 pub use channel::SecureChannel;
-pub use config::Config;
+pub use config::{Adapter, Config};
 pub use device::{DeviceHandle, DeviceInfo};
 pub use event::Event;
 pub use permissions::Permission;
-pub use plugin::{CoreHandle, Plugin, PluginInfo, PluginOrigin};
+pub use plugin::{CoreHandle, Plugin, PluginInfo};
 
 pub use konnekta_proto as proto;

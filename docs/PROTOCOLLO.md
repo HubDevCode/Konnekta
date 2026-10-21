@@ -1,17 +1,19 @@
 # Protocollo
 
-Konnekta ha un **protocollo proprio** (versione 1), derivato dal formato di KDE Connect v8 ma
-indipendente: porte, tipi di pacchetto, handshake e pairing sono di Konnekta. La compatibilità
-con le app KDE Connect / GSConnect è una **modalità opzionale, disattivata di default**.
+Konnekta ha un **protocollo proprio** (versione 1): porte, nomi e formati dei pacchetti,
+handshake e pairing sono di Konnekta. Due **ponti facoltativi**, spenti di default, permettono alle
+app KDE Connect / GSConnect e alle app Flux di collegarsi per le funzioni in comune (vedi in fondo).
 
 ## Porte
 
-| Uso | Konnekta | KDE Connect (solo se attivato) |
-|---|---|---|
-| Discovery UDP | 17160 | 1716 |
-| Link TCP | 17160–17168 | 1716–1764 |
-| Payload e stream | 17170–17199 | 1739–1764 |
-| mDNS | `_konnekta._tcp` | — |
+| Uso | Konnekta | Ponte KDE Connect | Ponte Flux |
+|---|---|---|---|
+| Discovery UDP | 17160 | 1716 | 12100 |
+| Link TCP | 17160–17168 | 1716–1764 | 12100–12108 |
+| Payload e stream | 17170–17199 | 1739–1764 | 12070–12099 |
+| mDNS | `_konnekta._tcp` | — | `_flux._udp` |
+
+Le porte dei ponti si aprono solo quando il ponte è attivo.
 
 ## Rete: è il computer a collegarsi
 
@@ -65,21 +67,20 @@ link con lo stesso id ma un altro certificato viene rifiutato.
 
 ## Pacchetti
 
-| Tipo `konnekta.*` | Equivalente KDE Connect |
-|---|---|
-| `ping`, `battery`, `clipboard`, `clipboard.connect` | sì |
-| `share.request`, `share.request.update` | sì |
-| `mpris`, `mpris.request` | sì |
-| `mousepad.request`, `.echo`, `.keyboardstate`, `presenter` | sì |
-| `runcommand`, `runcommand.request` | sì |
-| `notification` (+ `.request`, `.reply`, `.action`) | sì |
-| `telephony`, `telephony.request_mute`, `findmyphone.request` | sì |
-| `sms.messages`, `sms.request`, `sms.request_conversations`, `sms.request_conversation` | sì |
-| `deck`, `deck.request`, `dnd`, `screenshot`, `telephony.action`, `clipboard.image`, `browse`, `approve`, `app.update` | solo Konnekta |
-| `microphone`, `camera`, `desktop`, `systemaudio`, `phonescreen` | solo Konnekta |
+Tutti i tipi sono nel namespace `konnekta.`:
 
-Estensioni dei campi (solo Konnekta): ripresa dei trasferimenti con offset e `konnektaSha256`;
-`konnektaAbsX/Y` nel touchpad (desktop remoto); `konnektaKey` nel presentatore.
+| Area | Tipi `konnekta.*` |
+|---|---|
+| Base | `ping`, `battery`, `finddevice` |
+| Appunti | `clipboard`, `clipboard.initial`, `clipboard.image` |
+| File | `share`, `share.update`, `browse`, `browse.request`, `screenshot`, `photo`, `photo.request`, `app.update` |
+| Controllo | `media`, `media.request`, `input`, `input.echo`, `input.state`, `presenter`, `commands`, `commands.request`, `command.state`, `deck`, `deck.request` |
+| Telefono | `notification` (+ `.request`, `.reply`, `.action`), `call`, `call.mute`, `call.action`, `sms.messages`, `sms.send`, `sms.conversations.request`, `sms.thread.request`, `dnd` |
+| Sicurezza | `approve`, `approve.request` |
+| Flussi | `microphone`, `camera`, `desktop`, `systemaudio`, `phonescreen` |
+
+Campi dei trasferimenti: ripresa con offset e `konnektaSha256`; `konnektaAbsX/Y` nel touchpad
+(desktop remoto); `konnektaKey` nel presentatore.
 
 ### Frame dei flussi
 
@@ -88,14 +89,31 @@ u8 kind (1 audio, 2 video, 3 controllo) | u8 flags (1 keyframe, 2 config)
 u32 seq | u64 pts_us | u32 len | payload
 ```
 
-## Modalità di compatibilità KDE Connect
+## Ponti verso altre app (facoltativi)
 
-Attivabile da Impostazioni o con `konnekta daemon --kde-compat`. Apre le porte di KDE Connect,
-usa il suo handshake (identità in chiaro, poi TLS con ruoli invertiti) e **traduce i nomi dei
-pacchetti ai bordi del link** (`kdeconnect.ping` ⇄ `konnekta.ping`): i plugin non sanno quale
-protocollo usa il telefono. Le funzioni solo-Konnekta non vengono mai inviate a un'app KDE
-Connect. Il codice di pairing mostrato è di 8 caratteri (l'app KDE ne mostra 8), e anche qui
-serve la conferma sul computer.
+I ponti si attivano da Impostazioni o con `konnekta daemon --kde-connect` / `--flux`. Un ponte
+apre le porte dell'altra app e parla il suo handshake "v8": identità in chiaro sul TCP, poi TLS
+con i ruoli invertiti, poi di nuovo l'identità dentro TLS. **La traduzione avviene solo ai bordi
+del link** (`crates/konnekta-proto/src/interop.rs`): una tabella esplicita associa ogni nome
+dell'altra app al tipo Konnekta (`kdeconnect.mpris` ⇄ `konnekta.media`, `flux.sms.request` ⇄
+`konnekta.sms.send`) e, dove serve, converte il corpo (`flux.dnd {"on"}` ⇄ `konnekta.dnd
+{"enabled", "changedAt"}`). I plugin non sanno quale app usa il telefono. Un tipo senza voce in
+tabella non attraversa mai il ponte, in nessuna direzione: le funzioni solo-Konnekta (Deck,
+flussi, Sfoglia PC, approvazioni…) restano tra dispositivi Konnekta.
 
-`scripts/interop-kdeconnect.sh` verifica la compatibilità con un `kdeconnectd` reale isolato
-(testato con KDE Connect 26.08): pairing, file nelle due direzioni, ping.
+Certificati, pinning, conferma sul computer e limiti anti-abuso sono gli stessi del protocollo
+nativo.
+
+| | KDE Connect / GSConnect | Flux |
+|---|---|---|
+| Chi apre la connessione | il telefono, dopo l'annuncio UDP del computer | il computer (mDNS `_flux._udp`, UDP, indirizzi extra) |
+| Codice di pairing | 8 caratteri (l'app ne mostra 8) | 16 caratteri, identico a quello di Flux |
+| Funzioni in comune | ping, batteria, trova telefono, appunti, file, media, touchpad e tastiera, presentazioni, comandi, notifiche, chiamate, SMS, foto | ping, batteria, trova telefono, appunti (anche immagini), file, media, touchpad, comandi, notifiche, chiamate, SMS, Non disturbare |
+
+L'app Flux per Android accetta un computer non ancora associato solo mentre è aperta sullo schermo
+(o mentre cerca computer): tienila aperta durante il pairing.
+
+`scripts/interop-kdeconnect.sh` verifica il ponte KDE Connect con un `kdeconnectd` reale isolato
+(testato con KDE Connect 26.08): pairing, file nelle due direzioni, ping. Il ponte Flux è
+verificato dai test con un telefono simulato che parla solo il formato di Flux
+(`raw_flux_phone_pairs_and_pings`).

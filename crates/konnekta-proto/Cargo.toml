@@ -1,6 +1,6 @@
 [package]
 name = "konnekta-proto"
-description = "Konnekta wire protocol: KDE Connect compatible packets and Konnekta extensions"
+description = "Konnekta wire protocol, with optional KDE Connect and Flux bridges"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
