@@ -2531,7 +2531,7 @@ dependencies = [
 
 [[package]]
 name = "konnekta-approve"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "base64 0.22.1",
  "hex",
@@ -2545,7 +2545,7 @@ dependencies = [
 
 [[package]]
 name = "konnekta-cli"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -2565,7 +2565,7 @@ dependencies = [
 
 [[package]]
 name = "konnekta-core"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2591,7 +2591,7 @@ dependencies = [
 
 [[package]]
 name = "konnekta-crypto"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "base64 0.22.1",
  "hex",
@@ -2613,7 +2613,7 @@ dependencies = [
 
 [[package]]
 name = "konnekta-desktop"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "konnekta-core",
@@ -2633,7 +2633,7 @@ dependencies = [
 
 [[package]]
 name = "konnekta-ffi"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "bytes",
@@ -2649,7 +2649,7 @@ dependencies = [
 
 [[package]]
 name = "konnekta-media"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "bytes",
@@ -2662,7 +2662,7 @@ dependencies = [
 
 [[package]]
 name = "konnekta-platform"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "arboard",
@@ -2681,7 +2681,7 @@ dependencies = [
 
 [[package]]
 name = "konnekta-plugins"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2708,7 +2708,7 @@ dependencies = [
 
 [[package]]
 name = "konnekta-proto"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "serde",
  "serde_json",

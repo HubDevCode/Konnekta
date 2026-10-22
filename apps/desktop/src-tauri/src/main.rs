@@ -7,8 +7,8 @@
 
 use konnekta_core::{Config, Konnekta};
 use serde_json::Value;
-use tauri::menu::{Menu, MenuItem};
 use tauri::image::Image;
+use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
 use tauri_plugin_dialog::DialogExt;
@@ -75,7 +75,11 @@ struct DesktopPrefs {
 
 impl Default for DesktopPrefs {
     fn default() -> Self {
-        Self { tray: true, autostart: true, app_list: true }
+        Self {
+            tray: true,
+            autostart: true,
+            app_list: true,
+        }
     }
 }
 
@@ -154,7 +158,14 @@ fn apply_desktop_entries(p: &DesktopPrefs) {
         let auto = config.join("autostart/konnekta.desktop");
         if p.autostart {
             let _ = std::fs::create_dir_all(config.join("autostart"));
-            let _ = std::fs::write(&auto, entry("konnekta", " --background", "X-GNOME-Autostart-enabled=true\n"));
+            let _ = std::fs::write(
+                &auto,
+                entry(
+                    "konnekta",
+                    " --background",
+                    "X-GNOME-Autostart-enabled=true\n",
+                ),
+            );
         } else {
             let _ = std::fs::remove_file(&auto);
         }
@@ -185,7 +196,13 @@ const RELEASES_API: &str = "https://api.github.com/repos/HubDevCode/Konnekta/rel
 
 fn curl(args: &[&str]) -> Result<Vec<u8>, String> {
     let out = std::process::Command::new("curl")
-        .args(["-fsSL", "--max-time", "300", "-H", "User-Agent: konnekta-desktop"])
+        .args([
+            "-fsSL",
+            "--max-time",
+            "300",
+            "-H",
+            "User-Agent: konnekta-desktop",
+        ])
         .args(args)
         .output()
         .map_err(|e| format!("curl non disponibile: {e}"))?;
@@ -214,7 +231,9 @@ fn pick_asset(assets: &[Value]) -> Option<(String, String)> {
         let ok = if cfg!(target_os = "windows") {
             n.ends_with("-setup.exe")
         } else if cfg!(target_os = "linux") {
-            n.starts_with("konnekta-desktop") && n.contains("linux") && n.contains(arch)
+            n.starts_with("konnekta-desktop")
+                && n.contains("linux")
+                && n.contains(arch)
                 && !n.ends_with(".sha256")
         } else {
             false
@@ -271,10 +290,16 @@ async fn install_update(app: AppHandle) -> Result<(), String> {
             .and_then(|a| a["browser_download_url"].as_str())
         {
             let expected = String::from_utf8_lossy(&curl(&[sum_url])?).to_string();
-            let expected = expected.split_whitespace().next().unwrap_or("").to_lowercase();
+            let expected = expected
+                .split_whitespace()
+                .next()
+                .unwrap_or("")
+                .to_lowercase();
             let actual = sha256_hex(&bytes)?;
             if expected != actual {
-                return Err("Il file scaricato non corrisponde al checksum: aggiornamento annullato".into());
+                return Err(
+                    "Il file scaricato non corrisponde al checksum: aggiornamento annullato".into(),
+                );
             }
         }
         #[cfg(not(target_os = "windows"))]
@@ -283,7 +308,9 @@ async fn install_update(app: AppHandle) -> Result<(), String> {
         {
             let setup = std::env::temp_dir().join(&name);
             std::fs::write(&setup, &bytes).map_err(|e| e.to_string())?;
-            std::process::Command::new(&setup).spawn().map_err(|e| e.to_string())?;
+            std::process::Command::new(&setup)
+                .spawn()
+                .map_err(|e| e.to_string())?;
         }
         #[cfg(not(target_os = "windows"))]
         {
@@ -312,7 +339,11 @@ fn sha256_hex(data: &[u8]) -> Result<String, String> {
     let file = std::env::temp_dir().join("konnekta-update.bin");
     std::fs::write(&file, data).map_err(|e| e.to_string())?;
     let out = if cfg!(target_os = "windows") {
-        Command::new("certutil").args(["-hashfile"]).arg(&file).arg("SHA256").output()
+        Command::new("certutil")
+            .args(["-hashfile"])
+            .arg(&file)
+            .arg("SHA256")
+            .output()
     } else {
         Command::new("sha256sum").arg(&file).output()
     };
@@ -320,7 +351,11 @@ fn sha256_hex(data: &[u8]) -> Result<String, String> {
     let out = out.map_err(|e| format!("verifica checksum impossibile: {e}"))?;
     let text = String::from_utf8_lossy(&out.stdout).to_string();
     let hash = if cfg!(target_os = "windows") {
-        text.lines().nth(1).unwrap_or("").split_whitespace().collect::<String>()
+        text.lines()
+            .nth(1)
+            .unwrap_or("")
+            .split_whitespace()
+            .collect::<String>()
     } else {
         text.split_whitespace().next().unwrap_or("").to_string()
     };
@@ -407,22 +442,22 @@ fn main() {
                 show_main(app.handle());
             }
             tray.show_menu_on_left_click(false)
-            .on_tray_icon_event(|t, e| {
-                if let TrayIconEvent::Click {
-                    button: MouseButton::Left,
-                    button_state: MouseButtonState::Up,
-                    ..
-                } = e
-                {
-                    show_main(t.app_handle());
-                }
-            })
-            .on_menu_event(|app, e| match e.id.as_ref() {
-                "show" => show_main(app),
-                "quit" => app.exit(0),
-                _ => {}
-            })
-            .build(app)?;
+                .on_tray_icon_event(|t, e| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = e
+                    {
+                        show_main(t.app_handle());
+                    }
+                })
+                .on_menu_event(|app, e| match e.id.as_ref() {
+                    "show" => show_main(app),
+                    "quit" => app.exit(0),
+                    _ => {}
+                })
+                .build(app)?;
             if !prefs.tray {
                 if let Some(t) = app.tray_by_id("konnekta") {
                     let _ = t.set_visible(false);

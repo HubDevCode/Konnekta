@@ -17,14 +17,17 @@ jobs:
     outputs:
       id: ${{ steps.release.outputs.id }}
       tag: ${{ steps.tag.outputs.tag }}
+      version: ${{ steps.tag.outputs.version }}
     steps:
       - id: tag
-        run: echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
       - id: release
         uses: softprops/action-gh-release@v2
         with:
           draft: true
-          name: Konnekta ${{ github.ref_name }}
+          name: Konnekta ${{ steps.tag.outputs.version }}
           generate_release_notes: true
 
   desktop:
@@ -39,7 +42,7 @@ jobs:
             args: ""
           - os: macos-latest
             args: "--target aarch64-apple-darwin"
-          - os: macos-13
+          - os: macos-15-intel
             args: "--target x86_64-apple-darwin"
     runs-on: ${{ matrix.os }}
     steps:
@@ -72,6 +75,15 @@ jobs:
           tauriScript: tauri
           releaseId: ${{ needs.create-release.outputs.id }}
           args: ${{ matrix.args }}
+      # Plain executable + checksum: what the in-app updater downloads on Linux.
+      - name: Updater asset (Linux)
+        if: runner.os == 'Linux'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cp target/release/konnekta-desktop konnekta-desktop-linux-x86_64
+          sha256sum konnekta-desktop-linux-x86_64 > konnekta-desktop-linux-x86_64.sha256
+          gh release upload "${{ needs.create-release.outputs.tag }}" konnekta-desktop-linux-x86_64 konnekta-desktop-linux-x86_64.sha256 --clobber
 
   cli:
     needs: create-release
@@ -88,7 +100,7 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
             bin: konnekta
-          - os: macos-13
+          - os: macos-15-intel
             target: x86_64-apple-darwin
             bin: konnekta
     runs-on: ${{ matrix.os }}
@@ -156,7 +168,7 @@ jobs:
           KONNEKTA_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           KONNEKTA_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           KONNEKTA_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: scripts/build-android.sh release
+        run: bash scripts/build-android.sh release
       - name: Upload
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

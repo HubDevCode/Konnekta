@@ -404,13 +404,14 @@ mod tests {
 
     #[test]
     fn screen_command_has_low_latency_flags() {
-        if let Ok((prog, args)) = screen_capture_command(crate::abr::DEFAULT_LADDER[2])
+        let q = crate::abr::DEFAULT_LADDER[2];
+        if let Ok((prog, args)) = screen_capture_command(q)
             && prog == "ffmpeg"
         {
             let joined = args.join(" ");
             assert!(joined.contains("zerolatency"));
             assert!(joined.contains("-bf 0"));
-            assert!(joined.contains("2000k"));
+            assert!(joined.contains(&format!("{}k", q.bitrate_kbps)));
             assert!(joined.contains("-f flv -flush_packets 1"));
         }
     }
