@@ -1,4 +1,6 @@
-# Konnekta
+<p align="center"><img src="docs/img/icon.png" alt="Konnekta" width="128" height="128"></p>
+
+<h1 align="center">Konnekta</h1>
 
 Collega smartphone e computer in modo **sicuro**, **modulare** e **multipiattaforma**.
 Konnekta è un sistema **autonomo**, con protocollo, porte e app propri: un daemon Rust sul
@@ -154,4 +156,4 @@ Classi CSS: `connected`, `low` (batteria ≤ 15%), `disconnected`, `none`, `off`
 
 ## Licenza
 
-GPL-3.0-or-later.
+Tutti i diritti riservati. Il codice è visibile, ma copiarlo, modificarlo, ricompilarlo, ridistribuirlo o usarlo in contesti commerciali o istituzionali richiede il permesso scritto dell'autore. Vedi [LICENSE](LICENSE).

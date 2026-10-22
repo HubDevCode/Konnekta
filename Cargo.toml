@@ -27,8 +27,8 @@ default-members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-license = "GPL-3.0-or-later"
-repository = "https://github.com/konnekta/konnekta"
+license = "LicenseRef-Konnekta-Proprietary"
+repository = "https://github.com/HubDevCode/Konnekta"
 rust-version = "1.88"
 
 [workspace.dependencies]
