@@ -926,7 +926,9 @@ mod approve {
             .set_permission(&pid, Permission::Approve, true)
             .unwrap();
         let dirs = tempfile::tempdir().unwrap();
-        let sock = dirs.path().join("run/konnekta.sock");
+        // The key folder check refuses symlinked ancestors (/var on macOS).
+        let root = dirs.path().canonicalize().unwrap();
+        let sock = root.join("run/konnekta.sock");
         std::fs::create_dir_all(sock.parent().unwrap()).unwrap();
         std::fs::set_permissions(
             sock.parent().unwrap(),
@@ -936,18 +938,15 @@ mod approve {
         tokio::spawn(konnekta_core::ipc::listen(sock.clone(), desk.k.clone()));
         eventually(|| sock.exists()).await;
         let key = phone_key();
-        let key_dir = dirs.path().join("etc/approve");
-        std::fs::create_dir_all(dirs.path().join("etc")).unwrap();
+        let key_dir = root.join("etc/approve");
+        std::fs::create_dir_all(root.join("etc")).unwrap();
         std::fs::set_permissions(
-            dirs.path().join("etc"),
+            root.join("etc"),
             std::os::unix::fs::PermissionsExt::from_mode(0o755),
         )
         .unwrap();
-        std::fs::set_permissions(
-            dirs.path(),
-            std::os::unix::fs::PermissionsExt::from_mode(0o755),
-        )
-        .unwrap();
+        std::fs::set_permissions(root, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
         let uid = unsafe { libc_getuid() };
         if enroll {
             let spki = [&P256_SPKI_PREFIX[..], key.public_key().as_ref()].concat();

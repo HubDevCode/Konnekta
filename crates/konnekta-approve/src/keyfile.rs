@@ -133,7 +133,8 @@ mod tests {
             .tempdir()
             .unwrap();
         std::fs::set_permissions(t.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
-        let dir = t.path().join("approve");
+        // Real path: the folder check refuses symlinked ancestors (/var on macOS).
+        let dir = t.path().canonicalize().unwrap().join("approve");
         (t, dir)
     }
 
