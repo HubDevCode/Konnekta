@@ -125,7 +125,12 @@ fn allowed_target(root: &Path, full: &Path, forbidden: &[PathBuf]) -> bool {
 fn entry(root: &Path, p: &Path, meta: &std::fs::Metadata) -> Option<Entry> {
     let name = p.file_name()?.to_string_lossy().into_owned();
     Some(Entry {
-        path: p.strip_prefix(root).ok()?.to_string_lossy().into_owned(),
+        // Paths on the wire always use `/`, whatever the host OS.
+        path: p
+            .strip_prefix(root)
+            .ok()?
+            .to_string_lossy()
+            .replace('\\', "/"),
         name,
         dir: meta.is_dir(),
         size: if meta.is_file() { meta.len() } else { 0 },
