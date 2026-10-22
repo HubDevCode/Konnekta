@@ -2,7 +2,7 @@ name: Release
 
 on:
   push:
-    tags: ["v*"]
+    tags: ["v*", "[0-9]*"]
   workflow_dispatch:
 
 permissions:
@@ -210,3 +210,14 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         working-directory: apps/mobile
         run: gh release upload "${{ needs.create-release.outputs.tag }}" konnekta-*-unsigned.ipa --clobber -R "$GITHUB_REPOSITORY"
+
+  # The release stays a draft while the builds upload; it is published once the
+  # desktop, CLI and Android files are all there (iOS may still be running).
+  publish:
+    needs: [create-release, desktop, cli, android, ios]
+    if: ${{ !cancelled() && needs.desktop.result == 'success' && needs.cli.result == 'success' && needs.android.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "${{ needs.create-release.outputs.tag }}" --draft=false --latest -R "$GITHUB_REPOSITORY"

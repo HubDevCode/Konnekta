@@ -6,7 +6,7 @@ Il workflow `.github/workflows/release.yml` parte su ogni tag `v*`:
 git tag v1.0.0 && git push origin v1.0.0
 ```
 
-Crea una **release in bozza** su GitHub e allega:
+Crea una release su GitHub (in bozza finché le build non finiscono) e allega:
 
 | Piattaforma | Artefatti |
 |---|---|
@@ -16,7 +16,7 @@ Crea una **release in bozza** su GitHub e allega:
 | Android | un APK (app nativa `apps/android`) con il core per `arm64-v8a` e `x86_64` |
 | iOS | `.ipa` non firmato |
 
-Dopo la verifica, pubblica la bozza dalla pagina Releases.
+La release viene pubblicata da sola quando desktop, CLI e Android sono caricati.
 
 ## Firma del codice
 
