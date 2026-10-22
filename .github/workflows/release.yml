@@ -41,9 +41,9 @@ jobs:
           - os: windows-latest
             args: ""
           - os: macos-latest
-            args: "--target aarch64-apple-darwin"
+            args: "--target aarch64-apple-darwin --bundles app"
           - os: macos-15-intel
-            args: "--target x86_64-apple-darwin"
+            args: "--target x86_64-apple-darwin --bundles app"
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -58,7 +58,8 @@ jobs:
         with:
           node-version: 20
       - run: npm install -g @tauri-apps/cli@2
-      # Produces AppImage/deb/rpm (Linux), MSI/NSIS (Windows), .app/.dmg (macOS).
+      # Produces AppImage/deb/rpm (Linux), MSI/NSIS (Windows), .app (macOS: the
+      # DMG step fails on GitHub's runners, so only the .app archive is built).
       # Code signing is enabled automatically when the secrets are set.
       - uses: tauri-apps/tauri-action@v0
         env:
@@ -110,6 +111,11 @@ jobs:
         with:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
+      - name: Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxdo-dev libdbus-1-dev libxcb1-dev libxkbcommon-dev pkg-config
       - run: cargo build --release -p konnekta-cli --target ${{ matrix.target }}
       # PAM helper for fingerprint approval (Linux and macOS).
       - if: runner.os != 'Windows'
@@ -129,7 +135,9 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ needs.create-release.outputs.tag }}" konnekta-cli-* --clobber
+        run: |
+          shopt -s nullglob
+          gh release upload "${{ needs.create-release.outputs.tag }}" konnekta-cli-*.zip konnekta-cli-*.tar.gz --clobber -R "$GITHUB_REPOSITORY"
 
   android:
     needs: create-release

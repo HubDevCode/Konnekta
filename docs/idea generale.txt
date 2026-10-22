@@ -1,0 +1,212 @@
+1. Obiettivo generale
+Realizzare un'applicazione multipiattaforma, simile a KDE Connect, ma completamente personalizzabile e modulare, che consenta di collegare e integrare smartphone e computer attraverso una connessione wireless.
+L'applicazione dovrà permettere di condividere dati, controllare dispositivi da remoto, trasmettere audio e video in tempo reale, gestire notifiche e chiamate, eseguire comandi personalizzati e utilizzare il telefono come un pannello di controllo simile a uno Stream Deck.
+L'app dovrà essere compatibile con KDE Connect per le funzionalità supportate dal relativo protocollo, mantenendo allo stesso tempo funzionalità proprietarie e personalizzate.
+2. Piattaforme supportate
+- Windows.
+- macOS.
+- Linux, con supporto alle principali distribuzioni.
+- Android.
+- iOS.
+Il progetto dovrà utilizzare un'architettura multipiattaforma che consenta di condividere il più possibile il codice tra i sistemi operativi, adattando le funzionalità che richiedono API specifiche.
+3. Condivisione degli appunti
+- Sincronizzazione degli appunti tra smartphone e computer in entrambe le direzioni.
+- Possibilità di copiare un testo sul telefono e incollarlo direttamente sul computer.
+- Possibilità di copiare un testo sul computer e incollarlo sul telefono.
+- Aggiornamento degli appunti tra dispositivi connessi, evitando sincronizzazioni duplicate o cicliche.
+- Gestione delle autorizzazioni per la lettura e la scrittura degli appunti.
+4. Condivisione e trasferimento dei file
+- Invio di file dallo smartphone al computer.
+- Invio di file dal computer allo smartphone.
+- Trasferimento wireless attraverso la rete.
+- Possibilità di selezionare i file da inviare.
+- Possibilità di scegliere la cartella di destinazione sul computer.
+- Gestione dei trasferimenti in corso, completati, interrotti o falliti.
+- Possibilità di riprendere i trasferimenti interrotti, quando tecnicamente supportato.
+5. Controllo multimediale
+- Controllare la riproduzione multimediale del computer attraverso il telefono.
+- Avviare e mettere in pausa la riproduzione.
+- Passare al brano o al contenuto successivo.
+- Tornare al brano o al contenuto precedente.
+- Controllare il volume del computer.
+- Visualizzare, quando disponibili, informazioni sul contenuto in riproduzione, come titolo e artista.
+- Utilizzare il computer per controllare la riproduzione multimediale dello smartphone, dove supportato.
+6. Controllo delle presentazioni
+- Utilizzare il telefono come telecomando per le presentazioni sul computer.
+- Passare alla diapositiva successiva.
+- Tornare alla diapositiva precedente.
+- Avviare e interrompere una presentazione.
+- Eseguire ulteriori azioni tramite scorciatoie da tastiera personalizzabili.
+- Consentire l'utilizzo delle funzioni con i principali programmi di presentazione, nei limiti delle loro funzionalità.
+7. Controllo remoto di mouse e tastiera
+- Utilizzare il touchscreen dello smartphone come touchpad per il computer.
+- Muovere il puntatore del mouse.
+- Eseguire clic sinistro e destro.
+- Eseguire clic prolungati e altre azioni supportate.
+- Scorrere le pagine e i contenuti.
+- Utilizzare una tastiera virtuale sul telefono per scrivere sul computer.
+- Inviare combinazioni di tasti e scorciatoie da tastiera.
+- Consentire l'attivazione e la disattivazione del controllo remoto.
+8. Comandi e azioni personalizzate
+- Consentire all'utente di creare comandi personalizzati da eseguire sul computer.
+- Permettere l'associazione di ogni comando a un pulsante dell'app.
+- Consentire l'avvio di applicazioni e programmi.
+- Consentire l'esecuzione di script e comandi shell autorizzati.
+- Permettere l'utilizzo di scorciatoie da tastiera e altre azioni configurabili.
+- Consentire di assegnare un nome, un'icona e una descrizione a ogni comando.
+- Permettere di modificare, eliminare e organizzare i comandi.
+- Prevedere autorizzazioni e protezioni per impedire l'esecuzione di comandi non autorizzati.
+9. Condivisione del microfono del telefono con il computer
+- Consentire di utilizzare il microfono dello smartphone come microfono wireless del computer.
+- Trasmettere l'audio in tempo reale attraverso la rete.
+- Ridurre al minimo la latenza audio.
+- Consentire l'utilizzo del microfono del telefono con applicazioni installate sul computer, come Discord, Zoom, OBS e altri programmi compatibili.
+- Prevedere un sistema di attivazione e disattivazione del microfono.
+- Visualizzare lo stato della connessione e del microfono.
+- Gestire la qualità audio e la stabilità della trasmissione.
+- Implementare, sui sistemi che lo richiedono, un dispositivo audio virtuale che renda il microfono del telefono selezionabile come ingresso audio del computer.
+10. Condivisione e controllo remoto del desktop
+- Consentire di condividere lo schermo del computer con il telefono premendo un pulsante nell'app.
+- Visualizzare sul telefono lo schermo del computer in tempo reale.
+- Permettere di controllare il computer attraverso il touchscreen dello smartphone.
+- Trasmettere i movimenti del puntatore, i clic e gli input della tastiera.
+- Consentire di avviare e interrompere la sessione di condivisione.
+- Adattare la qualità e la risoluzione dello streaming alle condizioni della rete.
+- Ridurre al minimo la latenza tra l'azione sul telefono e la risposta del computer.
+- Consentire, dove supportato, anche la condivisione dello schermo dello smartphone sul computer.
+- Gestire le autorizzazioni necessarie per la cattura dello schermo e il controllo remoto.
+- Prevedere un sistema sicuro per avviare e terminare le sessioni.
+11. Utilizzo della fotocamera del telefono come webcam wireless
+- Consentire di utilizzare la fotocamera dello smartphone come webcam del computer.
+- Trasmettere il video in tempo reale attraverso la connessione wireless.
+- Consentire la selezione della fotocamera anteriore o posteriore.
+- Prevedere la gestione della risoluzione e della qualità video.
+- Ridurre la latenza e ottimizzare il consumo di rete.
+- Consentire l'utilizzo della fotocamera con applicazioni come OBS, Discord, Zoom e altri programmi compatibili.
+- Implementare, sui sistemi che lo richiedono, un dispositivo webcam virtuale sul computer.
+- Consentire di avviare e interrompere la trasmissione video direttamente dal telefono.
+- Richiedere le autorizzazioni necessarie per l'accesso alla fotocamera.
+12. Mobile Deck: pannello di controllo personalizzabile
+Realizzare una sezione dedicata che trasformi lo smartphone in un pannello di controllo simile a uno Stream Deck.
+- Visualizzare sul telefono una griglia di pulsanti cliccabili e personalizzabili.
+- Consentire di assegnare a ogni pulsante un'azione, un comando o una macro.
+- Permettere di personalizzare il nome, l'icona, il colore e la disposizione dei pulsanti.
+- Consentire di creare più pagine e gruppi di pulsanti.
+- Permettere di organizzare i pulsanti per categorie.
+- Consentire di creare macro composte da più azioni eseguite in sequenza.
+- Permettere di configurare ritardi e intervalli tra le azioni di una macro.
+- Consentire di assegnare comandi shell, scorciatoie da tastiera, avvio di applicazioni e altre azioni supportate.
+- Consentire di creare profili differenti per attività specifiche, come gaming, streaming, lavoro e presentazioni.
+- Permettere di salvare, modificare, duplicare ed eliminare i profili.
+- Prevedere la possibilità di aggiornare dinamicamente lo stato dei pulsanti in base alle informazioni ricevute dal computer.
+- Consentire di aggiungere nuove funzionalità al Deck attraverso il sistema di plugin.
+13. Ascoltare l'audio del computer sul telefono
+- Consentire di ascoltare sullo smartphone l'audio riprodotto dal computer.
+- Trasmettere l'audio in tempo reale attraverso la rete wireless.
+- Ridurre al minimo la latenza.
+- Consentire di avviare e interrompere la trasmissione direttamente dal telefono.
+- Prevedere il controllo del volume e della qualità audio.
+- Gestire la riconnessione in caso di interruzioni.
+- Implementare, quando necessario, l'acquisizione dell'audio di sistema attraverso le API specifiche del sistema operativo.
+14. Sincronizzazione e gestione delle notifiche
+- Ricevere sul computer le notifiche provenienti dallo smartphone.
+- Visualizzare le notifiche in un'apposita sezione o attraverso il sistema di notifiche del computer.
+- Mostrare le informazioni disponibili, come titolo, applicazione di origine e contenuto della notifica.
+- Consentire di eliminare o ignorare le notifiche dal computer, quando supportato.
+- Permettere di rispondere alle notifiche direttamente dal PC, quando l'applicazione di origine e il sistema operativo lo consentono.
+- Sincronizzare, quando possibile, lo stato delle notifiche tra telefono e computer.
+- Consentire di configurare quali applicazioni possono inviare notifiche al computer.
+- Prevedere filtri e impostazioni per ridurre le notifiche indesiderate.
+15. Gestione delle chiamate telefoniche
+- Mostrare sul computer le notifiche delle chiamate in arrivo sul telefono.
+- Visualizzare le informazioni del chiamante quando disponibili e autorizzate.
+- Consentire di accettare una chiamata dal computer, quando supportato.
+- Consentire di rifiutare una chiamata dal computer, quando supportato.
+- Consentire di gestire le azioni disponibili durante una chiamata, nei limiti delle API del sistema operativo.
+- Sincronizzare lo stato della chiamata tra i dispositivi quando possibile.
+- Prevedere una gestione specifica per Android e iOS, rispettando le rispettive limitazioni.
+16. Sincronizzazione della modalità Non disturbare
+- Consentire di sincronizzare la modalità Non disturbare tra telefono e computer.
+- Se la modalità viene attivata su un dispositivo, consentire di aggiornare lo stato dell'altro dispositivo, quando supportato.
+- Prevedere la possibilità di attivare o disattivare la sincronizzazione.
+- Consentire di scegliere quale dispositivo deve avere la priorità in caso di modifiche simultanee.
+- Gestire le autorizzazioni necessarie per modificare lo stato della modalità Non disturbare.
+17. Gestione automatica degli screenshot del telefono
+- Rilevare gli screenshot acquisiti sullo smartphone, nei limiti consentiti dal sistema operativo.
+- Trasferire automaticamente gli screenshot al computer.
+- Salvare gli screenshot in una cartella dedicata e configurabile dall'utente.
+- Consentire di scegliere la cartella di destinazione.
+- Copiare automaticamente lo screenshot ricevuto negli appunti del computer.
+- Consentire all'utente di incollare immediatamente lo screenshot in altre applicazioni, senza doverlo aprire o copiare manualmente.
+- Evitare trasferimenti duplicati dello stesso screenshot.
+- Prevedere la gestione degli errori e dei trasferimenti non riusciti.
+- Consentire di attivare o disattivare separatamente il trasferimento automatico e la copia negli appunti.
+18. Architettura modulare e sistema di plugin
+- Sviluppare un core centrale che gestisca connessioni, dispositivi associati, sicurezza e comunicazione.
+- Organizzare le funzionalità in plugin indipendenti.
+- Consentire di attivare e disattivare ogni plugin separatamente.
+- Permettere di aggiungere nuove funzionalità senza modificare l'intera applicazione.
+- Separare i plugin compatibili con KDE Connect dalle estensioni proprietarie.
+- Mantenere la compatibilità con le funzionalità standard del protocollo KDE Connect.
+- Prevedere un sistema di identificazione e negoziazione delle capacità dei dispositivi.
+- Gestire le differenze tra Windows, macOS, Linux, Android e iOS attraverso componenti specifici.
+- Prevedere una gestione centralizzata dei permessi e delle autorizzazioni.
+- Evitare che i comandi ricevuti attraverso la rete possano eseguire azioni non autorizzate.
+
+19. Sicurezza delle comunicazioni e crittografia end-to-end
+
+- Crittografia obbligatoria del traffico:** tutti i dati scambiati tra smartphone e computer devono essere trasmessi in forma crittografata, anche quando i dispositivi sono collegati alla stessa rete Wi-Fi locale.
+- Protezione contro lo sniffing:** impedire che chiunque intercetti il traffico di rete possa leggere il contenuto dei pacchetti, recuperare file, leggere gli appunti, visualizzare notifiche, acquisire credenziali o ricostruire i flussi audio e video.
+- Nessuna comunicazione sensibile in chiaro:** vietare la trasmissione di dati sensibili non crittografati, comprese password, token, certificati privati, contenuti degli appunti, notifiche, file, comandi remoti e flussi multimediali.
+- TLS per le connessioni:** utilizzare TLS con configurazioni sicure e versioni aggiornate per proteggere le comunicazioni tra i dispositivi.
+- Autenticazione reciproca:** verificare l'identità dei dispositivi prima di consentire lo scambio di dati, evitando di fidarsi automaticamente di qualsiasi dispositivo presente sulla rete locale.
+- Pairing sicuro:** richiedere un'associazione esplicita tra i dispositivi, con verifica delle identità e conferma dell'utente. Conservare in modo sicuro le informazioni necessarie per riconoscere i dispositivi già autorizzati.
+- Protezione contro gli attacchi man-in-the-middle:** verificare correttamente i certificati o le chiavi dei dispositivi associati, senza accettare certificati non attendibili o disabilitare i controlli TLS per comodità.
+- Integrità dei messaggi:** garantire che i dati trasmessi non possano essere modificati inosservatamente durante il trasferimento.
+- Protezione contro replay e impersonificazione:** utilizzare identificatori di sessione, nonce o altri meccanismi appropriati per impedire il riutilizzo fraudolento di messaggi intercettati.
+- Gestione sicura delle chiavi:** generare, conservare, rinnovare e revocare le chiavi in modo sicuro, utilizzando gli strumenti di protezione disponibili su ogni sistema operativo.
+- Sicurezza dei trasferimenti:** proteggere file, appunti, screenshot, notifiche e altri dati sia durante il trasferimento sia nei meccanismi di autenticazione che autorizzano l'accesso.
+- Sicurezza dello streaming:** crittografare anche i flussi audio e video in tempo reale, inclusi microfono, webcam, audio del computer e desktop remoto.
+- Autorizzazioni granulari:** consentire all'utente di autorizzare o revocare separatamente l'accesso agli appunti, ai file, alle notifiche, alla fotocamera, al microfono, al desktop e ai comandi remoti.
+- Protezione dei comandi remoti:** autenticare ogni richiesta, verificare i permessi del dispositivo mittente e impedire l'esecuzione di comandi non autorizzati.
+- Nessuna fiducia implicita nella rete locale:** considerare potenzialmente ostili anche le reti Wi-Fi domestiche, aziendali e pubbliche. La presenza di un dispositivo sulla stessa rete non deve essere sufficiente per autorizzarlo.
+- Gestione delle disconnessioni:** interrompere o invalidare le sessioni quando vengono rilevati problemi di autenticazione, revoche di fiducia o anomalie di sicurezza.
+- Protezione dei dati locali:** conservare in modo sicuro certificati, chiavi, configurazioni e dati sensibili; evitare di registrare nei log contenuti privati o segreti.
+- Verifiche di sicurezza:** prevedere test automatici e controlli specifici per TLS, autenticazione, gestione delle chiavi, autorizzazioni e protezione contro gli attacchi di rete.
+
+Obiettivo di sicurezza
+Tutte le comunicazioni tra dispositivi devono essere riservate, autenticate e protette contro le alterazioni. Anche se smartphone e computer si trovano sulla stessa rete locale, nessun dato sensibile deve essere leggibile da chi intercetta il traffico.
+La protezione deve essere applicata a tutte le piattaforme supportate e a tutti i plugin, compresi quelli sviluppati in futuro.
+
+20. Tecnologie e strumenti di sviluppo
+- Utilizzare Rust per il core condiviso, la comunicazione, la sicurezza e il sistema di plugin.
+- Valutare Tokio per la gestione asincrona delle connessioni.
+- Utilizzare librerie appropriate per serializzazione JSON, crittografia e comunicazione di rete.
+- Valutare Tauri per l'interfaccia desktop e, dove adeguato, per quella mobile.
+- Valutare Flutter o interfacce native per le funzionalità mobili che richiedono integrazioni specifiche.
+- Utilizzare protocolli adatti alla trasmissione di audio e video in tempo reale.
+- Implementare le integrazioni necessarie per i dispositivi audio e webcam virtuali.
+- Utilizzare Git e GitHub per il versionamento e la gestione del progetto.
+21. Compilazione multipiattaforma con GitHub Actions
+- Configurare GitHub Actions per eseguire automaticamente test e controlli del codice.
+- Compilare il core Rust su Linux, Windows e macOS.
+- Generare pacchetti Linux, tra cui AppImage, e altri formati di distribuzione appropriati.
+- Generare gli eseguibili e i pacchetti di installazione per Windows.
+- Generare le applicazioni e i pacchetti di distribuzione per macOS.
+- Configurare le build Android tramite gli SDK e gli strumenti necessari.
+- Configurare le build iOS attraverso runner macOS e gli strumenti Apple.
+- Eseguire test automatici per verificare la compatibilità del core sulle diverse piattaforme.
+- Generare automaticamente gli artefatti a ogni release.
+- Pubblicare i pacchetti su GitHub Releases.
+- Gestire firma del codice, certificati e requisiti di distribuzione quando necessari.
+22. Requisiti generali del progetto
+- L'applicazione deve essere modulare, espandibile e multipiattaforma.
+- Le funzioni principali devono essere riutilizzabili attraverso un core condiviso.
+- La comunicazione tra dispositivi deve essere sicura e autenticata.
+- L'utente deve poter controllare quali dispositivi sono associati e quali funzioni possono utilizzare.
+- Le funzioni audio, video e desktop remoto devono privilegiare bassa latenza e stabilità.
+- Le funzioni devono essere adattate alle possibilità e alle limitazioni dei singoli sistemi operativi.
+- L'interfaccia deve consentire di configurare facilmente dispositivi, plugin, comandi e profili.
+- Il sistema deve essere progettato per consentire l'aggiunta di nuove funzionalità nel tempo.
+- Il progetto deve mantenere la compatibilità con KDE Connect per le funzioni standard supportate, senza compromettere le estensioni personalizzate.
+Obiettivo finale: creare un'unica applicazione personalizzabile che colleghi smartphone e computer, integrando condivisione dei dati, controllo remoto, audio e video wireless, notifiche, chiamate, automazioni e un pannello di controllo tipo Stream Deck, con un core Rust condiviso e distribuzione multipiattaforma automatizzata tramite GitHub Actions.

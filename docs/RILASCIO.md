@@ -12,7 +12,7 @@ Crea una release su GitHub (in bozza finché le build non finiscono) e allega:
 |---|---|
 | Linux | AppImage, .deb, .rpm (Tauri) · `konnekta-cli-*-x86_64-unknown-linux-gnu.tar.gz` |
 | Windows | MSI, setup NSIS · CLI `.zip` |
-| macOS | `.app`/`.dmg` per Apple Silicon e Intel · CLI `.tar.gz` |
+| macOS | `.app` (archivio) per Apple Silicon e Intel · CLI `.tar.gz` |
 | Android | un APK (app nativa `apps/android`) con il core per `arm64-v8a` e `x86_64` |
 | iOS | `.ipa` non firmato |
 
