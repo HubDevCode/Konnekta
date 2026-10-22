@@ -41,6 +41,7 @@ jobs:
       - name: Test
         shell: bash
         run: |
+          set +e
           cargo test --workspace --exclude konnekta-desktop --no-fail-fast 2>&1 | tee test.log
           if [ "${PIPESTATUS[0]}" != 0 ]; then
             grep -E "FAILED|panicked|^error|failed" -A3 test.log | head -40 | while IFS= read -r l; do echo "::error::$l"; done
