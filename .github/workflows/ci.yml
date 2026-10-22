@@ -37,10 +37,21 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       # Core, crypto/TLS, pairing, permissions, plugins and FFI on every OS.
-      - run: cargo test --workspace --exclude konnekta-desktop
+      # Failures are echoed as annotations so they show without the raw log.
+      - name: Test
+        shell: bash
+        run: |
+          cargo test --workspace --exclude konnekta-desktop --no-fail-fast 2>&1 | tee test.log
+          if [ "${PIPESTATUS[0]}" != 0 ]; then
+            grep -E "FAILED|panicked|^error|failed" -A3 test.log | head -40 | while IFS= read -r l; do echo "::error::$l"; done
+            exit 1
+          fi
 
   security:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
