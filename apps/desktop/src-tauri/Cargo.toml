@@ -13,10 +13,11 @@ konnekta-core.workspace = true
 konnekta-plugins.workspace = true
 konnekta-media.workspace = true
 konnekta-platform = { workspace = true, features = ["desktop"] }
-tauri = { version = "2", features = ["tray-icon"] }
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-single-instance = "2"
 tokio.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
 tracing.workspace = true

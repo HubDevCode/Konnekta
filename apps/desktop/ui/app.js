@@ -905,6 +905,7 @@ async function renderSetup() {
 
 async function renderSettings() {
   const cfg = await api('getConfig');
+  const shell = await invoke('desktop_prefs_get');
   const get = (p) => act(p, 'getConfig').catch(() => null);
   const [share, clip, shot, filter, dnd, pres, tel] = await Promise.all([
     get('share'), get('clipboard'), get('screenshot'), act('notifications', 'getFilter').catch(() => null), get('dnd'), get('presenter'), get('calls')]);
@@ -934,6 +935,11 @@ async function renderSettings() {
       chk(general, 'kdeConnect', 'Accetta le app KDE Connect e GSConnect (porte 1716; solo le funzioni comuni; richiede il riavvio)'),
       chk(general, 'flux', 'Accetta le app Flux (porte 12100; solo le funzioni comuni; richiede il riavvio)')),
     () => api('setConfig', general)),
+    card('Programma sul computer', h('div', { class: 'list' },
+      chk(shell, 'tray', 'Mostra l\'icona nella tray (se disattivata, chiudere la finestra chiude Konnekta)'),
+      chk(shell, 'autostart', 'Avvia Konnekta con il computer, solo nella tray, senza aprire la finestra'),
+      chk(shell, 'appList', 'Mostra Konnekta nella lista delle applicazioni del computer')),
+    () => invoke('desktop_prefs_set', { prefs: shell })),
     share && card('File', h('div', { class: 'list' },
       folder(share, 'destination', 'Cartella di destinazione (vuoto = predefinita)'),
       chk(share, 'textToClipboard', 'Copia negli appunti il testo ricevuto')),
@@ -971,7 +977,54 @@ async function renderSettings() {
     tel && card('Chiamate', h('div', { class: 'list' },
       chk(tel, 'pauseMedia', 'Metti in pausa la musica durante le chiamate'),
       chk(tel, 'showNumber', 'Mostra il numero del chiamante')),
-    () => act('calls', 'setConfig', tel)));
+    () => act('calls', 'setConfig', tel)),
+    updatesCard());
+}
+
+// --- updates ----------------------------------------------------------------------
+
+const UPDATE_SNOOZE_MS = 24 * 3600 * 1000;
+const snoozed = (v) => { try { return Number(localStorage.getItem(`update-snooze-${v}`)) > Date.now(); } catch { return false; } };
+const snooze = (v) => { try { localStorage.setItem(`update-snooze-${v}`, String(Date.now() + UPDATE_SNOOZE_MS)); } catch { /* ignore */ } };
+
+function showUpdatePopup(u) {
+  const status = h('p', { class: 'muted small' });
+  modal('Nuova versione disponibile', h('div', {},
+    h('p', {}, `Konnekta ${u.latest} è disponibile (hai la ${u.current}).`),
+    u.notes ? h('pre', { class: 'mono', style: 'white-space:pre-wrap;max-height:200px;overflow:auto' }, u.notes) : null,
+    u.installable ? null : h('p', { class: 'small muted' }, 'Per questo sistema non c\'è un pacchetto installabile automaticamente: scaricala dalla pagina della release.'),
+    status),
+  [['Ricordamelo più tardi', () => { snooze(u.latest); }],
+   u.installable
+     ? ['Aggiorna e installa', async () => {
+         status.textContent = 'Download e installazione in corso… Konnekta si riavvierà da solo.';
+         try { await invoke('install_update'); } catch (e) { status.textContent = String(e); return false; }
+         return false;
+       }, 'primary']
+     : ['Apri la pagina', () => { window.open(u.page, '_blank'); }, 'primary']]);
+}
+
+function updatesCard() {
+  const out = h('p', { class: 'muted' }, `Versione installata: ${S.me?.version ?? ''}`);
+  const check = async () => {
+    out.textContent = 'Controllo in corso…';
+    try {
+      const u = await invoke('check_update');
+      if (u.available) { out.textContent = `Disponibile la versione ${u.latest}.`; showUpdatePopup(u); }
+      else out.textContent = `Konnekta è aggiornato (versione ${u.current}).`;
+    } catch (e) { out.textContent = `Controllo non riuscito: ${e}`; }
+  };
+  return h('div', { class: 'card', style: 'margin-bottom:14px' }, h('h2', { style: 'margin-top:0' }, 'Aggiornamenti'),
+    h('p', {}, 'Repository: ', h('a', { href: 'https://github.com/HubDevCode/Konnekta', target: '_blank' }, 'github.com/HubDevCode/Konnekta')),
+    out,
+    h('div', { class: 'row', style: 'justify-content:flex-end;margin-top:10px' }, btn('Cerca aggiornamenti', check, 'primary')));
+}
+
+async function checkUpdateOnStart() {
+  try {
+    const u = await invoke('check_update');
+    if (u.available && !snoozed(u.latest)) showUpdatePopup(u);
+  } catch { /* offline or no release: stay quiet */ }
 }
 
 // --- security ---------------------------------------------------------------------
@@ -1008,6 +1061,7 @@ async function renderSecurity() {
     await T.event.listen('konnekta', (e) => onEvent(e.payload));
     await refreshDevices();
     render();
+    checkUpdateOnStart();
   } catch (e) {
     $main.replaceChildren(h('div', { class: 'card' }, h('h1', {}, 'Errore di avvio'), h('p', {}, String(e))));
   }
