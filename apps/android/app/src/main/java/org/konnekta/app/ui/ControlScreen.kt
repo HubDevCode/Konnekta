@@ -613,7 +613,7 @@ private fun KeyCap(label: String, modifier: Modifier, on: Boolean = false, onLon
  */
 suspend fun androidx.compose.ui.input.pointer.PointerInputScope.touchpad(sens: Float, scrollSpeed: () -> Float, emit: (JSONObject) -> Unit) {
     var lastTapUp = 0L
-    val swipeMin = 60.dp.toPx()
+    val swipeMin = 45.dp.toPx()
     awaitEachGesture {
         val down = awaitFirstDown()
         val start = down.uptimeMillis
@@ -622,8 +622,7 @@ suspend fun androidx.compose.ui.input.pointer.PointerInputScope.touchpad(sens: F
         var dragging = false
         var pendX = 0f
         var pendY = 0f
-        var swipeX = 0f
-        var swipeY = 0f
+        val swipe = ThreeFingerSwipe(swipeMin)
         while (true) {
             val ev = awaitPointerEvent()
             val pressed = ev.changes.filter { it.pressed }
@@ -640,9 +639,8 @@ suspend fun androidx.compose.ui.input.pointer.PointerInputScope.touchpad(sens: F
                 moved += abs(dx) + abs(dy)
                 ev.changes.forEach { it.consume() }
                 if (maxPointers >= 3) {
-                    // Three fingers: one gesture at the end, no pointer motion.
-                    swipeX += dx
-                    swipeY += dy
+                    // Three fingers: one gesture, no pointer motion.
+                    swipe.add(pressed)?.let { emit(JSONObject().put("konnektaSwipe", it)) }
                     continue
                 }
                 pendX += dx
@@ -662,20 +660,41 @@ suspend fun androidx.compose.ui.input.pointer.PointerInputScope.touchpad(sens: F
         val now = System.currentTimeMillis()
         when {
             dragging -> emit(JSONObject().put("singlerelease", true))
-            maxPointers >= 3 -> {
-                val dir = when {
-                    abs(swipeX) >= abs(swipeY) && abs(swipeX) > swipeMin -> if (swipeX < 0) "left" else "right"
-                    abs(swipeY) > swipeMin -> if (swipeY < 0) "up" else "down"
-                    else -> null
-                }
-                dir?.let { emit(JSONObject().put("konnektaSwipe", it)) }
-            }
+            maxPointers >= 3 -> {}
             moved < 12f && maxPointers >= 2 -> emit(JSONObject().put("rightclick", true))
             moved < 12f -> {
                 if (now - lastTapUp < 300) emit(JSONObject().put("doubleclick", true)) else emit(JSONObject().put("singleclick", true))
                 lastTapUp = now
             }
         }
+    }
+}
+
+/**
+ * Three-finger swipe direction, decided while the fingers move rather than
+ * when they lift: realme / OPPO / OnePlus phones take over three-finger
+ * touches for their screenshot gesture and cancel them in the app early.
+ * Uses the average movement of the fingers down, so it does not depend on
+ * which finger landed first.
+ */
+class ThreeFingerSwipe(private val min: Float) {
+    private var x = 0f
+    private var y = 0f
+    private var sent = false
+
+    /** Adds one move event; returns the direction once, when it is far enough. */
+    fun add(pressed: List<androidx.compose.ui.input.pointer.PointerInputChange>): String? {
+        val moving = pressed.filter { it.previousPressed }
+        if (sent || moving.isEmpty()) return null
+        x += moving.sumOf { (it.position.x - it.previousPosition.x).toDouble() }.toFloat() / moving.size
+        y += moving.sumOf { (it.position.y - it.previousPosition.y).toDouble() }.toFloat() / moving.size
+        val dir = when {
+            abs(x) >= abs(y) && abs(x) > min -> if (x < 0) "left" else "right"
+            abs(y) > min -> if (y < 0) "up" else "down"
+            else -> null
+        }
+        if (dir != null) sent = true
+        return dir
     }
 }
 
