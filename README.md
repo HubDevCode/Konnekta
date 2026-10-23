@@ -6,6 +6,7 @@ Collega smartphone e computer in modo **sicuro**, **modulare** e **multipiattafo
 Konnekta è un sistema **autonomo**, con protocollo, porte e app propri: un daemon Rust sul
 computer e app native sul telefono. Funziona sulla rete locale e da fuori casa (Tailscale/VPN),
 anche con un firewall che blocca le connessioni in ingresso, perché è il computer ad aprirle.
+Funziona anche **con il cavo USB**, senza Wi-Fi: vedi [Collegamento via cavo USB](#collegamento-via-cavo-usb).
 
 Per chi lo desidera ci sono due **ponti facoltativi**, spenti di default, verso altre app: le app
 **KDE Connect / GSConnect** e le app **Flux** possono collegarsi a Konnekta per le funzioni che
@@ -44,6 +45,24 @@ ha nomi e formati di Konnekta.
 | **Aggiornamento dell'app Android** inviato dal computer | Files | — | l'installer di Android chiede sempre conferma |
 | **Approva `sudo` con l'impronta** del telefono | Approve (sensibile) | — | Linux; la password resta sempre disponibile |
 | **Hyprland**: tema, workspace e dispatcher nel Deck, modulo Waybar | — | — | Linux |
+
+## Collegamento via cavo USB
+
+Tutte le funzioni (file, appunti, notifiche, touchpad, webcam, microfono, schermo, desktop
+remoto…) funzionano anche con il telefono Android collegato al computer con il cavo, senza rete:
+
+1. sul computer installa **adb** (pacchetto `android-tools`/`adb`, oppure gli *Android SDK
+   Platform-Tools*; Konnekta lo cerca nel `PATH` e nelle cartelle dell'SDK);
+2. sul telefono attiva **Opzioni sviluppatore → Debug USB** e, al primo collegamento, consenti il
+   computer;
+3. collega il cavo con Konnekta aperto su entrambi: il computer si collega da solo entro pochi
+   secondi e il dispositivo appare come "Connesso · cavo USB".
+
+Il collegamento passa per `adb forward`/`adb reverse`, ma è lo stesso di sempre: TLS reciproco,
+certificato fissato, associazione e permessi invariati. Se il telefono è anche in Wi-Fi, il cavo
+ha la precedenza; staccandolo Konnekta torna alla rete da solo. Si disattiva in
+Impostazioni → Generale. Senza debug USB si può usare il **tethering USB** del telefono: gli
+annunci partono su ogni interfaccia di rete, compresa quella del cavo.
 
 ## Sicurezza in breve
 

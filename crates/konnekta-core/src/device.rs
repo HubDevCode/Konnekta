@@ -2,6 +2,7 @@ use crate::core::Inner;
 use crate::event::Event;
 use crate::payload::{self, PayloadSource, Progress};
 use crate::permissions::Permission;
+use crate::usb;
 use anyhow::{Context, Result, bail};
 use konnekta_proto::{DeviceType, IdentityBody, Packet, Protocol, types};
 use serde::Serialize;
@@ -23,6 +24,8 @@ pub struct DeviceInfo {
     pub connected: bool,
     pub pair_state: String,
     pub address: Option<String>,
+    /// The current link runs over a USB cable.
+    pub usb: bool,
     pub fingerprint: Option<String>,
     pub permissions: BTreeSet<Permission>,
     pub disabled_plugins: BTreeSet<String>,
@@ -50,6 +53,11 @@ pub struct DeviceHandle {
     pub(crate) peer_cert: Arc<Vec<u8>>,
     /// True if we dialed the device.
     pub(crate) outgoing: bool,
+    /// The link runs over a USB cable (adb).
+    pub usb: bool,
+    /// Serial of the phone when we drive the cable with adb: side
+    /// connections are then mapped through it.
+    pub(crate) adb: Option<Arc<str>>,
 }
 
 impl std::fmt::Debug for DeviceHandle {
@@ -58,6 +66,7 @@ impl std::fmt::Debug for DeviceHandle {
             .field("id", &self.identity.device_id)
             .field("name", &self.identity.device_name)
             .field("addr", &self.addr)
+            .field("usb", &self.usb)
             .finish()
     }
 }
@@ -130,6 +139,30 @@ impl DeviceHandle {
         }
     }
 
+    /// Address to dial for a port the device listens on. Over USB it is an
+    /// adb forward, which must live as long as the connection.
+    pub(crate) async fn peer_port(&self, port: u16) -> Result<(SocketAddr, Option<usb::Mapping>)> {
+        match &self.adb {
+            Some(serial) => {
+                let (addr, m) = usb::forward(serial, port).await?;
+                Ok((addr, Some(m)))
+            }
+            None => Ok((SocketAddr::new(self.addr.ip(), port), None)),
+        }
+    }
+
+    /// Port to announce for a local listener. Over USB it is an adb reverse,
+    /// which must live as long as the connection.
+    pub(crate) async fn announced_port(&self, local: u16) -> Result<(u16, Option<usb::Mapping>)> {
+        match &self.adb {
+            Some(serial) => {
+                let (port, m) = usb::reverse(serial, local).await?;
+                Ok((port, Some(m)))
+            }
+            None => Ok((local, None)),
+        }
+    }
+
     pub fn resume_supported(&self) -> bool {
         self.supports(payload::RESUME_CAPABILITY)
     }
@@ -157,8 +190,16 @@ impl DeviceHandle {
             progress,
         )
         .await?;
+        let (port, mapping) = self.announced_port(port).await?;
         self.send(packet.with_payload(size as i64, port)).await?;
-        Ok(task)
+        Ok(match mapping {
+            Some(m) => tokio::spawn(async move {
+                let r = task.await;
+                drop(m);
+                r?
+            }),
+            None => task,
+        })
     }
 
     /// Download the payload attached to a received packet.
@@ -182,11 +223,12 @@ impl DeviceHandle {
         } else {
             None
         };
+        let (addr, _mapping) = self.peer_port(info.port).await?;
         payload::fetch(
             &core.identity,
             (*self.peer_cert).clone(),
             self.id().to_owned(),
-            SocketAddr::new(self.addr.ip(), info.port),
+            addr,
             size as u64,
             resume,
             out,

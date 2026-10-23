@@ -74,6 +74,8 @@ pub struct Config {
     pub mdns: bool,
     /// Listen for UDP announcements of other devices.
     pub listen_udp: bool,
+    /// Connect to Android phones attached by USB cable, through adb.
+    pub usb: bool,
     pub bind_addr: IpAddr,
     /// Native protocol ports (0 = ephemeral, used by tests).
     pub udp_port: u16,
@@ -108,6 +110,7 @@ impl Default for Config {
             announce: true,
             mdns: true,
             listen_udp: true,
+            usb: true,
             bind_addr: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             udp_port: Protocol::Konnekta.udp_port(),
             tcp_port: *Protocol::Konnekta.tcp_ports().start(),

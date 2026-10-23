@@ -126,7 +126,7 @@ pub async fn serve(
                 .await
                 .context("payload receiver never connected")??;
             // Only the device the payload is meant for may connect.
-            if from.ip() == peer_ip || peer_ip.is_unspecified() {
+            if crate::usb::same_host(from.ip(), peer_ip) || peer_ip.is_unspecified() {
                 break tcp;
             }
             tracing::warn!(%from, "rejected payload connection from unexpected address");

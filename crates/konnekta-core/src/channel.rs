@@ -5,11 +5,12 @@
 //! consumer connects.
 
 use crate::device::DeviceHandle;
-use anyhow::{Context, Result, bail};
+use anyhow::{Context as _, Result, bail};
 use konnekta_crypto::{PeerExpectation, client_config, server_config};
 use rustls_pki_types::ServerName;
-use std::net::SocketAddr;
-use tokio::io::{AsyncRead, AsyncWrite};
+use std::pin::Pin;
+use std::task::{Context, Poll};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
 use tokio_rustls::{TlsAcceptor, TlsConnector};
 
@@ -17,6 +18,47 @@ pub trait Channel: AsyncRead + AsyncWrite + Send + Unpin {}
 impl<T: AsyncRead + AsyncWrite + Send + Unpin> Channel for T {}
 
 pub type SecureChannel = Box<dyn Channel>;
+
+/// A channel together with the USB port mapping it travels through.
+struct Mapped<T> {
+    io: T,
+    _usb: crate::usb::Mapping,
+}
+
+impl<T: AsyncRead + Unpin> AsyncRead for Mapped<T> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.get_mut().io).poll_read(cx, buf)
+    }
+}
+
+impl<T: AsyncWrite + Unpin> AsyncWrite for Mapped<T> {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        Pin::new(&mut self.get_mut().io).poll_write(cx, buf)
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.get_mut().io).poll_flush(cx)
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.get_mut().io).poll_shutdown(cx)
+    }
+}
+
+fn boxed<T: Channel + 'static>(io: T, usb: Option<crate::usb::Mapping>) -> SecureChannel {
+    match usb {
+        Some(m) => Box::new(Mapped { io, _usb: m }),
+        None => Box::new(io),
+    }
+}
 
 /// Bytes the kernel may hold for a stream before the sender waits. Small on
 /// purpose: a big buffer on a slow network turns into seconds of delay; a
@@ -51,7 +93,7 @@ impl DeviceHandle {
         let bind = core.config.read().unwrap().bind_addr;
         let listener =
             crate::payload::bind_payload_port(bind, self.protocol.payload_ports()).await?;
-        let port = listener.local_addr()?.port();
+        let (port, mapping) = self.announced_port(listener.local_addr()?.port()).await?;
         let acceptor = TlsAcceptor::from(server_config(&core.identity, self.expectation())?);
         let peer_ip = self.addr.ip();
         let fut = async move {
@@ -60,7 +102,7 @@ impl DeviceHandle {
                 let (tcp, from) = tokio::time::timeout_at(deadline, listener.accept())
                     .await
                     .context("peer never connected to stream channel")??;
-                if from.ip() != peer_ip {
+                if !crate::usb::same_host(from.ip(), peer_ip) {
                     tracing::warn!(%from, "rejected stream connection from unexpected address");
                     continue;
                 }
@@ -69,7 +111,7 @@ impl DeviceHandle {
                     tokio::time::timeout(crate::link::HANDSHAKE_TIMEOUT, acceptor.accept(tcp))
                         .await
                         .context("stream tls timeout")??;
-                return Ok(Box::new(tls) as SecureChannel);
+                return Ok(boxed(tls, mapping));
             }
         };
         Ok((port, fut))
@@ -81,7 +123,7 @@ impl DeviceHandle {
         if !self.is_paired() {
             bail!("device not paired");
         }
-        let addr = SocketAddr::new(self.addr.ip(), port);
+        let (addr, mapping) = self.peer_port(port).await?;
         let tcp = tokio::time::timeout(crate::link::HANDSHAKE_TIMEOUT, TcpStream::connect(addr))
             .await
             .context("stream connect timeout")??;
@@ -93,6 +135,6 @@ impl DeviceHandle {
         )
         .await
         .context("stream tls timeout")??;
-        Ok(Box::new(tls))
+        Ok(boxed(tls, mapping))
     }
 }

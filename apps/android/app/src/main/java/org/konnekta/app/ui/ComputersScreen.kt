@@ -102,7 +102,7 @@ fun ComputersScreen(devices: List<JSONObject>, open: (Route) -> Unit) {
             val online = d.optBoolean("connected")
             ActionCard(
                 if (d.optString("deviceType") in setOf("phone", "tablet")) Icons.Filled.PhoneAndroid else Icons.Filled.Computer, d.optString("name"),
-                if (online) "Connesso · ${d.optString("address")}"
+                if (online) "Connesso · ${if (d.optBoolean("usb")) "cavo USB" else d.optString("address")}"
                 else "Non raggiungibile${d.optString("address").takeIf { it.isNotEmpty() }?.let { " · $it" } ?: ""}",
                 trailing = {
                     if (online) StatusDot(true) else TextButton(onClick = {

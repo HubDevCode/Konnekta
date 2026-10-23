@@ -379,7 +379,7 @@ async function deviceDetail(d) {
     h('div', { class: 'dev-ic' }, typeIcon(d.deviceType, 30)),
     h('div', { class: 'grow' },
       h('div', { style: 'font-size:18px;font-weight:700' }, d.name),
-      h('div', { class: 'small muted row', style: 'gap:6px' }, d.connected ? `Connesso · ${d.address}` : 'Non raggiungibile', protoBadge(d.protocol))),
+      h('div', { class: 'small muted row', style: 'gap:6px' }, d.connected ? `Connesso · ${d.usb ? 'cavo USB' : d.address}` : 'Non raggiungibile', protoBadge(d.protocol))),
     d.paired ? btn('Dissocia', () => modal('Dissociare il dispositivo?',
       h('p', {}, `${d.name} non potrà più comunicare con questo computer finché non verrà associato di nuovo.`),
       [['Annulla'], ['Dissocia', () => run(api('unpair', { deviceId: d.id })), 'danger']]), 'danger')
@@ -909,7 +909,7 @@ async function renderSettings() {
   const get = (p) => act(p, 'getConfig').catch(() => null);
   const [share, clip, shot, filter, dnd, pres, tel] = await Promise.all([
     get('share'), get('clipboard'), get('screenshot'), act('notifications', 'getFilter').catch(() => null), get('dnd'), get('presenter'), get('calls')]);
-  const general = { deviceName: cfg.device_name, downloadDir: cfg.download_dir, announce: cfg.announce, mdns: cfg.mdns,
+  const general = { deviceName: cfg.device_name, downloadDir: cfg.download_dir, announce: cfg.announce, mdns: cfg.mdns, usb: cfg.usb !== false,
     kdeConnect: !!cfg.kde_connect?.enabled, flux: !!cfg.flux?.enabled, syncPermissions: cfg.sync_permissions !== false };
   const txt = (o, k, label) => h('label', { class: 'field' }, label, h('input', { type: 'text', value: o[k] ?? '', oninput: (e) => { o[k] = e.target.value; } }));
   const chk = (o, k, label) => h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: o[k], onchange: (e) => { o[k] = e.target.checked; } }), label);
@@ -930,6 +930,7 @@ async function renderSettings() {
       folder(general, 'downloadDir', 'Cartella predefinita per i file ricevuti'),
       chk(general, 'announce', 'Annuncia questo computer sulla rete locale (disattiva sulle reti pubbliche: i dispositivi associati vengono comunque contattati)'),
       chk(general, 'mdns', 'Trova i dispositivi con mDNS (_konnekta._tcp)'),
+      chk(general, 'usb', 'Collegati ai telefoni Android attaccati con il cavo USB (serve adb e il debug USB attivo sul telefono)'),
       chk(general, 'syncPermissions', 'Sincronizza i permessi con i dispositivi: ciò che concedi o revochi sul telefono vale anche qui, e viceversa'),
       h('h3', {}, 'Ponti verso altre app (facoltativi)'),
       chk(general, 'kdeConnect', 'Accetta le app KDE Connect e GSConnect (porte 1716; solo le funzioni comuni; richiede il riavvio)'),

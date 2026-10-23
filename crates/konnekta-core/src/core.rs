@@ -10,6 +10,7 @@ use crate::pairing::{self, Admission, PairState, RequestGuard};
 use crate::permissions::Permission;
 use crate::plugin::{CoreHandle, Plugin, PluginInfo};
 use crate::trust::{TrustStore, TrustedDevice};
+use crate::usb;
 use anyhow::{Context, Result, bail};
 use konnekta_crypto::{FileKeyStore, KeyStore, LocalIdentity, PeerExpectation, verification_key};
 use konnekta_proto::bodies::PairBody;
@@ -29,6 +30,9 @@ use tokio::task::AbortHandle;
 const DIAL_INTERVAL: Duration = Duration::from_secs(5);
 const SEND_QUEUE: usize = 512;
 const JANITOR_INTERVAL: Duration = Duration::from_secs(2);
+const USB_INTERVAL: Duration = Duration::from_secs(3);
+/// Wait after a failed USB dial (phone without Konnekta running).
+const USB_RETRY: Duration = Duration::from_secs(30);
 
 pub(crate) struct LinkEntry {
     handle: DeviceHandle,
@@ -75,6 +79,8 @@ pub(crate) struct Inner {
     guard: Mutex<RequestGuard>,
     background: Mutex<Vec<AbortHandle>>,
     mdns: Mutex<Option<discovery::mdns::Mdns>>,
+    /// adb forward of the link of each phone attached by USB, by serial.
+    usb_forwards: Mutex<HashMap<String, usb::Mapping>>,
 }
 
 /// Builder for [`Konnekta`].
@@ -155,6 +161,7 @@ impl KonnektaBuilder {
             guard: Mutex::default(),
             background: Mutex::default(),
             mdns: Mutex::new(None),
+            usb_forwards: Mutex::default(),
         });
         Ok(Konnekta { inner })
     }
@@ -501,6 +508,19 @@ impl Konnekta {
             }
         });
 
+        // Phones attached by USB cable (the computer runs adb).
+        if cfg!(not(any(target_os = "android", target_os = "ios"))) {
+            let weak = Arc::downgrade(inner);
+            self.spawn_bg(async move {
+                loop {
+                    let Some(inner) = weak.upgrade() else { break };
+                    inner.usb_tick().await;
+                    drop(inner);
+                    tokio::time::sleep(USB_INTERVAL).await;
+                }
+            });
+        }
+
         // Pairing timeouts and idle unpaired links.
         let weak = Arc::downgrade(inner);
         self.spawn_bg(async move {
@@ -838,6 +858,7 @@ impl Inner {
                 app: (proto != Protocol::KdeConnect).then(|| "Konnekta".into()),
                 app_version: (proto != Protocol::KdeConnect)
                     .then(|| env!("CARGO_PKG_VERSION").into()),
+                usb: false,
             },
         )
     }
@@ -855,7 +876,7 @@ impl Inner {
     async fn announce(&self) {
         let (targets, cfg) = {
             let c = self.config.read().unwrap();
-            (c.broadcast_targets.clone(), c.clone())
+            (discovery::expand_targets(&c.broadcast_targets), c.clone())
         };
         let udp = self.udp.lock().unwrap().clone();
         if let Some(sock) = udp {
@@ -971,7 +992,7 @@ impl Inner {
             }
         };
         match tls {
-            Ok(tls) => self.establish(tls, proto, expected, addr, true).await,
+            Ok(tls) => self.establish(tls, proto, expected, addr, true, None).await,
             Err(e) => {
                 if let Some(id) = &expected {
                     self.report_tls_failure(id, &e);
@@ -979,6 +1000,61 @@ impl Inner {
                 Err(e)
             }
         }
+    }
+
+    /// Dial the phones attached by USB that have no USB link yet.
+    async fn usb_tick(self: &Arc<Self>) {
+        if !self.config.read().unwrap().usb || usb::find_adb().is_none() {
+            return;
+        }
+        let serials = usb::devices().await;
+        self.usb_forwards
+            .lock()
+            .unwrap()
+            .retain(|s, _| serials.contains(s));
+        for serial in serials {
+            let linked = self
+                .links
+                .lock()
+                .unwrap()
+                .values()
+                .any(|l| l.handle.adb.as_deref() == Some(serial.as_str()));
+            let key = format!("usb:{serial}");
+            if linked || !self.should_dial(&key) {
+                continue;
+            }
+            let this = self.clone();
+            tokio::spawn(async move {
+                if let Err(e) = this.clone().dial_usb(serial.into()).await {
+                    tracing::debug!(%key, "USB dial failed: {e:#}");
+                    this.dialing
+                        .lock()
+                        .unwrap()
+                        .insert(key, Instant::now() + USB_RETRY);
+                }
+            });
+        }
+    }
+
+    /// Reach the phone's listener through an adb forward and dial it.
+    async fn dial_usb(self: Arc<Self>, serial: Arc<str>) -> Result<()> {
+        let mut last = None;
+        for port in Protocol::Konnekta.tcp_ports().take(3) {
+            let (addr, mapping) = usb::forward(&serial, port).await?;
+            match link::dial_native(&self.identity, addr, PeerExpectation::Deferred).await {
+                Ok(tls) => {
+                    self.usb_forwards
+                        .lock()
+                        .unwrap()
+                        .insert(serial.to_string(), mapping);
+                    return self
+                        .establish(tls, Protocol::Konnekta, None, addr, true, Some(serial))
+                        .await;
+                }
+                Err(e) => last = Some(e),
+            }
+        }
+        Err(last.context("no port")?)
     }
 
     async fn dial_paired(self: Arc<Self>) {
@@ -1039,7 +1115,7 @@ impl Inner {
         from: SocketAddr,
     ) -> Result<()> {
         let tls = link::accept_native(&self.identity, tcp).await?;
-        self.establish(tls, Protocol::Konnekta, None, from, false)
+        self.establish(tls, Protocol::Konnekta, None, from, false, None)
             .await
     }
 
@@ -1056,7 +1132,7 @@ impl Inner {
         let expect = self.expectation_for(&id.device_id);
         match link::accept_v8(&self.identity, tcp, expect).await {
             Ok(tls) => {
-                self.establish(tls, proto, Some(id.device_id), from, false)
+                self.establish(tls, proto, Some(id.device_id), from, false, None)
                     .await
             }
             Err(e) => {
@@ -1085,7 +1161,8 @@ impl Inner {
     }
 
     /// Finish a link after TLS: identity exchange and all trust checks, then
-    /// start the reader and writer tasks.
+    /// start the reader and writer tasks. `adb` is the serial of the phone
+    /// when we dialed it through a USB cable.
     async fn establish(
         self: Arc<Self>,
         tls: SecureStream,
@@ -1093,11 +1170,17 @@ impl Inner {
         expected: Option<String>,
         addr: SocketAddr,
         outgoing: bool,
+        adb: Option<Arc<str>>,
     ) -> Result<()> {
         let peer_cert = link::peer_certificate(&tls).context("peer sent no certificate")?;
         let mut stream = BufReader::new(tls);
-        let me = self.identity_packet(proto);
+        let mut me = self.identity_packet(proto);
+        if adb.is_some() {
+            me.body.insert("usb".into(), Value::Bool(true));
+        }
         let identity = link::exchange_identity(&mut stream, &me, proto).await?;
+        // The dialer says it came through adb; only believable from loopback.
+        let usb = adb.is_some() || (identity.usb && !outgoing && addr.ip().is_loopback());
         let device_id = identity.device_id.clone();
         if expected.as_ref().is_some_and(|e| *e != device_id) {
             bail!("device answered with another identity");
@@ -1140,6 +1223,8 @@ impl Inner {
             protocol: proto,
             peer_cert: Arc::new(peer_cert.clone()),
             outgoing,
+            usb,
+            adb,
         };
 
         // Decide whether this link may replace an existing one.
@@ -1158,9 +1243,14 @@ impl Inner {
                     }
                 };
                 let (old_dialer, new_dialer) = (dialer(old.handle.outgoing), dialer(outgoing));
-                // Simultaneous connections: both sides keep the one opened by
+                // A cable beats the network, both ways. Otherwise, for
+                // simultaneous connections both sides keep the one opened by
                 // the smaller device id. Same dialer: the newer one wins.
-                if old_dialer != new_dialer && old_dialer < new_dialer {
+                if old.handle.usb && !usb {
+                    tracing::debug!(device = %identity.device_name, "keeping the USB link");
+                    return Ok(());
+                }
+                if old.handle.usb == usb && old_dialer != new_dialer && old_dialer < new_dialer {
                     tracing::debug!(device = %identity.device_name, "keeping existing link");
                     return Ok(());
                 }
@@ -1249,13 +1339,16 @@ impl Inner {
             self.trust.lock().unwrap().update(&device_id, |d| {
                 d.name = identity.device_name.clone();
                 d.device_type = identity.device_type;
-                d.last_address = Some(addr.ip());
+                // Over USB the address is our own loopback.
+                if !usb {
+                    d.last_address = Some(addr.ip());
+                }
                 if proto == Protocol::Konnekta {
                     d.last_port = identity.tcp_port.or(d.last_port);
                 }
             });
         }
-        tracing::info!(device = %identity.device_name, %addr, protocol = proto.label(), paired = trusted, "device connected");
+        tracing::info!(device = %identity.device_name, %addr, usb, protocol = proto.label(), paired = trusted, "device connected");
         if let Some(info) = self.device_info(&device_id) {
             let _ = self.events.send(Event::DeviceConnected { device: info });
         }
@@ -1409,6 +1502,7 @@ impl Inner {
                 connected: link.is_some(),
                 pair_state: link.map(|l| l.pair.as_str()).unwrap_or("paired").into(),
                 address: link.map(|l| l.handle.addr.ip().to_string()),
+                usb: link.is_some_and(|l| l.handle.usb),
                 fingerprint: Some(konnekta_crypto::cert_fingerprint(&t.cert_der())),
                 permissions: t.permissions.clone(),
                 disabled_plugins: t.disabled_plugins.clone(),
@@ -1436,6 +1530,7 @@ impl Inner {
                 connected: true,
                 pair_state: l.pair.as_str().into(),
                 address: Some(l.handle.addr.ip().to_string()),
+                usb: l.handle.usb,
                 fingerprint: Some(konnekta_crypto::cert_fingerprint(&l.handle.peer_cert)),
                 permissions: BTreeSet::new(),
                 disabled_plugins: BTreeSet::new(),
@@ -1929,7 +2024,7 @@ impl Inner {
             permissions_changed_at: 0,
             disabled_plugins: BTreeSet::new(),
             paired_at: konnekta_proto::packet::now_millis(),
-            last_address: Some(handle.addr.ip()),
+            last_address: (!handle.usb).then(|| handle.addr.ip()),
             last_port: if handle.protocol == Protocol::Konnekta {
                 handle.identity.tcp_port
             } else {
