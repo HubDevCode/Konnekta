@@ -235,15 +235,14 @@ private suspend fun androidx.compose.ui.input.pointer.PointerInputScope.remoteTo
     fun abs(x: Float, y: Float) = JSONObject()
         .put("konnektaAbsX", (x / size.width).coerceIn(0f, 1f).toDouble())
         .put("konnektaAbsY", (y / size.height).coerceIn(0f, 1f).toDouble())
-    val swipeMin = 60.dp.toPx()
+    val swipeMin = 45.dp.toPx()
     awaitEachGesture {
         val down = awaitFirstDown()
         val start = down.uptimeMillis
         var maxPointers = 1
         var moved = 0f
         var dragging = false
-        var swipeX = 0f
-        var swipeY = 0f
+        val swipe = ThreeFingerSwipe(swipeMin)
         while (true) {
             val ev = awaitPointerEvent()
             val pressed = ev.changes.filter { it.pressed }
@@ -256,8 +255,8 @@ private suspend fun androidx.compose.ui.input.pointer.PointerInputScope.remoteTo
                 moved += abs(dx) + abs(dy)
                 ev.changes.forEach { it.consume() }
                 if (maxPointers >= 3) {
-                    swipeX += dx
-                    swipeY += dy
+                    // Three fingers: switch workspace (left/right) or overview (up/down).
+                    swipe.add(pressed)?.let { queue.trySend(JSONObject().put("konnektaSwipe", it)) }
                 } else if (pressed.size >= 2) {
                     // Raw distance: the computer turns it into wheel steps and keeps the remainder.
                     val k = Settings.scrollSpeed.value
@@ -270,15 +269,6 @@ private suspend fun androidx.compose.ui.input.pointer.PointerInputScope.remoteTo
         }
         val held = android.os.SystemClock.uptimeMillis() - start
         when {
-            maxPointers >= 3 -> {
-                // Three fingers: switch workspace (left/right) or overview (up/down).
-                val dir = when {
-                    abs(swipeX) >= abs(swipeY) && abs(swipeX) > swipeMin -> if (swipeX < 0) "left" else "right"
-                    abs(swipeY) > swipeMin -> if (swipeY < 0) "up" else "down"
-                    else -> null
-                }
-                dir?.let { queue.trySend(JSONObject().put("konnektaSwipe", it)) }
-            }
             dragging || maxPointers >= 2 -> {}
             moved < 12f && isLongPress(held) -> queue.trySend(abs(down.position.x, down.position.y).put("rightclick", true))
             moved < 12f -> queue.trySend(abs(down.position.x, down.position.y).put("singleclick", true))
