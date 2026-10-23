@@ -27,6 +27,7 @@ pub async fn call(k: &Konnekta, method: &str, p: Value) -> Result<Value> {
                 "fingerprint": k.fingerprint(), "tcpPort": k.tcp_port(), "udpPort": k.udp_port(),
                 "protocolVersion": konnekta_proto::PROTOCOL_VERSION, "version": env!("CARGO_PKG_VERSION"),
                 "mdns": c.mdns,
+                "usb": c.usb, "adb": crate::usb::find_adb().is_some(),
                 "interop": {
                     "kdeConnect": { "enabled": c.kde_connect.enabled, "tcpPort": k.adapter_ports(Protocol::KdeConnect).0 },
                     "flux": { "enabled": c.flux.enabled, "tcpPort": k.adapter_ports(Protocol::Flux).0 },
@@ -144,6 +145,9 @@ pub async fn call(k: &Konnekta, method: &str, p: Value) -> Result<Value> {
                 }
                 if let Some(a) = p.get("mdns").and_then(Value::as_bool) {
                     c.mdns = a;
+                }
+                if let Some(a) = p.get("usb").and_then(Value::as_bool) {
+                    c.usb = a;
                 }
                 if let Some(a) = p.get("syncPermissions").and_then(Value::as_bool) {
                     c.sync_permissions = a;

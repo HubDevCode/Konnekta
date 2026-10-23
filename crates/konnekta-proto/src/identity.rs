@@ -39,6 +39,9 @@ pub struct IdentityBody {
         skip_serializing_if = "Option::is_none"
     )]
     pub app_version: Option<String>,
+    /// Konnekta: the dialer reached us through a USB cable (adb forward).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub usb: bool,
 }
 
 impl IdentityBody {

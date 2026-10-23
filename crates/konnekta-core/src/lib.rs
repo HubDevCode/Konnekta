@@ -3,7 +3,8 @@
 //! Responsibilities:
 //! * device discovery (UDP broadcast, mDNS, extra addresses);
 //! * optional bridges to KDE Connect and Flux apps, translated in the link;
-//! * secure links: TCP + mutual TLS with certificate pinning;
+//! * secure links: TCP + mutual TLS with certificate pinning, over the network
+//!   or a USB cable (adb);
 //! * pairing with user-confirmed verification keys;
 //! * centralised, per-device, per-feature permissions;
 //! * plugin registry and packet dispatch (a packet only reaches a plugin if the
@@ -24,6 +25,7 @@ pub mod payload;
 pub mod permissions;
 pub mod plugin;
 pub mod trust;
+pub mod usb;
 pub mod util;
 
 pub use crate::core::{Konnekta, KonnektaBuilder};

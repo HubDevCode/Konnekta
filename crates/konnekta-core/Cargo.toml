@@ -23,6 +23,7 @@ hex.workspace = true
 socket2.workspace = true
 directories.workspace = true
 mdns-sd = "0.21"
+if-addrs = "0.15"
 fs2 = "0.4"
 
 [dev-dependencies]

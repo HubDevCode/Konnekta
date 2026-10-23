@@ -6,7 +6,7 @@
 
 use konnekta_proto::{DeviceType, IdentityBody, Packet, Protocol, types};
 use socket2::{Domain, Protocol as SockProto, Socket, Type};
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use tokio::net::UdpSocket;
 
 pub fn bind_udp(addr: SocketAddr) -> std::io::Result<UdpSocket> {
@@ -68,8 +68,28 @@ pub fn native_announcement(id: &str, name: &str, ty: DeviceType, tcp_port: u16) 
             tcp_port: Some(tcp_port),
             app: Some("Konnekta".into()),
             app_version: None,
+            usb: false,
         },
     )
+}
+
+/// Announcement targets: the global broadcast also goes to the broadcast
+/// address of every interface, since the system sends it on one interface
+/// only (USB tethering, a second network card...).
+pub fn expand_targets(targets: &[IpAddr]) -> Vec<IpAddr> {
+    let mut out = targets.to_vec();
+    if targets.contains(&IpAddr::V4(Ipv4Addr::BROADCAST)) {
+        for i in if_addrs::get_if_addrs().unwrap_or_default() {
+            if let if_addrs::IfAddr::V4(a) = &i.addr
+                && !i.is_loopback()
+                && let Some(b) = a.broadcast
+                && !out.contains(&IpAddr::V4(b))
+            {
+                out.push(IpAddr::V4(b));
+            }
+        }
+    }
+    out
 }
 
 pub async fn announce(socket: &UdpSocket, packet: &Packet, targets: &[SocketAddr]) {
@@ -195,7 +215,6 @@ pub mod mdns {
 mod tests {
     use super::*;
     use serde_json::json;
-    use std::net::{IpAddr, Ipv4Addr};
 
     const FROM: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 9)), 5000);
 

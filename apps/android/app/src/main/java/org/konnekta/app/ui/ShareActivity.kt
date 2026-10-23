@@ -47,7 +47,7 @@ class ShareActivity : ComponentActivity() {
                             text = {
                                 Column {
                                     list.forEach { d ->
-                                        ActionCard(Icons.Filled.Computer, d.optString("name"), d.optString("address")) {
+                                        ActionCard(Icons.Filled.Computer, d.optString("name"), if (d.optBoolean("usb")) "cavo USB" else d.optString("address")) {
                                             choices = null
                                             Store.select(this@ShareActivity, d.optString("id"))
                                             deliver(ui, d.optString("id"))
