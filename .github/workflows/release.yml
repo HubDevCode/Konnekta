@@ -60,10 +60,12 @@ jobs:
       - run: npm install -g @tauri-apps/cli@2
       # Produces AppImage/deb/rpm (Linux), MSI/NSIS (Windows), .app (macOS: the
       # DMG step fails on GitHub's runners, so only the .app archive is built).
-      # Code signing is enabled automatically when the secrets are set.
-      - uses: tauri-apps/tauri-action@v0
+      # Code signing is enabled automatically when the secrets are set. Missing
+      # secrets must not be exported at all: Tauri treats an empty
+      # APPLE_CERTIFICATE / APPLE_ID as "sign and notarize" and fails on macOS.
+      - name: Signing secrets
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
@@ -71,6 +73,16 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          for v in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID TAURI_SIGNING_PRIVATE_KEY; do
+            val="${!v}"
+            if [ -n "$val" ]; then
+              { echo "$v<<KONNEKTA_EOF"; echo "$val"; echo "KONNEKTA_EOF"; } >> "$GITHUB_ENV"
+            fi
+          done
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           projectPath: apps/desktop/src-tauri
           tauriScript: tauri
