@@ -42,6 +42,9 @@ pub struct IdentityBody {
     /// Konnekta: the dialer reached us through a USB cable (adb forward).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub usb: bool,
+    /// Konnekta: the dialer reached us through Bluetooth.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub bluetooth: bool,
 }
 
 impl IdentityBody {

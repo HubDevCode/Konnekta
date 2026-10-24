@@ -81,14 +81,20 @@ fn reported_port(out: &str) -> Result<u16> {
     out.trim().parse().context("adb did not report the port")
 }
 
-/// A port mapping that is removed when dropped.
-pub struct Mapping {
+/// A port mapping that is removed when dropped: an adb one, or a stream
+/// listener of a Bluetooth session.
+pub enum Mapping {
+    Adb(AdbMapping),
+    Bluetooth(crate::bluetooth::Guard),
+}
+
+pub struct AdbMapping {
     serial: Arc<str>,
     kind: &'static str,
     port: u16,
 }
 
-impl Drop for Mapping {
+impl Drop for AdbMapping {
     fn drop(&mut self) {
         let (serial, kind, port) = (self.serial.clone(), self.kind, self.port);
         if let Ok(rt) = tokio::runtime::Handle::try_current() {
@@ -107,11 +113,11 @@ pub async fn forward(serial: &Arc<str>, remote: u16) -> Result<(SocketAddr, Mapp
     let port = reported_port(&out)?;
     Ok((
         SocketAddr::new(LOOPBACK, port),
-        Mapping {
+        Mapping::Adb(AdbMapping {
             serial: serial.clone(),
             kind: "forward",
             port,
-        },
+        }),
     ))
 }
 
@@ -122,11 +128,11 @@ pub async fn reverse(serial: &Arc<str>, local: u16) -> Result<(u16, Mapping)> {
     let port = reported_port(&out)?;
     Ok((
         port,
-        Mapping {
+        Mapping::Adb(AdbMapping {
             serial: serial.clone(),
             kind: "reverse",
             port,
-        },
+        }),
     ))
 }
 

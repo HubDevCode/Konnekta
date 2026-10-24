@@ -28,6 +28,7 @@ pub async fn call(k: &Konnekta, method: &str, p: Value) -> Result<Value> {
                 "protocolVersion": konnekta_proto::PROTOCOL_VERSION, "version": env!("CARGO_PKG_VERSION"),
                 "mdns": c.mdns,
                 "usb": c.usb, "adb": crate::usb::find_adb().is_some(),
+                "bluetooth": c.bluetooth, "bluetoothPort": k.bluetooth_port(),
                 "interop": {
                     "kdeConnect": { "enabled": c.kde_connect.enabled, "tcpPort": k.adapter_ports(Protocol::KdeConnect).0 },
                     "flux": { "enabled": c.flux.enabled, "tcpPort": k.adapter_ports(Protocol::Flux).0 },
@@ -78,6 +79,16 @@ pub async fn call(k: &Konnekta, method: &str, p: Value) -> Result<Value> {
                 serde_json::from_value(p.get("permission").cloned().unwrap_or_default())
                     .context("unknown permission")?;
             k.set_permission(s(&p, "deviceId")?, perm, b(&p, "granted")?)?;
+            Value::Null
+        }
+        // How to reach a paired device: "usb", "wifi", "bluetooth" or null
+        // (the fastest available). Remembered and synced with the device.
+        "setTransport" => {
+            let t = match p.get("transport").and_then(Value::as_str) {
+                None | Some("" | "auto") => None,
+                Some(x) => Some(crate::Transport::parse(x).context("unknown transport")?),
+            };
+            k.set_preferred_transport(s(&p, "deviceId")?, t)?;
             Value::Null
         }
         "setDevicePlugin" => {
@@ -148,6 +159,12 @@ pub async fn call(k: &Konnekta, method: &str, p: Value) -> Result<Value> {
                 }
                 if let Some(a) = p.get("usb").and_then(Value::as_bool) {
                     c.usb = a;
+                }
+                if let Some(a) = p.get("bluetooth").and_then(Value::as_bool) {
+                    c.bluetooth = a;
+                }
+                if let Some(a) = p.get("virtualCamera").and_then(Value::as_bool) {
+                    c.virtual_camera = a;
                 }
                 if let Some(a) = p.get("syncPermissions").and_then(Value::as_bool) {
                     c.sync_permissions = a;

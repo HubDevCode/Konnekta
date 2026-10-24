@@ -63,7 +63,19 @@ impl InputPlugin {
             meta: b.super_key,
         };
         if let (Some(x), Some(y)) = (b.abs_x, b.abs_y) {
-            out.push(InputEvent::MoveAbsolute { x, y });
+            // On the monitor the phone shows (the shared one, or its own
+            // virtual monitor), placed by the compositor; else the primary.
+            let extend = b.screen.as_deref() == Some("extend");
+            match konnekta_platform::display::pointer_region(extend)
+                .filter(|_| konnekta_platform::display::can_move_cursor())
+            {
+                Some(r) => {
+                    let (x, y) = r.at(x, y);
+                    out.push(InputEvent::MoveTo { x, y });
+                }
+                None if !extend => out.push(InputEvent::MoveAbsolute { x, y }),
+                None => {}
+            }
         }
         let click = |button, action| InputEvent::Button { button, action };
         if b.singleclick {

@@ -121,10 +121,12 @@ class KonnektaService : Service() {
     private var sms: Sms? = null
     private var dnd: Dnd? = null
     private var shots: Screenshots? = null
+    private var bluetooth: BluetoothBridge? = null
 
     /** Android integrations; each one checks its own permission. */
     private fun restartFeatures() {
-        media?.stop(); calls?.stop(); sms?.stop(); dnd?.stop(); shots?.stop()
+        media?.stop(); calls?.stop(); sms?.stop(); dnd?.stop(); shots?.stop(); bluetooth?.stop()
+        bluetooth = if (Settings.bluetooth.value) BluetoothBridge(this).also { it.start() } else null
         media = PhoneMedia(this).also { it.start() }
         calls = Calls(this).also { it.start() }
         sms = Sms(this).also { it.start() }
@@ -225,6 +227,8 @@ class KonnektaService : Service() {
     }
 
     private fun handle(core: Core, e: JSONObject) {
+        // "deviceConnected" carries the device itself, the others its id.
+        val deviceId = e.optString("deviceId").ifEmpty { e.optJSONObject("device")?.optString("id").orEmpty() }
         when (e.optString("event")) {
             "plugin" -> if (e.optString("kind") == "packet") {
                 val data = e.optJSONObject("data") ?: return
@@ -232,7 +236,7 @@ class KonnektaService : Service() {
             }
             "pairRequested" -> showPair(e, confirm = false)
             "pairConfirm" -> showPair(e, confirm = true)
-            "paired", "pairRejected" -> {
+            "pairRejected" -> {
                 pairPrompt.value = null
                 nm.cancel(N_PAIR)
             }
@@ -245,9 +249,17 @@ class KonnektaService : Service() {
                 PcMediaControls.remove(this, e.optString("deviceId"))
             }
             "deviceConnected", "paired" -> {
-                lastBattery?.let { b -> sendToAll(core, Types.BATTERY, b) }
-                dnd?.sendState(e.optString("deviceId"))
-                PcMediaControls.subscribe(core, e.optString("deviceId"))
+                if (e.optString("event") == "paired") {
+                    pairPrompt.value = null
+                    nm.cancel(N_PAIR)
+                }
+                // Only a paired computer takes these (a new one right after pairing).
+                val paired = e.optString("event") == "paired" || e.optJSONObject("device")?.optBoolean("paired") == true
+                if (deviceId.isNotEmpty() && paired) {
+                    lastBattery?.let { b -> sendToAll(core, Types.BATTERY, b) }
+                    dnd?.sendState(deviceId)
+                    PcMediaControls.subscribe(core, deviceId)
+                }
             }
         }
         when (e.optString("event")) {
@@ -330,7 +342,7 @@ class KonnektaService : Service() {
             Types.DND -> main.post { dnd?.apply(body) }
             Types.SCREENSHOT -> shots?.configure(deviceId, body)
             Types.PHOTO_REQUEST -> onPhotoRequest(core, deviceId, body.optString("mode", "photo"))
-            Types.MICROPHONE, Types.CAMERA, Types.PHONE_SCREEN, Types.DESKTOP, Types.SYSTEM_AUDIO, Types.PHONE_AUDIO ->
+            Types.MICROPHONE, Types.CAMERA, Types.PHONE_SCREEN, Types.DESKTOP, Types.SYSTEM_AUDIO, Types.PHONE_AUDIO, Types.EXTEND ->
                 onStreamPacket(core, deviceId, type, body)
         }
     }
@@ -628,7 +640,7 @@ class KonnektaService : Service() {
     override fun onDestroy() {
         running = false
         stopRing()
-        media?.stop(); calls?.stop(); sms?.stop(); dnd?.stop(); shots?.stop()
+        media?.stop(); calls?.stop(); sms?.stop(); dnd?.stop(); shots?.stop(); bluetooth?.stop()
         Streams.stopAll()
         runCatching { unregisterReceiver(battery) }
         multicast?.release()
@@ -641,6 +653,7 @@ class KonnektaService : Service() {
 val STREAM_NAMES = mapOf(
     "microphone" to "microfono", "camera" to "fotocamera", "phonescreen" to "schermo",
     "desktop" to "desktop remoto", "systemaudio" to "audio del computer", "phoneaudio" to "audio del telefono",
+    "extend" to "schermo secondario",
 )
 val STREAM_ASK = mapOf(
     "microphone" to "il microfono", "camera" to "la fotocamera come webcam", "phonescreen" to "lo schermo del telefono",

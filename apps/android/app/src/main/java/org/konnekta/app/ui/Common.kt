@@ -58,6 +58,7 @@ import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.TextButton
 import org.konnekta.app.state.Settings
+import org.konnekta.app.state.supports
 
 /** Run a core call off the main thread; errors become a toast. */
 suspend fun <T> core(toast: (String) -> Unit, f: (Core) -> T): T? =
@@ -102,6 +103,24 @@ val PERMISSION_LABELS = mapOf(
     "messages" to "SMS",
     "approve" to "Approvazione con impronta (sudo)",
 )
+
+/**
+ * Why a feature of computer [d] cannot run now, or null when it can: not
+ * connected, a computer without the feature, the permission off, or audio
+ * and video on a Bluetooth link (too slow).
+ */
+fun blockedReason(d: JSONObject?, permission: String? = null, type: String? = null, av: Boolean = false): String? {
+    if (d == null) return "Associa prima un computer"
+    val name = d.optString("name")
+    if (!d.optBoolean("connected")) return "$name non è raggiungibile"
+    if (type != null && !d.supports(type)) return "$name non ha questa funzione: aggiorna Konnekta sul computer"
+    if (permission != null) {
+        val granted = d.optJSONArray("permissions")?.let { a -> (0 until a.length()).any { a.optString(it) == permission } } ?: false
+        if (!granted) return "Permesso «${PERMISSION_LABELS[permission] ?: permission}» non attivo per questa funzione"
+    }
+    if (av && d.optBoolean("bluetooth")) return "Audio e video non sono disponibili con il collegamento Bluetooth: usa Wi-Fi o il cavo"
+    return null
+}
 
 @Composable
 fun StatusDot(on: Boolean, modifier: Modifier = Modifier) {
@@ -162,6 +181,8 @@ fun ActionCard(
     highlight: Boolean = false,
     trailing: @Composable (() -> Unit)? = null,
     onLongClick: (() -> Unit)? = null,
+    /** Tap while disabled (e.g. a toast saying why). */
+    onDisabledClick: (() -> Unit)? = null,
     onClick: () -> Unit,
 ) {
     val scheme = MaterialTheme.colorScheme
@@ -170,7 +191,11 @@ fun ActionCard(
         color = if (highlight) scheme.primaryContainer else scheme.surfaceContainerLow,
         border = BorderStroke(1.dp, LocalStatus.current.border),
         modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).clip(RoundedCornerShape(14.dp))
-            .combinedClickable(enabled = enabled, onLongClick = onLongClick, onClick = onClick),
+            .combinedClickable(
+                enabled = enabled || onDisabledClick != null,
+                onLongClick = onLongClick,
+                onClick = if (enabled) onClick else onDisabledClick ?: {},
+            ),
     ) {
         Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
             Icon(icon, null, tint = if (enabled) scheme.primary else scheme.onSurfaceVariant.copy(alpha = .5f))
@@ -247,6 +272,8 @@ data class Fn(
     val trailing: (@Composable () -> Unit)? = null,
     /** Long press: a page with the feature's details (e.g. the webcam preview). */
     val onLongClick: (() -> Unit)? = null,
+    /** Why it cannot run now (see [blockedReason]): shown dimmed, a tap says why. */
+    val blocked: String? = null,
     val onClick: () -> Unit,
 ) {
     /** Stable id for the saved order: the title, which never names a device. */
@@ -341,8 +368,12 @@ fun CustomizeButton(screen: String) {
 @Composable
 fun FnList(items: List<Fn>) {
     val grid by Store.grid.collectAsState()
+    val ui = LocalUi.current
     if (!grid) {
-        items.forEach { ActionCard(it.icon, it.title, it.subtitle, it.enabled, it.highlight, it.trailing, it.onLongClick, it.onClick) }
+        items.forEach {
+            ActionCard(it.icon, it.title, it.subtitle, it.enabled && it.blocked == null, it.highlight, it.trailing, it.onLongClick,
+                onDisabledClick = { ui.toast(it.blocked ?: "Non disponibile ora") }, onClick = it.onClick)
+        }
         return
     }
     items.chunked(2).forEach { row ->
@@ -356,17 +387,20 @@ fun FnList(items: List<Fn>) {
 @Composable
 private fun FnTile(f: Fn, modifier: Modifier) {
     val scheme = MaterialTheme.colorScheme
+    val ui = LocalUi.current
+    val on = f.enabled && f.blocked == null
     Surface(
         shape = RoundedCornerShape(14.dp),
         color = if (f.highlight) scheme.primaryContainer else scheme.surfaceContainerLow,
         border = BorderStroke(1.dp, LocalStatus.current.border),
         modifier = modifier.padding(vertical = 4.dp).clip(RoundedCornerShape(14.dp))
-            .combinedClickable(enabled = f.enabled, onLongClick = f.onLongClick, onClick = f.onClick),
+            .combinedClickable(onLongClick = f.onLongClick,
+                onClick = if (on) f.onClick else ({ ui.toast(f.blocked ?: "Non disponibile ora") })),
     ) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Icon(f.icon, null, tint = if (f.enabled) scheme.primary else scheme.onSurfaceVariant.copy(alpha = .5f))
+            Icon(f.icon, null, tint = if (on) scheme.primary else scheme.onSurfaceVariant.copy(alpha = .5f))
             Text(f.title, style = MaterialTheme.typography.titleSmall,
-                color = if (f.enabled) scheme.onSurface else scheme.onSurfaceVariant.copy(alpha = .6f))
+                color = if (on) scheme.onSurface else scheme.onSurfaceVariant.copy(alpha = .6f))
             Text(f.subtitle, style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant,
                 maxLines = 3, overflow = TextOverflow.Ellipsis)
             f.trailing?.invoke()

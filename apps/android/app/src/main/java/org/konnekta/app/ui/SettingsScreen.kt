@@ -14,6 +14,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Slideshow
@@ -88,6 +89,16 @@ fun SettingsScreen(onBack: () -> Unit) {
                 onValueChangeFinished = { Settings.setScrollSpeed(ctx, v) })
         }
 
+        SectionTitle("Desktop remoto e schermo secondario")
+        val pointer by Settings.pointerMode.collectAsState()
+        Choice(
+            "Come muovi il mouse con il dito",
+            listOf(Settings.PointerMode.Direct to "Tocca dove vuoi", Settings.PointerMode.Touchpad to "Come un touchpad"),
+            pointer,
+        ) { Settings.setPointerMode(ctx, it) }
+        Hint(if (pointer == Settings.PointerMode.Direct) "Il puntatore va dove tocchi: tocca per cliccare, trascina per trascinare."
+            else "Trascina per spostare il puntatore, tocca per cliccare, tocca due volte e trascina per selezionare.")
+
         SectionTitle("Lettore del computer")
         val pcMedia by Settings.pcMediaControls.collectAsState()
         ActionCard(
@@ -108,6 +119,23 @@ fun SettingsScreen(onBack: () -> Unit) {
             else "Cambiano slide solo con la schermata Presentazione aperta",
             trailing = { Switch(anywhere, { Settings.setPresenterAnywhere(ctx, it) }) },
         ) { Settings.setPresenterAnywhere(ctx, !anywhere) }
+
+        SectionTitle("Collegamento")
+        val bt by Settings.bluetooth.collectAsState()
+        val askBt = androidx.activity.compose.rememberLauncherForActivityResult(
+            androidx.activity.result.contract.ActivityResultContracts.RequestPermission(),
+        ) { org.konnekta.app.service.KonnektaService.refreshFeatures(ctx) }
+        val setBt = { on: Boolean ->
+            Settings.setBluetooth(ctx, on)
+            if (on && !org.konnekta.app.service.BluetoothBridge.allowed(ctx)) askBt.launch(android.Manifest.permission.BLUETOOTH_CONNECT)
+            else org.konnekta.app.service.KonnektaService.refreshFeatures(ctx)
+        }
+        ActionCard(
+            Icons.Filled.Bluetooth, "Bluetooth",
+            if (bt) "Il computer associato al telefono nelle impostazioni Bluetooth può collegarsi anche senza Wi-Fi né cavo"
+            else "Spento: solo rete e cavo USB",
+            trailing = { Switch(bt, { setBt(it) }) },
+        ) { setBt(!bt) }
 
         SectionTitle("Sul telefono")
         NotificationsSetting()

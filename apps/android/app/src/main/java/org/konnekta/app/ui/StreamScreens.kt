@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.media.projection.MediaProjectionManager
 import android.view.SurfaceHolder
 import android.view.SurfaceView
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -176,6 +177,7 @@ fun ColumnScope.RemoteDesktopScreen(current: JSONObject?, onBack: () -> Unit) {
     val live by Streams.live.collectAsState()
     val size by Streams.desktopSize.collectAsState()
     val running = live.containsKey("desktop/$id")
+    val pointerMode by Settings.pointerMode.collectAsState()
     val queue = remember { Channel<JSONObject>(Channel.UNLIMITED) }
     // Ask (again) whenever the computer is connected and nothing is running.
     val connected = current.optBoolean("connected")
@@ -204,7 +206,7 @@ fun ColumnScope.RemoteDesktopScreen(current: JSONObject?, onBack: () -> Unit) {
                     })
                 }
             }, Modifier.fillMaxSize())
-            Box(Modifier.fillMaxSize().pointerInput(id) { remoteTouch(queue) })
+            Box(Modifier.fillMaxSize().pointerInput(id, pointerMode) { remoteTouch(queue, pointerMode, extend = false) })
             if (size == null) Text(if (running) "Attendo l'immagine…" else "Chiedo lo schermo al computer…",
                 Modifier.align(Alignment.Center), color = Color.White)
         }
@@ -224,25 +226,47 @@ fun ColumnScope.RemoteDesktopScreen(current: JSONObject?, onBack: () -> Unit) {
             Column(Modifier.fillMaxSize()) {
                 SubHeader("Desktop remoto", current.optString("name"), onBack)
                 Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) { video(Modifier.fillMaxWidth()) }
-                Hint("Tocca per cliccare · trascina per muovere · due dita per scorrere · tre dita di lato cambiano workspace · tieni premuto per il tasto destro. " +
-                    "Ruota il telefono per vederlo più grande.")
+                Hint(pointerHint(pointerMode) + " Ruota il telefono per vederlo più grande.")
             }
         }
     }
 }
 
-private suspend fun androidx.compose.ui.input.pointer.PointerInputScope.remoteTouch(queue: Channel<JSONObject>) {
+/** How to use the touch surface, for the current pointer mode. */
+fun pointerHint(mode: Settings.PointerMode) = when (mode) {
+    Settings.PointerMode.Direct -> "Tocca per cliccare dove tocchi · trascina per trascinare · due dita per scorrere · tieni premuto per il tasto destro · tre dita di lato cambiano workspace."
+    Settings.PointerMode.Touchpad -> "Trascina per muovere il puntatore · tocca per cliccare · tocca due volte e trascina per selezionare · due dita per scorrere · tieni premuto per il tasto destro."
+}
+
+/**
+ * Touches on the computer's picture. [mode]: the pointer goes where the
+ * finger is (absolute), or the picture is a touchpad (relative moves, at a
+ * speed that crosses the computer's screen as the finger crosses the
+ * picture). [extend]: the picture is the phone's own virtual monitor.
+ */
+private suspend fun androidx.compose.ui.input.pointer.PointerInputScope.remoteTouch(
+    queue: Channel<JSONObject>, mode: Settings.PointerMode, extend: Boolean,
+) {
     fun abs(x: Float, y: Float) = JSONObject()
         .put("konnektaAbsX", (x / size.width).coerceIn(0f, 1f).toDouble())
         .put("konnektaAbsY", (y / size.height).coerceIn(0f, 1f).toDouble())
+        .apply { if (extend) put("konnektaScreen", "extend") }
+    val touchpad = mode == Settings.PointerMode.Touchpad
     val swipeMin = 45.dp.toPx()
+    var lastTap = 0L
     awaitEachGesture {
         val down = awaitFirstDown()
         val start = down.uptimeMillis
+        // Touchpad: a tap and then a press right after drags (button held).
+        val dragHold = touchpad && start - lastTap < 300
+        var holding = false
         var maxPointers = 1
         var moved = 0f
         var dragging = false
         val swipe = ThreeFingerSwipe(swipeMin)
+        // Touchpad speed: the whole picture is the whole computer screen.
+        val remote = Streams.desktopSize.value
+        val gain = remote?.let { (rw, _) -> (rw.toFloat() / size.width).coerceIn(0.5f, 6f) } ?: 1.5f
         while (true) {
             val ev = awaitPointerEvent()
             val pressed = ev.changes.filter { it.pressed }
@@ -261,17 +285,125 @@ private suspend fun androidx.compose.ui.input.pointer.PointerInputScope.remoteTo
                     // Raw distance: the computer turns it into wheel steps and keeps the remainder.
                     val k = Settings.scrollSpeed.value
                     queue.trySend(JSONObject().put("dx", dx * k).put("dy", dy * k).put("scroll", true))
+                } else if (touchpad) {
+                    if (dragHold && !holding && moved > 6f) {
+                        holding = true
+                        queue.trySend(JSONObject().put("singlehold", true))
+                    }
+                    if (moved > 3f) {
+                        dragging = true
+                        queue.trySend(JSONObject().put("dx", (dx * gain).toDouble()).put("dy", (dy * gain).toDouble()))
+                    }
                 } else if (moved > 12f) {
-                    dragging = true
+                    // Direct: the first move presses the button where the finger
+                    // started, so dragging selects or moves windows.
+                    if (!dragging) {
+                        dragging = true
+                        queue.trySend(abs(down.position.x, down.position.y).put("singlehold", true))
+                        holding = true
+                    }
                     queue.trySend(abs(c.position.x, c.position.y))
                 }
             }
         }
         val held = android.os.SystemClock.uptimeMillis() - start
+        if (holding) queue.trySend(JSONObject().put("singlerelease", true))
         when {
             dragging || maxPointers >= 2 -> {}
+            touchpad && moved < 12f && isLongPress(held) -> queue.trySend(JSONObject().put("rightclick", true))
+            touchpad && moved < 12f -> {
+                queue.trySend(JSONObject().put("singleclick", true))
+                lastTap = android.os.SystemClock.uptimeMillis()
+            }
             moved < 12f && isLongPress(held) -> queue.trySend(abs(down.position.x, down.position.y).put("rightclick", true))
             moved < 12f -> queue.trySend(abs(down.position.x, down.position.y).put("singleclick", true))
+        }
+    }
+}
+
+/**
+ * The phone as a second monitor of the computer: the computer makes a
+ * monitor of the phone's size (arranged in its display settings like any
+ * other) and the phone shows it full screen, in landscape. Touches drive
+ * the pointer as set in Impostazioni (where you touch, or touchpad).
+ */
+@Composable
+fun ExtendScreen(current: JSONObject?, onBack: () -> Unit) {
+    val id = current?.optString("id") ?: return onBack()
+    val ctx = LocalContext.current
+    val live by Streams.live.collectAsState()
+    val size by Streams.desktopSize.collectAsState()
+    val running = live.containsKey("extend/$id")
+    val pointerMode by Settings.pointerMode.collectAsState()
+    val queue = remember { Channel<JSONObject>(Channel.UNLIMITED) }
+    var help by remember { mutableStateOf(true) }
+    val connected = current.optBoolean("connected")
+    // Landscape, full screen, screen kept on while it shows the monitor.
+    DisposableEffect(Unit) {
+        val act = ctx as? Activity
+        val before = act?.requestedOrientation
+        act?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        act?.window?.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        val bars = act?.window?.let { androidx.core.view.WindowCompat.getInsetsController(it, it.decorView) }
+        bars?.systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        bars?.hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+        onDispose {
+            bars?.show(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+            act?.window?.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            if (before != null) act.requestedOrientation = before
+        }
+    }
+    LaunchedEffect(id, connected) {
+        if (connected && !Streams.live.value.containsKey("extend/$id")) {
+            // The real size of the screen, in landscape: the monitor matches it pixel for pixel.
+            val b = if (android.os.Build.VERSION.SDK_INT >= 30) (ctx as? Activity)?.windowManager?.maximumWindowMetrics?.bounds else null
+            val (w, h) = b?.let { maxOf(it.width(), it.height()) to minOf(it.width(), it.height()) }
+                ?: ctx.resources.displayMetrics.let { maxOf(it.widthPixels, it.heightPixels) to minOf(it.widthPixels, it.heightPixels) }
+            Streams.request(id, "extend", JSONObject().put("width", w).put("height", h).put("fps", 60))
+        }
+    }
+    LaunchedEffect(id) {
+        withContext(Dispatchers.IO) {
+            for (b in queue) runCatching { KonnektaApp.core?.sendPacket(id, Types.INPUT, b) }
+        }
+    }
+    LaunchedEffect(help) {
+        if (help) {
+            kotlinx.coroutines.delay(6000)
+            help = false
+        }
+    }
+    DisposableEffect(id) { onDispose { Thread { Streams.stop(id, "extend") }.start() } }
+    BackHandler { onBack() }
+
+    Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
+        val ratio = size?.let { (w, h) -> w.toFloat() / h } ?: (16f / 9f)
+        Box(Modifier.fillMaxSize().aspectRatio(ratio, matchHeightConstraintsFirst = true)) {
+            AndroidView(factory = { c ->
+                SurfaceView(c).apply {
+                    holder.addCallback(object : SurfaceHolder.Callback {
+                        override fun surfaceCreated(h: SurfaceHolder) { Streams.desktopSurface = h.surface }
+                        override fun surfaceChanged(h: SurfaceHolder, f: Int, w: Int, hh: Int) {}
+                        override fun surfaceDestroyed(h: SurfaceHolder) { Streams.desktopSurface = null }
+                    })
+                }
+            }, Modifier.fillMaxSize())
+            Box(Modifier.fillMaxSize().pointerInput(id, pointerMode) { remoteTouch(queue, pointerMode, extend = true) })
+        }
+        if (size == null) Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(if (running) "Il monitor è pronto, attendo l'immagine…" else "Chiedo a ${current.optString("name")} un nuovo monitor…", color = Color.White)
+            Text("Su ${current.optString("name")} il telefono compare come monitor nelle impostazioni dello schermo.",
+                color = Color.White.copy(alpha = .7f), style = MaterialTheme.typography.bodySmall)
+        }
+        if (help && size != null) Surface(color = Color.Black.copy(alpha = .6f), shape = RoundedCornerShape(12.dp),
+            modifier = Modifier.align(Alignment.BottomCenter).padding(12.dp)) {
+            Text(pointerHint(pointerMode) + " Indietro per chiudere.", Modifier.padding(10.dp), color = Color.White,
+                style = MaterialTheme.typography.bodySmall)
+        }
+        Surface(onClick = onBack, shape = RoundedCornerShape(12.dp), color = Color.Black.copy(alpha = .35f),
+            modifier = Modifier.align(Alignment.TopStart).padding(8.dp)) {
+            androidx.compose.material3.Icon(Icons.AutoMirrored.Filled.ArrowBack, "Chiudi lo schermo secondario",
+                Modifier.padding(6.dp), tint = Color.White.copy(alpha = .8f))
         }
     }
 }

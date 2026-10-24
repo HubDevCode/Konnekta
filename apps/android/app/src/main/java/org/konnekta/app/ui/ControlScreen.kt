@@ -67,6 +67,7 @@ import androidx.compose.material.icons.filled.KeyboardHide
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.ScreenShare
 import androidx.compose.material.icons.filled.DesktopWindows
+import androidx.compose.material.icons.filled.Monitor
 import androidx.compose.material.icons.filled.Speaker
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
@@ -133,7 +134,8 @@ import kotlin.math.abs
 fun ControlScreen(current: JSONObject?, open: (Route) -> Unit) {
     val ctx = androidx.compose.ui.platform.LocalContext.current
     val online = current?.optBoolean("connected") == true
-    fun can(type: String) = online && current?.supports(type) == true
+    /** Why a feature cannot run now (permission, link, Bluetooth for audio/video), or null. */
+    fun why(permission: String, type: String, av: Boolean = false) = blockedReason(current, permission, type, av)
     val live by Streams.live.collectAsState()
     val start = rememberStreamStarter()
     val prefs = remember { ctx.getSharedPreferences("konnekta", android.content.Context.MODE_PRIVATE) }
@@ -152,28 +154,32 @@ fun ControlScreen(current: JSONObject?, open: (Route) -> Unit) {
             else start(Streams.newRequest(id, name, plugin, params))
         }
         /** A stream: highlighted while it runs, tap to stop. */
-        fun stream(icon: ImageVector, title: String, subtitle: String, plugin: String, enabled: Boolean,
+        fun stream(icon: ImageVector, title: String, subtitle: String, plugin: String, blocked: String?,
                    trailing: (@Composable () -> Unit)? = null, longClick: (() -> Unit)? = null, onClick: () -> Unit) =
-            Fn(icon, title, if (on(plugin)) "Dal vivo · tocca per fermare" else subtitle, enabled || on(plugin), on(plugin),
-                trailing = trailing, onLongClick = longClick, onClick = onClick)
+            Fn(icon, title, if (on(plugin)) "Dal vivo · tocca per fermare" else subtitle, true, on(plugin),
+                trailing = trailing, onLongClick = longClick, blocked = if (on(plugin)) null else blocked, onClick = onClick)
         if (!online) Hint("$name non è raggiungibile: i comandi si attivano quando si collega.")
+        else if (current.optBoolean("bluetooth")) Hint("Collegato via Bluetooth: audio e video restano spenti finché non torni su Wi-Fi o cavo.")
 
         FnSections("control", listOf(FnSection("toPc", "Al computer", listOf(
-            stream(Icons.Filled.Mic, "Microfono", "Il telefono diventa il microfono di $name", "microphone", can(Types.MICROPHONE)) {
+            stream(Icons.Filled.Mic, "Microfono", "Il telefono diventa il microfono di $name", "microphone",
+                why("microphone", Types.MICROPHONE, av = true)) {
                 toggle("microphone")
             },
-            stream(Icons.Filled.Videocam, "Webcam", "La fotocamera ${if (front) "anteriore" else "posteriore"} come webcam · tieni premuto per l'anteprima", "camera",
-                can(Types.CAMERA), longClick = { open(Route.Camera) },
+            stream(Icons.Filled.Videocam, "Webcam", "La fotocamera ${if (front) "anteriore" else "posteriore"} come webcam · tieni premuto per le impostazioni", "camera",
+                why("camera", Types.CAMERA, av = true), longClick = { open(Route.Camera) },
                 trailing = {
                     TextButton(onClick = {
                         front = !front
                         prefs.edit().putBoolean("cameraFront", front).apply()
-                    }, enabled = !on("camera")) { Text(if (front) "Anteriore" else "Posteriore") }
+                        // Live: the stream switches lens without stopping.
+                        if (on("camera")) Streams.reconfigureCamera(id, CameraSettings.params(ctx))
+                    }) { Text(if (front) "Anteriore" else "Posteriore") }
                 },
             ) { toggle("camera", CameraSettings.params(ctx)) },
             stream(Icons.Filled.ScreenShare, "Schermo del telefono",
                 if (screenAudio) "Schermo e audio del telefono sul computer" else "Lo schermo del telefono sul computer",
-                "phonescreen", can(Types.PHONE_SCREEN),
+                "phonescreen", why("desktop", Types.PHONE_SCREEN, av = true),
                 trailing = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text("audio", style = MaterialTheme.typography.labelSmall)
@@ -186,26 +192,36 @@ fun ControlScreen(current: JSONObject?, open: (Route) -> Unit) {
             ) { toggle("phonescreen", JSONObject().put("withAudio", screenAudio)) },
             Fn(Icons.Filled.Headphones, "Audio del telefono",
                 if (on("phoneaudio") && !on("phonescreen")) "Dal vivo · tocca per fermare" else "Musica, video e giochi del telefono dalle casse di $name",
-                enabled = can(Types.PHONE_AUDIO) && android.os.Build.VERSION.SDK_INT >= 29,
-                highlight = on("phoneaudio") && !on("phonescreen")) { toggle("phoneaudio") },
+                enabled = android.os.Build.VERSION.SDK_INT >= 29,
+                highlight = on("phoneaudio") && !on("phonescreen"),
+                blocked = if (on("phoneaudio")) null else why("systemAudio", Types.PHONE_AUDIO, av = true)) { toggle("phoneaudio") },
         )),
         FnSection("fromPc", "Dal computer", listOf(
-            Fn(Icons.Filled.DesktopWindows, "Desktop remoto", "Vedi e controlla lo schermo del computer", can(Types.DESKTOP)) { open(Route.Desktop) },
-            stream(Icons.Filled.Speaker, "Audio del computer", "Ascolta sul telefono l'audio di $name", "systemaudio", can(Types.SYSTEM_AUDIO)) {
+            Fn(Icons.Filled.DesktopWindows, "Desktop remoto", "Vedi e controlla lo schermo del computer",
+                blocked = why("desktop", Types.DESKTOP, av = true)) { open(Route.Desktop) },
+            Fn(Icons.Filled.Monitor, "Schermo secondario", "Il telefono diventa un altro monitor di $name",
+                blocked = why("desktop", Types.EXTEND, av = true)) { open(Route.Extend) },
+            stream(Icons.Filled.Speaker, "Audio del computer", "Ascolta sul telefono l'audio di $name", "systemaudio",
+                why("systemAudio", Types.SYSTEM_AUDIO, av = true)) {
                 if (on("systemaudio")) Thread { Streams.stop(id, "systemaudio") }.start() else Streams.request(id, "systemaudio")
             },
         )),
         FnSection("commands", "Comandi", listOf(
-            Fn(Icons.Filled.MusicNote, "Media e audio", "Riproduzione, volume, uscite e ingressi audio", can(Types.MEDIA_REQUEST)) { open(Route.Media) },
-            Fn(Icons.Filled.TouchApp, "Touchpad e tastiera", "Muovi il puntatore e scrivi sul computer", can(Types.INPUT)) { open(Route.Touchpad) },
-            Fn(Icons.Filled.Slideshow, "Presentazione", "Avanti e indietro (anche con i tasti del volume), puntatore laser", can(Types.PRESENTER)) { open(Route.Presenter) },
+            Fn(Icons.Filled.MusicNote, "Media e audio", "Riproduzione, volume, uscite e ingressi audio",
+                blocked = why("mediaControl", Types.MEDIA_REQUEST)) { open(Route.Media) },
+            Fn(Icons.Filled.TouchApp, "Touchpad e tastiera", "Muovi il puntatore e scrivi sul computer",
+                blocked = why("remoteInput", Types.INPUT)) { open(Route.Touchpad) },
+            Fn(Icons.Filled.Slideshow, "Presentazione", "Avanti e indietro (anche con i tasti del volume), puntatore laser",
+                blocked = why("presenter", Types.PRESENTER)) { open(Route.Presenter) },
         )),
         FnSection("automations", "Automazioni", listOf(
-            Fn(Icons.Filled.Dashboard, "Mobile Deck", "I pulsanti configurati sul computer", can(Types.DECK_REQUEST)) { open(Route.Deck) },
-            Fn(Icons.Filled.Terminal, "Comandi personalizzati", "Avvia i comandi configurati sul computer", can(Types.COMMANDS_REQUEST)) { open(Route.Commands) },
+            Fn(Icons.Filled.Dashboard, "Mobile Deck", "I pulsanti configurati sul computer",
+                blocked = why("deck", Types.DECK_REQUEST)) { open(Route.Deck) },
+            Fn(Icons.Filled.Terminal, "Comandi personalizzati", "Avvia i comandi configurati sul computer",
+                blocked = why("commands", Types.COMMANDS_REQUEST)) { open(Route.Commands) },
         ))))
         CustomizeButton("control")
-        Hint("Le voci spente si attivano concedendo il permesso, qui (Computer › Permessi) o sul computer: le due app restano allineate.")
+        Hint("Le voci spente dicono perché quando le tocchi; i permessi si concedono qui (Computer › il computer) o sul computer: le due app restano allineate.")
     }
 }
 

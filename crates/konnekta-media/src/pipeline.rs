@@ -60,7 +60,9 @@ fn scale_filter(height: u32) -> String {
     format!("scale=-2:'min(ih,{height})'")
 }
 
-pub fn screen_capture_command(q: Quality) -> Result<(String, Vec<String>)> {
+/// Capture of the screen as H.264 in FLV. `output` names the monitor
+/// (Wayland compositors); none = the one the capture tool picks.
+pub fn screen_capture_command(q: Quality, output: Option<&str>) -> Result<(String, Vec<String>)> {
     let fps = q.fps.to_string();
     let rate = format!("{}k", q.bitrate_kbps);
     let gop = (q.fps * 2).to_string();
@@ -129,7 +131,7 @@ pub fn screen_capture_command(q: Quality) -> Result<(String, Vec<String>)> {
     };
     #[cfg(target_os = "linux")]
     {
-        if let Some(gsr) = gpu_screen_recorder(q) {
+        if let Some(gsr) = gpu_screen_recorder(q, output) {
             return Ok(gsr);
         }
         if std::env::var_os("WAYLAND_DISPLAY").is_some() {
@@ -149,6 +151,9 @@ pub fn screen_capture_command(q: Quality) -> Result<(String, Vec<String>)> {
                 {
                     a.extend(["-p".into(), format!("{k}={v}")]);
                 }
+                if let Some(o) = output {
+                    a.extend(["-o".into(), o.into()]);
+                }
                 // wf-recorder opens the output by name: "pipe:1" is stdout.
                 a.extend(["-f".into(), "pipe:1".into()]);
                 return Ok(("wf-recorder".into(), a));
@@ -159,6 +164,9 @@ pub fn screen_capture_command(q: Quality) -> Result<(String, Vec<String>)> {
                      or an X11 session; portal-based capture is not available yet"
                 );
             }
+        }
+        if output.is_some_and(|o| o.starts_with("KONNEKTA-")) {
+            bail!("the phone's virtual monitor needs wf-recorder or gpu-screen-recorder");
         }
         let display = std::env::var("DISPLAY").unwrap_or_else(|_| ":0".into());
         return Ok((
@@ -191,7 +199,7 @@ pub fn screen_capture_command(q: Quality) -> Result<(String, Vec<String>)> {
     }
     #[allow(unreachable_code)]
     {
-        let _ = (enc, fps);
+        let _ = (enc, fps, output);
         bail!("screen capture not supported on this platform")
     }
 }
@@ -199,12 +207,12 @@ pub fn screen_capture_command(q: Quality) -> Result<(String, Vec<String>)> {
 /// gpu-screen-recorder captures and encodes on the GPU (zero copy), the way
 /// Flux does; used when installed and the monitor is known (Hyprland).
 #[cfg(target_os = "linux")]
-fn gpu_screen_recorder(q: Quality) -> Option<(String, Vec<String>)> {
+fn gpu_screen_recorder(q: Quality, output: Option<&str>) -> Option<(String, Vec<String>)> {
     if std::env::var("KONNEKTA_CAPTURE").is_ok_and(|c| c != "gsr") || !which("gpu-screen-recorder")
     {
         return None;
     }
-    let (name, w, h) = focused_monitor()?;
+    let (name, w, h) = hyprland_monitor(output)?;
     let (w, h) = fit(w, h, q.height);
     let args = [
         "-w",
@@ -237,22 +245,26 @@ fn gpu_screen_recorder(q: Quality) -> Option<(String, Vec<String>)> {
 }
 
 #[cfg(not(target_os = "linux"))]
-fn gpu_screen_recorder(_: Quality) -> Option<(String, Vec<String>)> {
+fn gpu_screen_recorder(_: Quality, _: Option<&str>) -> Option<(String, Vec<String>)> {
     None
 }
 
-/// Name and size (as captured) of the focused Hyprland monitor.
+/// Name and size (as captured) of a Hyprland monitor: `name`, or the
+/// focused one.
 #[cfg(target_os = "linux")]
-fn focused_monitor() -> Option<(String, u32, u32)> {
+fn hyprland_monitor(name: Option<&str>) -> Option<(String, u32, u32)> {
     let out = std::process::Command::new("hyprctl")
         .args(["monitors", "-j"])
         .output()
         .ok()?;
     let ms: Vec<serde_json::Value> = serde_json::from_slice(&out.stdout).ok()?;
-    let m = ms
-        .iter()
-        .find(|m| m["focused"].as_bool() == Some(true))
-        .or_else(|| ms.first())?;
+    let m = match name {
+        Some(n) => ms.iter().find(|m| m["name"].as_str() == Some(n))?,
+        None => ms
+            .iter()
+            .find(|m| m["focused"].as_bool() == Some(true))
+            .or_else(|| ms.first())?,
+    };
     let (mut w, mut h) = (m["width"].as_u64()? as u32, m["height"].as_u64()? as u32);
     // A rotated monitor is captured with its sides swapped.
     if m["transform"].as_u64().unwrap_or(0) % 2 == 1 {
@@ -405,7 +417,7 @@ mod tests {
     #[test]
     fn screen_command_has_low_latency_flags() {
         let q = crate::abr::DEFAULT_LADDER[2];
-        if let Ok((prog, args)) = screen_capture_command(q)
+        if let Ok((prog, args)) = screen_capture_command(q, None)
             && prog == "ffmpeg"
         {
             let joined = args.join(" ");

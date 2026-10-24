@@ -256,6 +256,14 @@ pub struct MousepadBody {
         skip_serializing_if = "Option::is_none"
     )]
     pub abs_y: Option<f64>,
+    /// Konnekta: the screen the absolute position refers to: "extend" for
+    /// the phone's virtual monitor, none for the shared one.
+    #[serde(
+        rename = "konnektaScreen",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub screen: Option<String>,
     /// Konnekta extension: three-finger swipe, `left` / `right` (switch
     /// workspace) or `up` / `down` (overview).
     #[serde(

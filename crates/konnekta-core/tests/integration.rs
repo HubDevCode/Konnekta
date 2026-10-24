@@ -5,7 +5,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use konnekta_core::proto::{Packet, Protocol, types};
 use konnekta_core::{
-    Adapter, Config, DeviceHandle, Event, Konnekta, Permission, Plugin, PluginInfo,
+    Adapter, Config, DeviceHandle, Event, Konnekta, Permission, Plugin, PluginInfo, Transport,
 };
 use serde_json::{Value, json};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -93,6 +93,10 @@ fn config(name: &str) -> Config {
         announce: false,
         mdns: false,
         listen_udp: true,
+        // Never reach real phones by cable or Bluetooth from a test.
+        usb: false,
+        bluetooth: false,
+        virtual_camera: false,
         reconnect_interval_secs: 1,
         ..Config::default()
     }
@@ -305,6 +309,42 @@ async fn sensitive_permissions_are_enforced() {
         .unwrap();
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(*b.danger.ran.lock().unwrap(), 1);
+}
+
+#[tokio::test]
+async fn transport_choice_is_synced_and_falls_back() {
+    let mut a = node("A").await;
+    let mut b = node("B").await;
+    connect(&mut a, &mut b).await;
+    pair(&mut a, &mut b).await;
+    let (a_id, b_id) = (a.k.device_id().to_owned(), b.k.device_id().to_owned());
+    eventually(|| b.k.device(&a_id).is_some_and(|d| d.paired && d.connected)).await;
+    let d = a.k.device(&b_id).unwrap();
+    assert_eq!(d.transport, Some(Transport::Wifi));
+    assert!(d.transports.contains(&Transport::Wifi));
+
+    // Chosen on one side: the other learns it.
+    a.k.set_preferred_transport(&b_id, Some(Transport::Bluetooth))
+        .unwrap();
+    eventually(|| {
+        b.k.device(&a_id)
+            .is_some_and(|d| d.preferred_transport == Some(Transport::Bluetooth))
+    })
+    .await;
+    // No Bluetooth here: the network link stays meanwhile.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let d = a.k.device(&b_id).unwrap();
+    assert!(d.connected);
+    assert_eq!(d.transport, Some(Transport::Wifi));
+
+    // Back to automatic from the other side.
+    b.k.set_preferred_transport(&a_id, None).unwrap();
+    eventually(|| {
+        a.k.device(&b_id)
+            .is_some_and(|d| d.preferred_transport.is_none())
+    })
+    .await;
+    assert!(a.k.set_preferred_transport("nobody", None).is_err());
 }
 
 #[tokio::test]

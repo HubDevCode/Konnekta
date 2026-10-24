@@ -69,6 +69,7 @@ pub fn native_announcement(id: &str, name: &str, ty: DeviceType, tcp_port: u16) 
             app: Some("Konnekta".into()),
             app_version: None,
             usb: false,
+            bluetooth: false,
         },
     )
 }

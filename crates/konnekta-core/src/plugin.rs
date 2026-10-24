@@ -120,6 +120,12 @@ impl CoreHandle {
             .unwrap_or_default()
     }
 
+    /// Keep the "Konnekta Camera" listed while the app runs (setting).
+    pub fn keeps_virtual_camera(&self) -> bool {
+        self.upgrade()
+            .is_some_and(|i| i.config.read().unwrap().virtual_camera)
+    }
+
     pub fn download_dir(&self) -> PathBuf {
         self.upgrade()
             .map(|i| i.config.read().unwrap().download_dir.clone())

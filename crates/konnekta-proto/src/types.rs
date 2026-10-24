@@ -8,6 +8,10 @@ pub const PAIR: &str = "konnekta.pair";
 /// The permissions of a pair, kept the same on both devices (handled by the
 /// core, never by plugins). Body: `{"permissions": [...], "changedAt": ms}`.
 pub const PERMISSIONS: &str = "konnekta.permissions";
+/// The ways each side can reach the other and the one the pair chose
+/// (handled by the core). Body: `{"available": ["usb", "wifi",
+/// "bluetooth"], "preferred": "wifi" | null, "changedAt": ms}`.
+pub const TRANSPORTS: &str = "konnekta.transports";
 
 // --- Basics --------------------------------------------------------------------
 pub const PING: &str = "konnekta.ping";
@@ -81,3 +85,6 @@ pub const SYSTEM_AUDIO: &str = "konnekta.systemaudio";
 pub const PHONE_SCREEN: &str = "konnekta.phonescreen";
 /// Audio playing on the phone, played on the computer's speakers.
 pub const PHONE_AUDIO: &str = "konnekta.phoneaudio";
+/// The phone as a second monitor: the computer makes a virtual monitor of
+/// the phone's size and streams it, the phone sends touches back.
+pub const EXTEND: &str = "konnekta.extend";
