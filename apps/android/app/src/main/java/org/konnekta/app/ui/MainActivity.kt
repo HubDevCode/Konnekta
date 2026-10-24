@@ -79,6 +79,7 @@ val LocalUi = staticCompositionLocalOf<Ui> { error("no Ui") }
 
 class MainActivity : ComponentActivity() {
     private val askNotifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
+    private val askBluetooth = registerForActivityResult(ActivityResultContracts.RequestPermission()) { KonnektaService.refreshFeatures(this) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
@@ -87,6 +88,9 @@ class MainActivity : ComponentActivity() {
             askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
         Store.load(this)
+        if (org.konnekta.app.state.Settings.bluetooth.value && !org.konnekta.app.service.BluetoothBridge.allowed(this)) {
+            askBluetooth.launch(Manifest.permission.BLUETOOTH_CONNECT)
+        }
         KonnektaService.start(this)
         val ui = Ui(::toast, ::clipboardText)
         handle(intent)
@@ -154,6 +158,8 @@ sealed interface Route {
     data object Desktop : Route
     data object Settings : Route
     data object Camera : Route
+    data object Extend : Route
+    data object About : Route
     data class Device(val id: String) : Route
 }
 
@@ -204,9 +210,17 @@ private fun App() {
     // Over every screen, also inside a feature.
     RequestDialogs()
     StreamProblemDialog()
+    UpdateDialog()
+    // A new version on GitHub: asked once per start, like the desktop app.
+    LaunchedEffect(Unit) { org.konnekta.app.service.Updates.checkOnStart(ctx) }
 
     route?.let { r ->
         BackHandler { Nav.route.value = null }
+        // The second screen uses the whole display, bars and cut-outs included.
+        if (r == Route.Extend) {
+            ExtendScreen(current) { Nav.route.value = null }
+            return
+        }
         Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).safeDrawingPadding().padding(horizontal = 16.dp)) {
             val back = { Nav.route.value = null }
             when (r) {
@@ -219,6 +233,8 @@ private fun App() {
                 Route.Desktop -> RemoteDesktopScreen(current, back)
                 Route.Settings -> SettingsScreen(back)
                 Route.Camera -> CameraScreen(current, back)
+                Route.Extend -> {}
+                Route.About -> AboutScreen(back)
                 is Route.Device -> DeviceScreen(r.id, back)
             }
         }

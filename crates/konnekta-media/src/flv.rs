@@ -221,7 +221,7 @@ mod tests {
     #[ignore]
     async fn live_capture() {
         let q = crate::abr::DEFAULT_LADDER[3];
-        let (prog, args) = crate::pipeline::screen_capture_command(q).unwrap();
+        let (prog, args) = crate::pipeline::screen_capture_command(q, None).unwrap();
         println!("{prog} {}", args.join(" "));
         let mut p = crate::pipeline::ProcessPipeline::spawn(&prog, &args, false, true).unwrap();
         let mut r = FlvReader::new(p.stdout.take().unwrap());

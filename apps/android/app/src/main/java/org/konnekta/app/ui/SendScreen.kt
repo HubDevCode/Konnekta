@@ -79,21 +79,24 @@ fun SendScreen(current: JSONObject?, open: (Route) -> Unit) {
             )
         }
         FnSections("send", listOf(FnSection("quick", null, listOf(
-            Fn(Icons.Filled.ContentPasteGo, "Invia appunti", "Incollali sul computer", enabled = online, highlight = online) {
+            Fn(Icons.Filled.ContentPasteGo, "Invia appunti", "Incollali sul computer", highlight = online,
+                blocked = blockedReason(current, "clipboard", Types.CLIPBOARD)) {
                 val text = ui.clipboard()
                 if (text.isNullOrEmpty()) ui.toast("Gli appunti sono vuoti")
                 else scope.launch {
                     core(ui.toast) { it.sendPacket(id!!, Types.CLIPBOARD, JSONObject().put("content", text)) }?.let { ui.toast("Appunti inviati") }
                 }
             },
-            Fn(Icons.Filled.NotificationsActive, "Ping", "Fai comparire un avviso sul computer", enabled = online) {
+            Fn(Icons.Filled.NotificationsActive, "Ping", "Fai comparire un avviso sul computer",
+                blocked = blockedReason(current, "ping", Types.PING)) {
                 scope.launch { send(ui.toast, id!!, Types.PING, JSONObject().put("message", "Ping dal telefono")) }
             },
         )),
         FnSection("files", "File", listOf(
-            Fn(Icons.Filled.UploadFile, "Invia file", "Scegli dei file su questo telefono", enabled = online) { pick.launch(arrayOf("*/*")) },
+            Fn(Icons.Filled.UploadFile, "Invia file", "Scegli dei file su questo telefono",
+                blocked = blockedReason(current, "files", Types.SHARE)) { pick.launch(arrayOf("*/*")) },
             Fn(Icons.Filled.FolderOpen, "Prendi file", "Sfoglia le cartelle condivise del computer",
-                enabled = online && current?.supports(Types.BROWSE_REQUEST) == true) { open(Route.Browse) },
+                blocked = blockedReason(current, "browseFiles", Types.BROWSE_REQUEST)) { open(Route.Browse) },
         ))))
         CustomizeButton("send")
         Hint("Per inviare testo, link o foto da un'altra app, sceglili e tocca Condividi › Konnekta.")

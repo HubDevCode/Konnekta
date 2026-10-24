@@ -6,7 +6,8 @@ Collega smartphone e computer in modo **sicuro**, **modulare** e **multipiattafo
 Konnekta è un sistema **autonomo**, con protocollo, porte e app propri: un daemon Rust sul
 computer e app native sul telefono. Funziona sulla rete locale e da fuori casa (Tailscale/VPN),
 anche con un firewall che blocca le connessioni in ingresso, perché è il computer ad aprirle.
-Funziona anche **con il cavo USB**, senza Wi-Fi: vedi [Collegamento via cavo USB](#collegamento-via-cavo-usb).
+Funziona anche **con il cavo USB** e **via Bluetooth**, senza Wi-Fi: vedi
+[Collegamento via cavo USB](#collegamento-via-cavo-usb) e [Collegamento via Bluetooth](#collegamento-via-bluetooth).
 
 Per chi lo desidera ci sono due **ponti facoltativi**, spenti di default, verso altre app: le app
 **KDE Connect / GSConnect** e le app **Flux** possono collegarsi a Konnekta per le funzioni che
@@ -16,6 +17,30 @@ ha nomi e formati di Konnekta.
 | | Windows | macOS | Linux | Android | iOS |
 |---|:-:|:-:|:-:|:-:|:-:|
 | App | Tauri (MSI/NSIS) | Tauri (.app/.dmg) | Tauri (AppImage/deb/rpm) + CLI | nativa Kotlin/Compose | Flutter (la nativa SwiftUI è in sviluppo) |
+
+## Scaricare
+
+Le versioni pronte sono nelle [release su GitHub](https://github.com/HubDevCode/Konnekta/releases/latest):
+AppImage, .deb e .rpm per Linux, MSI e setup per Windows, .app per macOS, la CLI e l'APK Android
+(`arm64-v8a` per quasi tutti i telefoni, `x86_64` per gli emulatori, `universal` se non sai quale).
+L'app Android controlla a ogni avvio se c'è una versione nuova e propone di installarla
+(**Computer → Informazioni**).
+
+## Novità della 2.5.0
+
+- **Scelta del collegamento**: icone di Wi-Fi, Bluetooth e cavo sotto ogni computer; tenendolo premuto
+  si sceglie quale usare, la scelta è ricordata su entrambi i lati e, se non è disponibile, Konnekta
+  passa da solo alla migliore disponibile.
+- **Schermo secondario**: il telefono diventa un altro monitor del PC (Hyprland e Sway).
+- **Puntatore "dove tocchi" o "come un touchpad"**, per desktop remoto e schermo secondario.
+- **Webcam** riscritta: obiettivo, risoluzione e fps cambiano dal vivo, continua fuori dall'app e a
+  schermo spento; "Konnekta Camera" resta sempre presente sul PC mentre Konnekta è aperto.
+- **Bluetooth** più stabile (non si riconnette più ogni pochi secondi); audio e video sono disattivati
+  via Bluetooth perché la banda non basta.
+- Un tocco su una funzione senza permesso spiega quale permesso manca.
+- Il lettore musicale del PC torna nel centro di controllo del telefono.
+- App desktop: dispositivi divisi in **salvati** e **rilevati**, con le tecnologie disponibili.
+- Pagina **Informazioni** con controllo degli aggiornamenti sul telefono.
 
 ## Funzioni
 
@@ -36,8 +61,9 @@ ha nomi e formati di Konnekta.
 | Trova il telefono, batteria, ping | — | KDE Connect, Flux | |
 | **Mobile Deck**: griglia, pagine, categorie, profili, macro, stato dinamico | Deck (sensibile) | — | estendibile con azioni di qualunque plugin |
 | **Microfono del telefono** come microfono del PC | Microphone (sensibile) | — | dispositivo virtuale "Konnekta Microphone" |
-| **Webcam wireless** | Camera (sensibile) | — | v4l2loopback su Linux, OBS Virtual Camera su Windows/macOS |
-| **Desktop remoto** (vedi e controlla il PC) | Desktop + RemoteInput | — | H.264 a bitrate adattivo |
+| **Webcam wireless** | Camera (sensibile) | — | v4l2loopback su Linux ("Konnekta Camera" sempre presente mentre Konnekta è aperto), OBS Virtual Camera su Windows/macOS; obiettivo, risoluzione e fps cambiano dal vivo, continua a schermo spento |
+| **Desktop remoto** (vedi e controlla il PC) | Desktop + RemoteInput | — | H.264 a bitrate adattivo; il dito muove il puntatore dove tocchi o come un touchpad |
+| **Schermo secondario**: il telefono diventa un altro monitor del PC | Desktop + RemoteInput | — | Hyprland o Sway; si gestisce nelle impostazioni dello schermo come ogni monitor |
 | **Schermo del telefono** sul PC | Desktop | — | Android |
 | **Audio del PC** sul telefono | SystemAudio (sensibile) | — | |
 | **Non disturbare** sincronizzato con priorità configurabile | DoNotDisturb | Flux | |
@@ -63,6 +89,32 @@ certificato fissato, associazione e permessi invariati. Se il telefono è anche 
 ha la precedenza; staccandolo Konnekta torna alla rete da solo. Si disattiva in
 Impostazioni → Generale. Senza debug USB si può usare il **tethering USB** del telefono: gli
 annunci partono su ogni interfaccia di rete, compresa quella del cavo.
+
+## Collegamento via Bluetooth
+
+Senza Wi-Fi né cavo il computer può collegarsi al telefono via Bluetooth (RFCOMM). Per ora il lato
+computer è **solo Linux** (BlueZ); il telefono è Android.
+
+1. associa telefono e computer nelle impostazioni Bluetooth del sistema (una volta sola);
+2. sul telefono lascia attivo **Impostazioni → Collegamento → Bluetooth** e concedi il permesso
+   *Dispositivi nelle vicinanze*;
+3. con Konnekta aperto su entrambi, il computer si collega da solo ai telefoni associati: il
+   dispositivo appare come "Connesso · Bluetooth". Si disattiva in Impostazioni → Generale.
+
+Una sola connessione Bluetooth trasporta link e file con un piccolo multiplexer; sopra non cambia
+nulla: TLS reciproco, certificato fissato, associazione e permessi sono quelli di sempre. La banda
+del Bluetooth classico è bassa (circa 1-2 Mbit/s) e variabile: audio e video in tempo reale
+(microfono, webcam, schermo, desktop remoto, schermo secondario) sono **disattivati** finché il
+collegamento è Bluetooth; tutto il resto funziona.
+
+## Scegliere il collegamento
+
+Ogni dispositivo mostra con piccole icone come è raggiungibile ora (Wi-Fi, Bluetooth, cavo).
+Sul telefono, nella pagina Computer, **tieni premuto un computer** per scegliere la tecnologia da
+usare (sul computer: menu "Collegamento" nella scheda del dispositivo). La scelta è ricordata e
+sincronizzata su entrambi i dispositivi; quando non è disponibile Konnekta passa da solo alla più
+veloce disponibile (cavo, poi rete, poi Bluetooth) e torna a quella scelta appena c'è. Il tethering Bluetooth (PAN)
+funziona comunque senza questa funzione, perché gli annunci partono su ogni interfaccia.
 
 ## Sicurezza in breve
 
@@ -100,7 +152,7 @@ docs/                architettura, protocollo, sicurezza, piattaforme, rilascio,
 
 ## Compilare
 
-Requisiti: Rust ≥ 1.88. Per l'app desktop su Linux: `webkit2gtk-4.1`, `libayatana-appindicator`.
+Requisiti: Rust ≥ 1.88. Su Linux: `libdbus-1` (Bluetooth via BlueZ); per l'app desktop anche `webkit2gtk-4.1`, `libayatana-appindicator`.
 
 ```bash
 cargo test --workspace --exclude konnekta-desktop   # core + plugin + FFI
@@ -163,6 +215,8 @@ Classi CSS: `connected`, `low` (batteria ≤ 15%), `disconnected`, `none`, `off`
 | Desktop remoto | `ffmpeg` (X11) o `wf-recorder` (wlroots) | `ffmpeg` | `ffmpeg` |
 | Audio di sistema | `parec` | integrato (WASAPI loopback) | BlackHole |
 | Touchpad su Wayland | protocolli virtual-input o `ydotool` | integrato | integrato (permesso Accessibilità) |
+| Schermo secondario | Hyprland o Sway + `wf-recorder` | — | — |
+| Collegamento Bluetooth | BlueZ (`bluetoothd`) | — | — |
 
 ## Documentazione
 

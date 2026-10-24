@@ -65,6 +65,7 @@ pub fn all(platform: Platform) -> Vec<Arc<dyn Plugin>> {
         streams::StreamPlugin::camera(),
         streams::StreamPlugin::phone_screen(),
         streams::StreamPlugin::desktop(),
+        streams::StreamPlugin::extend(),
         streams::StreamPlugin::system_audio(),
         streams::StreamPlugin::phone_audio(),
     ]

@@ -9,8 +9,10 @@ use crate::link::{self, SecureStream};
 use crate::pairing::{self, Admission, PairState, RequestGuard};
 use crate::permissions::Permission;
 use crate::plugin::{CoreHandle, Plugin, PluginInfo};
+use crate::transport::Transport;
 use crate::trust::{TrustStore, TrustedDevice};
 use crate::usb;
+use crate::{bluetooth, device::Route};
 use anyhow::{Context, Result, bail};
 use konnekta_crypto::{FileKeyStore, KeyStore, LocalIdentity, PeerExpectation, verification_key};
 use konnekta_proto::bodies::PairBody;
@@ -33,6 +35,11 @@ const JANITOR_INTERVAL: Duration = Duration::from_secs(2);
 const USB_INTERVAL: Duration = Duration::from_secs(3);
 /// Wait after a failed USB dial (phone without Konnekta running).
 const USB_RETRY: Duration = Duration::from_secs(30);
+const BT_INTERVAL: Duration = Duration::from_secs(6);
+/// Wait after a failed Bluetooth dial (phone away, Konnekta not running).
+const BT_RETRY: Duration = Duration::from_secs(60);
+/// A device announced on the network this recently counts as reachable there.
+const SEEN_ON_NETWORK: Duration = Duration::from_secs(150);
 
 pub(crate) struct LinkEntry {
     handle: DeviceHandle,
@@ -81,6 +88,22 @@ pub(crate) struct Inner {
     mdns: Mutex<Option<discovery::mdns::Mdns>>,
     /// adb forward of the link of each phone attached by USB, by serial.
     usb_forwards: Mutex<HashMap<String, usb::Mapping>>,
+    /// Bluetooth connections to paired phones, by address.
+    bt_sessions: Mutex<HashMap<String, bluetooth::Session>>,
+    /// Device behind each Bluetooth address, once a link came up.
+    bt_known: Mutex<HashMap<String, String>>,
+    /// BlueZ, opened on first use.
+    bluez: tokio::sync::Mutex<Option<Arc<bluetooth::Bluez>>>,
+    /// Phone: loopback port where the Android app bridges Bluetooth.
+    bt_port: Mutex<Option<u16>>,
+    /// Device behind each adb serial, once a link came up, and the serials
+    /// attached now.
+    usb_known: Mutex<HashMap<String, String>>,
+    usb_attached: Mutex<HashSet<String>>,
+    /// Ways each device says it can reach us (`konnekta.transports`), and
+    /// what we last told it.
+    remote_transports: Mutex<HashMap<String, Vec<Transport>>>,
+    sent_transports: Mutex<HashMap<String, Vec<Transport>>>,
 }
 
 /// Builder for [`Konnekta`].
@@ -162,6 +185,14 @@ impl KonnektaBuilder {
             background: Mutex::default(),
             mdns: Mutex::new(None),
             usb_forwards: Mutex::default(),
+            bt_sessions: Mutex::default(),
+            bt_known: Mutex::default(),
+            bluez: tokio::sync::Mutex::new(None),
+            bt_port: Mutex::new(None),
+            usb_known: Mutex::default(),
+            usb_attached: Mutex::default(),
+            remote_transports: Mutex::default(),
+            sent_transports: Mutex::default(),
         });
         Ok(Konnekta { inner })
     }
@@ -302,6 +333,11 @@ impl Konnekta {
     /// Native TCP port.
     pub fn tcp_port(&self) -> u16 {
         self.inner.ports.lock().unwrap().tcp
+    }
+
+    /// Phone: loopback port where the Android app bridges Bluetooth.
+    pub fn bluetooth_port(&self) -> Option<u16> {
+        *self.inner.bt_port.lock().unwrap()
     }
 
     /// Native UDP port.
@@ -521,6 +557,28 @@ impl Konnekta {
             });
         }
 
+        // Phones reached over Bluetooth: the computer dials, the phone's
+        // Android app bridges its RFCOMM socket to a loopback port of the core.
+        if cfg!(target_os = "android") {
+            match bluetooth::serve(bluetooth::phone_policy()).await {
+                Ok((port, abort)) => {
+                    *inner.bt_port.lock().unwrap() = Some(port);
+                    inner.background.lock().unwrap().push(abort);
+                }
+                Err(e) => tracing::warn!("bluetooth bridge: {e:#}"),
+            }
+        } else if cfg!(target_os = "linux") {
+            let weak = Arc::downgrade(inner);
+            self.spawn_bg(async move {
+                loop {
+                    let Some(inner) = weak.upgrade() else { break };
+                    inner.bt_tick().await;
+                    drop(inner);
+                    tokio::time::sleep(BT_INTERVAL).await;
+                }
+            });
+        }
+
         // Pairing timeouts and idle unpaired links.
         let weak = Arc::downgrade(inner);
         self.spawn_bg(async move {
@@ -657,6 +715,11 @@ impl Konnekta {
 
     pub async fn unpair(&self, id: &str) -> Result<()> {
         self.inner.clone().unpair(id, true).await
+    }
+
+    /// Choose how to reach a paired device; `None` = the fastest available.
+    pub fn set_preferred_transport(&self, id: &str, t: Option<Transport>) -> Result<()> {
+        self.inner.set_preferred_transport(id, t)
     }
 
     pub fn set_permission(&self, id: &str, perm: Permission, granted: bool) -> Result<()> {
@@ -859,6 +922,7 @@ impl Inner {
                 app_version: (proto != Protocol::KdeConnect)
                     .then(|| env!("CARGO_PKG_VERSION").into()),
                 usb: false,
+                bluetooth: false,
             },
         )
     }
@@ -954,7 +1018,7 @@ impl Inner {
             }
             d.insert(a.device_id.clone(), (a.clone(), Instant::now()));
         }
-        if self.links.lock().unwrap().contains_key(&a.device_id) {
+        if !self.wants(&a.device_id, Transport::Wifi) {
             return;
         }
         // The dial still has to pass the certificate pin, so discovery can
@@ -1011,16 +1075,20 @@ impl Inner {
         self.usb_forwards
             .lock()
             .unwrap()
-            .retain(|s, _| serials.contains(s));
+            .retain(|s, _| s.starts_with("bt:") || serials.contains(s));
+        *self.usb_attached.lock().unwrap() = serials.iter().cloned().collect();
         for serial in serials {
             let linked = self
                 .links
                 .lock()
                 .unwrap()
                 .values()
-                .any(|l| l.handle.adb.as_deref() == Some(serial.as_str()));
+                .any(|l| matches!(&l.handle.route, Some(Route::Adb(s)) if **s == *serial));
+            // A known phone already on a better (or the chosen) way stays there.
+            let known = self.usb_known.lock().unwrap().get(&serial).cloned();
+            let better = known.is_some_and(|id| !self.wants(&id, Transport::Usb));
             let key = format!("usb:{serial}");
-            if linked || !self.should_dial(&key) {
+            if linked || better || !self.should_dial(&key) {
                 continue;
             }
             let this = self.clone();
@@ -1048,8 +1116,105 @@ impl Inner {
                         .unwrap()
                         .insert(serial.to_string(), mapping);
                     return self
-                        .establish(tls, Protocol::Konnekta, None, addr, true, Some(serial))
+                        .establish(
+                            tls,
+                            Protocol::Konnekta,
+                            None,
+                            addr,
+                            true,
+                            Some(Route::Adb(serial)),
+                        )
                         .await;
+                }
+                Err(e) => last = Some(e),
+            }
+        }
+        Err(last.context("no port")?)
+    }
+
+    /// Connect to paired phones over Bluetooth and dial their listener.
+    async fn bt_tick(self: &Arc<Self>) {
+        if !self.config.read().unwrap().bluetooth {
+            return;
+        }
+        let bluez = {
+            let mut g = self.bluez.lock().await;
+            if g.is_none() {
+                match bluetooth::open_bluez().await {
+                    Ok(b) => *g = Some(Arc::new(b)),
+                    Err(e) => {
+                        tracing::debug!("bluetooth unavailable: {e:#}");
+                        return;
+                    }
+                }
+            }
+            g.clone().unwrap()
+        };
+        self.bt_sessions
+            .lock()
+            .unwrap()
+            .retain(|_, s| !s.is_closed());
+        for peer in bluez.peers().await {
+            let key = format!("bt:{}", peer.address);
+            // Unknown phones are tried (they may run Konnekta); a known one
+            // only when Bluetooth would be better than its current link.
+            let known = self.bt_known.lock().unwrap().get(&peer.address).cloned();
+            let skip = known.is_some_and(|id| !self.wants(&id, Transport::Bluetooth));
+            if skip || !self.should_dial(&key) {
+                continue;
+            }
+            let this = self.clone();
+            let bluez = bluez.clone();
+            tokio::spawn(async move {
+                if let Err(e) = this.clone().dial_bluetooth(&bluez, &peer.address).await {
+                    tracing::debug!(phone = %peer.name, "bluetooth dial failed: {e:#}");
+                    this.dialing
+                        .lock()
+                        .unwrap()
+                        .insert(key, Instant::now() + BT_RETRY);
+                }
+            });
+        }
+    }
+
+    async fn dial_bluetooth(
+        self: Arc<Self>,
+        bluez: &bluetooth::Bluez,
+        address: &str,
+    ) -> Result<()> {
+        let existing = self.bt_sessions.lock().unwrap().get(address).cloned();
+        let session = match existing {
+            Some(s) => s,
+            None => {
+                let s = bluez.connect(address).await?;
+                self.bt_sessions
+                    .lock()
+                    .unwrap()
+                    .insert(address.to_owned(), s.clone());
+                s
+            }
+        };
+        let mut last = None;
+        for port in Protocol::Konnekta.tcp_ports().take(3) {
+            let (addr, guard) = session.forward(port).await?;
+            match link::dial_native(&self.identity, addr, PeerExpectation::Deferred).await {
+                Ok(tls) => {
+                    self.usb_forwards
+                        .lock()
+                        .unwrap()
+                        .insert(format!("bt:{address}"), usb::Mapping::Bluetooth(guard));
+                    let id = self
+                        .clone()
+                        .establish(
+                            tls,
+                            Protocol::Konnekta,
+                            None,
+                            addr,
+                            true,
+                            Some(Route::Bluetooth(session.clone())),
+                        )
+                        .await;
+                    return id;
                 }
                 Err(e) => last = Some(e),
             }
@@ -1061,7 +1226,7 @@ impl Inner {
         let cfg = self.config.read().unwrap().clone();
         let trusted: Vec<TrustedDevice> = self.trust.lock().unwrap().all().cloned().collect();
         for d in trusted {
-            if !cfg.speaks(d.protocol) || self.links.lock().unwrap().contains_key(&d.device_id) {
+            if !cfg.speaks(d.protocol) || !self.wants(&d.device_id, Transport::Wifi) {
                 continue;
             }
             if d.protocol == Protocol::KdeConnect {
@@ -1090,7 +1255,7 @@ impl Inner {
                         continue;
                     };
                     for addr in addrs.take(2) {
-                        if this.links.lock().unwrap().contains_key(&d.device_id) {
+                        if !this.wants(&d.device_id, Transport::Wifi) {
                             return;
                         }
                         match this
@@ -1170,17 +1335,26 @@ impl Inner {
         expected: Option<String>,
         addr: SocketAddr,
         outgoing: bool,
-        adb: Option<Arc<str>>,
+        route: Option<Route>,
     ) -> Result<()> {
         let peer_cert = link::peer_certificate(&tls).context("peer sent no certificate")?;
         let mut stream = BufReader::new(tls);
         let mut me = self.identity_packet(proto);
-        if adb.is_some() {
-            me.body.insert("usb".into(), Value::Bool(true));
+        match &route {
+            Some(Route::Adb(_)) => {
+                me.body.insert("usb".into(), Value::Bool(true));
+            }
+            Some(Route::Bluetooth(_)) => {
+                me.body.insert("bluetooth".into(), Value::Bool(true));
+            }
+            None => {}
         }
         let identity = link::exchange_identity(&mut stream, &me, proto).await?;
         // The dialer says it came through adb; only believable from loopback.
-        let usb = adb.is_some() || (identity.usb && !outgoing && addr.ip().is_loopback());
+        let from_loopback = !outgoing && addr.ip().is_loopback();
+        let usb = matches!(route, Some(Route::Adb(_))) || (identity.usb && from_loopback);
+        let bluetooth =
+            matches!(route, Some(Route::Bluetooth(_))) || (identity.bluetooth && from_loopback);
         let device_id = identity.device_id.clone();
         if expected.as_ref().is_some_and(|e| *e != device_id) {
             bail!("device answered with another identity");
@@ -1224,7 +1398,8 @@ impl Inner {
             peer_cert: Arc::new(peer_cert.clone()),
             outgoing,
             usb,
-            adb,
+            bluetooth,
+            route,
         };
 
         // Decide whether this link may replace an existing one.
@@ -1246,11 +1421,21 @@ impl Inner {
                 // A cable beats the network, both ways. Otherwise, for
                 // simultaneous connections both sides keep the one opened by
                 // the smaller device id. Same dialer: the newer one wins.
-                if old.handle.usb && !usb {
-                    tracing::debug!(device = %identity.device_name, "keeping the USB link");
+                let preferred = self
+                    .trust
+                    .lock()
+                    .unwrap()
+                    .get(&device_id)
+                    .and_then(|d| d.preferred_transport);
+                let (old_rank, new_rank) = (
+                    old.handle.transport().rank(preferred),
+                    Transport::of_link(usb, bluetooth).rank(preferred),
+                );
+                if old_rank > new_rank {
+                    tracing::debug!(device = %identity.device_name, "keeping the faster link");
                     return Ok(());
                 }
-                if old.handle.usb == usb && old_dialer != new_dialer && old_dialer < new_dialer {
+                if old_rank == new_rank && old_dialer != new_dialer && old_dialer < new_dialer {
                     tracing::debug!(device = %identity.device_name, "keeping existing link");
                     return Ok(());
                 }
@@ -1331,16 +1516,41 @@ impl Inner {
         };
         let old = self.links.lock().unwrap().insert(device_id.clone(), entry);
         if let Some(old) = old {
-            for t in old.tasks {
+            for t in &old.tasks {
                 t.abort();
             }
+            // Another way now (e.g. Wi-Fi to Bluetooth): what ran on the old
+            // link, like a stream, ends with it.
+            if old.handle.transport() != handle.transport() && old.pair.is_paired() {
+                for p in &self.plugins {
+                    p.on_disconnected(&device_id).await;
+                }
+            }
+        }
+        // Remember which device sits behind the cable or the Bluetooth address.
+        match &handle.route {
+            Some(Route::Adb(serial)) => {
+                self.usb_known
+                    .lock()
+                    .unwrap()
+                    .insert(serial.to_string(), device_id.clone());
+            }
+            Some(Route::Bluetooth(s)) => {
+                if let Some(a) = s.address() {
+                    self.bt_known
+                        .lock()
+                        .unwrap()
+                        .insert(a.to_owned(), device_id.clone());
+                }
+            }
+            None => {}
         }
         if trusted {
             self.trust.lock().unwrap().update(&device_id, |d| {
                 d.name = identity.device_name.clone();
                 d.device_type = identity.device_type;
                 // Over USB the address is our own loopback.
-                if !usb {
+                if !usb && !bluetooth {
                     d.last_address = Some(addr.ip());
                 }
                 if proto == Protocol::Konnekta {
@@ -1348,7 +1558,7 @@ impl Inner {
                 }
             });
         }
-        tracing::info!(device = %identity.device_name, %addr, usb, protocol = proto.label(), paired = trusted, "device connected");
+        tracing::info!(device = %identity.device_name, %addr, usb, bluetooth, protocol = proto.label(), paired = trusted, "device connected");
         if let Some(info) = self.device_info(&device_id) {
             let _ = self.events.send(Event::DeviceConnected { device: info });
         }
@@ -1410,6 +1620,8 @@ impl Inner {
 
     async fn notify_plugins_connected(&self, handle: &DeviceHandle) {
         self.send_permissions(handle.id());
+        self.sent_transports.lock().unwrap().remove(handle.id());
+        self.send_transports(handle.id());
         let disabled_global = self.config.read().unwrap().disabled_plugins.clone();
         let disabled_dev = self
             .trust
@@ -1503,6 +1715,10 @@ impl Inner {
                 pair_state: link.map(|l| l.pair.as_str()).unwrap_or("paired").into(),
                 address: link.map(|l| l.handle.addr.ip().to_string()),
                 usb: link.is_some_and(|l| l.handle.usb),
+                bluetooth: link.is_some_and(|l| l.handle.bluetooth),
+                transport: link.map(|l| l.handle.transport()),
+                transports: self.transports_of(&t.device_id, link),
+                preferred_transport: t.preferred_transport,
                 fingerprint: Some(konnekta_crypto::cert_fingerprint(&t.cert_der())),
                 permissions: t.permissions.clone(),
                 disabled_plugins: t.disabled_plugins.clone(),
@@ -1531,6 +1747,10 @@ impl Inner {
                 pair_state: l.pair.as_str().into(),
                 address: Some(l.handle.addr.ip().to_string()),
                 usb: l.handle.usb,
+                bluetooth: l.handle.bluetooth,
+                transport: Some(l.handle.transport()),
+                transports: self.transports_of(id, Some(l)),
+                preferred_transport: None,
                 fingerprint: Some(konnekta_crypto::cert_fingerprint(&l.handle.peer_cert)),
                 permissions: BTreeSet::new(),
                 disabled_plugins: BTreeSet::new(),
@@ -1543,6 +1763,214 @@ impl Inner {
             });
         }
         out
+    }
+
+    // --- transports ----------------------------------------------------------------
+    //
+    // The ways a device can be reached, the one the pair chose (synced like
+    // permissions: the most recent choice wins) and the switch to it.
+
+    /// The chosen transport of a paired device.
+    fn preferred_transport(&self, id: &str) -> Option<Transport> {
+        self.trust
+            .lock()
+            .unwrap()
+            .get(id)
+            .and_then(|d| d.preferred_transport)
+    }
+
+    /// Whether a link over `t` would be worth opening for `id`: none yet,
+    /// or the current one ranks lower.
+    fn wants(&self, id: &str, t: Transport) -> bool {
+        let preferred = self.preferred_transport(id);
+        match self.links.lock().unwrap().get(id) {
+            None => true,
+            Some(l) => l.handle.transport().rank(preferred) < t.rank(preferred),
+        }
+    }
+
+    /// Ways we can reach `id` ourselves, now.
+    fn local_transports(&self, id: &str, link: Option<&LinkEntry>) -> BTreeSet<Transport> {
+        let mut out = BTreeSet::new();
+        if let Some(l) = link {
+            out.insert(l.handle.transport());
+        }
+        if self
+            .discovered
+            .lock()
+            .unwrap()
+            .get(id)
+            .is_some_and(|(_, at)| at.elapsed() < SEEN_ON_NETWORK)
+        {
+            out.insert(Transport::Wifi);
+        }
+        {
+            let attached = self.usb_attached.lock().unwrap();
+            if self
+                .usb_known
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(serial, d)| d == id && attached.contains(serial))
+            {
+                out.insert(Transport::Usb);
+            }
+        }
+        {
+            let sessions = self.bt_sessions.lock().unwrap();
+            if self
+                .bt_known
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(a, d)| d == id && sessions.get(a).is_some_and(|s| !s.is_closed()))
+            {
+                out.insert(Transport::Bluetooth);
+            }
+        }
+        out
+    }
+
+    /// Ways `id` can be reached: ours and those it reported.
+    fn transports_of(&self, id: &str, link: Option<&LinkEntry>) -> Vec<Transport> {
+        let mut all = self.local_transports(id, link);
+        if link.is_some()
+            && let Some(r) = self.remote_transports.lock().unwrap().get(id)
+        {
+            all.extend(r.iter().copied());
+        }
+        all.into_iter().collect()
+    }
+
+    /// Tell `id` the ways we reach it and the pair's choice.
+    fn send_transports(&self, id: &str) {
+        let links = self.links.lock().unwrap();
+        let Some(l) = links.get(id) else {
+            return;
+        };
+        if !l.pair.is_paired() || l.handle.protocol != Protocol::Konnekta {
+            return;
+        }
+        let available: Vec<Transport> = self.local_transports(id, Some(l)).into_iter().collect();
+        let (preferred, at) = self
+            .trust
+            .lock()
+            .unwrap()
+            .get(id)
+            .map(|d| (d.preferred_transport, d.transport_changed_at))
+            .unwrap_or_default();
+        let p = Packet::new(
+            types::TRANSPORTS,
+            serde_json::json!({ "available": available, "preferred": preferred, "changedAt": at }),
+        );
+        if l.handle.tx.try_send(p).is_ok() {
+            self.sent_transports
+                .lock()
+                .unwrap()
+                .insert(id.to_owned(), available);
+        }
+    }
+
+    fn on_transports(self: &Arc<Self>, id: &str, packet: &Packet) {
+        let available: Vec<Transport> = packet
+            .body
+            .get("available")
+            .and_then(|v| v.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| serde_json::from_value(x.clone()).ok())
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.remote_transports
+            .lock()
+            .unwrap()
+            .insert(id.to_owned(), available);
+        let theirs_at = packet
+            .body
+            .get("changedAt")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        let theirs: Option<Transport> = packet
+            .body
+            .get("preferred")
+            .and_then(|v| v.as_str())
+            .and_then(Transport::parse);
+        let mine = self
+            .trust
+            .lock()
+            .unwrap()
+            .get(id)
+            .map(|d| (d.preferred_transport, d.transport_changed_at));
+        if let Some((mine, mine_at)) = mine {
+            if theirs_at > mine_at && theirs != mine {
+                tracing::info!(device = %id, ?theirs, "the pair chose another way to connect");
+                self.trust.lock().unwrap().update(id, |d| {
+                    d.preferred_transport = theirs;
+                    d.transport_changed_at = theirs_at;
+                });
+                self.switch_soon();
+            } else if mine_at > theirs_at {
+                // Ours is newer: they learn it.
+                self.sent_transports.lock().unwrap().remove(id);
+                self.send_transports(id);
+            }
+        }
+        self.emit_updated(id);
+    }
+
+    /// Choose how to reach a paired device (none = the fastest available)
+    /// and switch to it when it is available.
+    pub(crate) fn set_preferred_transport(
+        self: &Arc<Self>,
+        id: &str,
+        t: Option<Transport>,
+    ) -> Result<()> {
+        if !self.trust.lock().unwrap().is_trusted(id) {
+            bail!("device not paired");
+        }
+        let now = konnekta_proto::packet::now_millis();
+        self.trust.lock().unwrap().update(id, |d| {
+            d.preferred_transport = t;
+            d.transport_changed_at = now;
+        });
+        self.sent_transports.lock().unwrap().remove(id);
+        self.send_transports(id);
+        self.emit_updated(id);
+        self.switch_soon();
+        Ok(())
+    }
+
+    /// Dial the better ways now instead of at the next tick.
+    fn switch_soon(self: &Arc<Self>) {
+        let this = self.clone();
+        tokio::spawn(async move {
+            this.dialing.lock().unwrap().clear();
+            this.clone().dial_paired().await;
+            if cfg!(not(any(target_os = "android", target_os = "ios"))) {
+                this.usb_tick().await;
+            }
+            if cfg!(target_os = "linux") {
+                this.bt_tick().await;
+            }
+        });
+    }
+
+    /// Send the ways we reach each device again when they changed.
+    fn refresh_transports(&self) {
+        let ids: Vec<String> = self.links.lock().unwrap().keys().cloned().collect();
+        for id in ids {
+            let now: Vec<Transport> = {
+                let links = self.links.lock().unwrap();
+                let Some(l) = links.get(&id) else { continue };
+                self.local_transports(&id, Some(l)).into_iter().collect()
+            };
+            let changed = self.sent_transports.lock().unwrap().get(&id) != Some(&now);
+            if changed {
+                self.send_transports(&id);
+                self.emit_updated(&id);
+            }
+        }
     }
 
     fn emit_updated(&self, id: &str) {
@@ -1579,6 +2007,7 @@ impl Inner {
         if handle.link_id != link_id {
             return;
         }
+        tracing::trace!(device = %device_id, packet = %packet.packet_type, "received");
         match packet.packet_type.as_str() {
             types::PAIR => {
                 self.clone().handle_pair(handle, state, packet).await;
@@ -1606,6 +2035,10 @@ impl Inner {
         }
         if packet.packet_type == types::PERMISSIONS {
             self.on_permissions(device_id, &packet);
+            return;
+        }
+        if packet.packet_type == types::TRANSPORTS {
+            self.on_transports(device_id, &packet);
             return;
         }
         let disabled_global = self.config.read().unwrap().disabled_plugins.clone();
@@ -2024,7 +2457,7 @@ impl Inner {
             permissions_changed_at: 0,
             disabled_plugins: BTreeSet::new(),
             paired_at: konnekta_proto::packet::now_millis(),
-            last_address: (!handle.usb).then(|| handle.addr.ip()),
+            last_address: (!handle.usb && !handle.bluetooth).then(|| handle.addr.ip()),
             last_port: if handle.protocol == Protocol::Konnekta {
                 handle.identity.tcp_port
             } else {
@@ -2032,6 +2465,8 @@ impl Inner {
             },
             protocol: handle.protocol,
             extra_addresses: Vec::new(),
+            preferred_transport: None,
+            transport_changed_at: 0,
         });
     }
 
@@ -2167,6 +2602,7 @@ impl Inner {
             tracing::debug!(device = %id, "closing idle unpaired link");
             self.close_link(&id).await;
         }
+        self.refresh_transports();
     }
 }
 

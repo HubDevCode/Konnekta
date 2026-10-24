@@ -6,6 +6,7 @@
 //! | camera        | phone → computer | Camera      | virtual webcam                       |
 //! | phonescreen   | phone → computer | Desktop     | viewer window                        |
 //! | desktop       | computer → phone | Desktop     | screen capture (H.264, adaptive)     |
+//! | extend        | computer → phone | Desktop     | virtual monitor of the phone's size  |
 //! | systemaudio   | computer → phone | SystemAudio | system audio capture (PCM 48 kHz)    |
 //!
 //! Sessions have random 128-bit ids, are bound to one paired device, end on
@@ -32,6 +33,9 @@ use std::time::{Duration, Instant};
 use tokio::io::AsyncWriteExt;
 use tokio::task::AbortHandle;
 
+/// Why audio and video stop at a Bluetooth link.
+pub const BLUETOOTH_REASON: &str = "audio e video non sono disponibili con il collegamento Bluetooth (troppo lento): usa Wi-Fi o il cavo";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
     Microphone,
@@ -40,6 +44,8 @@ pub enum Kind {
     Desktop,
     SystemAudio,
     PhoneAudio,
+    /// The phone as a second monitor.
+    Extend,
 }
 
 impl Kind {
@@ -52,11 +58,12 @@ impl Kind {
             Self::Desktop => "desktop",
             Self::SystemAudio => "systemAudio",
             Self::PhoneAudio => "phoneAudio",
+            Self::Extend => "desktop",
         }
     }
 
     fn produces_locally(self) -> bool {
-        matches!(self, Self::Desktop | Self::SystemAudio)
+        matches!(self, Self::Desktop | Self::SystemAudio | Self::Extend)
     }
 }
 
@@ -162,6 +169,20 @@ impl StreamPlugin {
                 permission: Permission::Desktop,
                 incoming: &[types::DESKTOP],
                 outgoing: &[types::DESKTOP],
+            },
+        )
+    }
+
+    pub fn extend() -> Arc<Self> {
+        Self::make(
+            Kind::Extend,
+            PluginInfo {
+                id: "extend",
+                name: "Phone as second screen",
+                description: "Use the phone as an extra monitor of this computer",
+                permission: Permission::Desktop,
+                incoming: &[types::EXTEND],
+                outgoing: &[types::EXTEND],
             },
         )
     }
@@ -355,6 +376,17 @@ impl StreamPlugin {
                 if params.codec != "h264" {
                     bail!("unsupported camera codec {}", params.codec);
                 }
+                // Linux: the camera that stays listed while Konnekta runs.
+                if konnekta_media::webcam::available() {
+                    let mut feed = konnekta_media::webcam::webcam().live().await?;
+                    tracing::info!("phone camera on Konnekta Camera");
+                    while let Some(f) = read_frame(&mut ch).await? {
+                        if f.kind == FrameKind::Video {
+                            feed.write(&f.data).await?;
+                        }
+                    }
+                    return Ok(());
+                }
                 let mut cam =
                     VirtualCamera::create(params.width, params.height, params.fps.max(15)).await?;
                 tracing::info!("phone camera available via {}", cam.description);
@@ -405,16 +437,47 @@ impl StreamPlugin {
     /// tool skips pictures by itself, so what arrives is always current and
     /// clean. Quality is fixed for the session (constant-quality encoding
     /// keeps a still screen almost free).
-    async fn produce_desktop(ch: SecureChannel, params: StreamParams) -> Result<()> {
+    async fn produce_desktop(ch: SecureChannel, params: StreamParams, extend: bool) -> Result<()> {
         let sender = FrameSender::new(ch, 2);
         let level = DEFAULT_LADDER
             .iter()
             .rposition(|q| params.height == 0 || q.height <= params.height)
             .unwrap_or(0)
             .min(3);
-        let q = DEFAULT_LADDER[level];
+        let mut q = DEFAULT_LADDER[level];
+        // Second screen: a monitor of the phone's own size (landscape),
+        // captured whole so text stays sharp on the phone.
+        let monitor = if extend {
+            let (w, h) = (
+                params.width.max(params.height),
+                params.width.min(params.height),
+            );
+            let (w, h) = if w == 0 { (1920, 1080) } else { (w, h) };
+            let fps = if params.fps >= 50 { 60 } else { 30 };
+            let m = tokio::task::spawn_blocking(move || {
+                konnekta_platform::display::VirtualMonitor::create(w, h, fps)
+            })
+            .await??;
+            q.height = h;
+            q.fps = fps;
+            Some(m)
+        } else {
+            None
+        };
+        // The monitor shown: touches land on it.
+        let output = match &monitor {
+            Some(m) => Some(m.name.clone()),
+            None => {
+                let name = tokio::task::spawn_blocking(konnekta_platform::display::focused_monitor)
+                    .await
+                    .ok()
+                    .flatten();
+                konnekta_platform::display::set_captured_monitor(name.clone());
+                name
+            }
+        };
         sender.send(Frame::control(&json!({ "quality": q }))).await;
-        let (prog, args) = screen_capture_command(q)?;
+        let (prog, args) = screen_capture_command(q, output.as_deref())?;
         tracing::info!(program = %prog, height = q.height, fps = q.fps, "screen capture");
         let mut proc = ProcessPipeline::spawn(&prog, &args, false, true)?;
         let out = proc.stdout.take().context("capture has no output")?;
@@ -474,7 +537,7 @@ impl StreamPlugin {
         self.stop_local(dev.id());
         let (port, accept) = dev.listen_channel().await?;
         let out_params = match self.kind {
-            Kind::Desktop => StreamParams {
+            Kind::Desktop | Kind::Extend => StreamParams {
                 codec: "h264".into(),
                 ..params.clone()
             },
@@ -488,10 +551,10 @@ impl StreamPlugin {
         dev.send(self.msg(StreamAction::Offer, &session, Some(port), out_params, None))
             .await?;
         if let Some(c) = self.core.get() {
-            let what = if self.kind == Kind::Desktop {
-                "screen"
-            } else {
-                "audio"
+            let what = match self.kind {
+                Kind::Desktop => "screen",
+                Kind::Extend => "second screen",
+                _ => "audio",
             };
             c.emit_plugin(
                 Some(dev.id()),
@@ -504,7 +567,8 @@ impl StreamPlugin {
         self.run_session(dev, session, async move {
             let ch = accept.await?;
             match kind {
-                Kind::Desktop => Self::produce_desktop(ch, params).await,
+                Kind::Desktop => Self::produce_desktop(ch, params, false).await,
+                Kind::Extend => Self::produce_desktop(ch, params, true).await,
                 _ => Self::produce_system_audio(ch).await,
             }
         });
@@ -520,6 +584,10 @@ impl Plugin for StreamPlugin {
 
     async fn start(self: Arc<Self>, core: CoreHandle) {
         let _ = self.core.set(core.clone());
+        // The webcam stays listed in video apps while Konnekta runs.
+        if self.kind == Kind::Camera && core.keeps_virtual_camera() {
+            konnekta_media::webcam::webcam().keep_open();
+        }
         // Stop sessions whose permission was revoked.
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(Duration::from_secs(1));
@@ -546,6 +614,20 @@ impl Plugin for StreamPlugin {
         let m: StreamMessage = p.body_as()?;
         if m.session.len() > 64 {
             bail!("invalid session id");
+        }
+        // Bluetooth is far too slow for live audio and video: say no at once.
+        if !dev.transport().carries_streams()
+            && matches!(m.action, StreamAction::Request | StreamAction::Offer)
+        {
+            return dev
+                .send_if_supported(self.msg(
+                    StreamAction::Stop,
+                    &m.session,
+                    None,
+                    StreamParams::default(),
+                    Some(BLUETOOTH_REASON.into()),
+                ))
+                .await;
         }
         match (m.action, self.kind.produces_locally()) {
             (StreamAction::Request, true) => {
@@ -596,6 +678,9 @@ impl Plugin for StreamPlugin {
             "start" => {
                 if self.kind.produces_locally() {
                     bail!("this stream is started from the phone");
+                }
+                if !d.transport().carries_streams() {
+                    bail!(BLUETOOTH_REASON);
                 }
                 let params: StreamParams = crate::args(args).unwrap_or_default();
                 let session = session_id();

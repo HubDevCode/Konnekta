@@ -35,6 +35,10 @@ async fn node(name: &str) -> Node {
         announce: false,
         mdns: false,
         download_dir: dir.path().join("downloads"),
+        // Never reach real phones by cable or Bluetooth from a test.
+        usb: false,
+        bluetooth: false,
+        virtual_camera: false,
         ..Config::default()
     };
     let k = Konnekta::builder(cfg)
@@ -448,6 +452,10 @@ async fn desktop_interoperates_with_mobile_bridge() {
         udp_port: 0,
         announce: false,
         mdns: false,
+        // Never reach real phones by cable or Bluetooth from a test.
+        usb: false,
+        bluetooth: false,
+        virtual_camera: false,
         ..Config::default()
     };
     let phone = Konnekta::builder(cfg)
@@ -593,6 +601,10 @@ async fn desktop_and_bridge_phone() -> (
         udp_port: 0,
         announce: false,
         mdns: false,
+        // Never reach real phones by cable or Bluetooth from a test.
+        usb: false,
+        bluetooth: false,
+        virtual_camera: false,
         ..Config::default()
     };
     let phone = Konnekta::builder(cfg)

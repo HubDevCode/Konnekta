@@ -26,6 +26,14 @@ pub struct DeviceInfo {
     pub address: Option<String>,
     /// The current link runs over a USB cable.
     pub usb: bool,
+    /// The current link runs over Bluetooth.
+    pub bluetooth: bool,
+    /// Way of the current link.
+    pub transport: Option<crate::Transport>,
+    /// Ways the device can be reached now (also when not connected).
+    pub transports: Vec<crate::Transport>,
+    /// The way the pair chose; none = the fastest available.
+    pub preferred_transport: Option<crate::Transport>,
     pub fingerprint: Option<String>,
     pub permissions: BTreeSet<Permission>,
     pub disabled_plugins: BTreeSet<String>,
@@ -55,9 +63,19 @@ pub struct DeviceHandle {
     pub(crate) outgoing: bool,
     /// The link runs over a USB cable (adb).
     pub usb: bool,
-    /// Serial of the phone when we drive the cable with adb: side
-    /// connections are then mapped through it.
-    pub(crate) adb: Option<Arc<str>>,
+    /// The link runs over Bluetooth.
+    pub bluetooth: bool,
+    /// How we reach the phone when we drive the cable (adb) or the
+    /// Bluetooth session: side connections are then mapped through it.
+    pub(crate) route: Option<Route>,
+}
+
+/// A way to reach a phone other than its network address.
+#[derive(Clone)]
+pub(crate) enum Route {
+    /// USB cable; the serial of the phone.
+    Adb(Arc<str>),
+    Bluetooth(crate::bluetooth::Session),
 }
 
 impl std::fmt::Debug for DeviceHandle {
@@ -67,6 +85,7 @@ impl std::fmt::Debug for DeviceHandle {
             .field("name", &self.identity.device_name)
             .field("addr", &self.addr)
             .field("usb", &self.usb)
+            .field("bluetooth", &self.bluetooth)
             .finish()
     }
 }
@@ -139,28 +158,42 @@ impl DeviceHandle {
         }
     }
 
-    /// Address to dial for a port the device listens on. Over USB it is an
-    /// adb forward, which must live as long as the connection.
+    /// Address to dial for a port the device listens on. Over a cable or
+    /// Bluetooth it is a local mapping, which must live as long as the
+    /// connection.
     pub(crate) async fn peer_port(&self, port: u16) -> Result<(SocketAddr, Option<usb::Mapping>)> {
-        match &self.adb {
-            Some(serial) => {
+        match &self.route {
+            Some(Route::Adb(serial)) => {
                 let (addr, m) = usb::forward(serial, port).await?;
                 Ok((addr, Some(m)))
+            }
+            Some(Route::Bluetooth(s)) => {
+                let (addr, g) = s.forward(port).await?;
+                Ok((addr, Some(usb::Mapping::Bluetooth(g))))
             }
             None => Ok((SocketAddr::new(self.addr.ip(), port), None)),
         }
     }
 
-    /// Port to announce for a local listener. Over USB it is an adb reverse,
-    /// which must live as long as the connection.
+    /// Port to announce for a local listener. Over a cable or Bluetooth it is
+    /// a reverse mapping, which must live as long as the connection.
     pub(crate) async fn announced_port(&self, local: u16) -> Result<(u16, Option<usb::Mapping>)> {
-        match &self.adb {
-            Some(serial) => {
+        match &self.route {
+            Some(Route::Adb(serial)) => {
                 let (port, m) = usb::reverse(serial, local).await?;
                 Ok((port, Some(m)))
             }
+            Some(Route::Bluetooth(s)) => {
+                let (port, g) = s.reverse(local).await?;
+                Ok((port, Some(usb::Mapping::Bluetooth(g))))
+            }
             None => Ok((local, None)),
         }
+    }
+
+    /// Way of this link.
+    pub fn transport(&self) -> crate::Transport {
+        crate::Transport::of_link(self.usb, self.bluetooth)
     }
 
     pub fn resume_supported(&self) -> bool {

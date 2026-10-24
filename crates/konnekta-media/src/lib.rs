@@ -19,6 +19,7 @@ pub mod pipeline;
 pub mod sender;
 pub mod setup;
 pub mod virtual_devices;
+pub mod webcam;
 
 pub use abr::{AdaptiveBitrate, Quality};
 pub use frame::{Frame, FrameKind, read_frame, write_frame};

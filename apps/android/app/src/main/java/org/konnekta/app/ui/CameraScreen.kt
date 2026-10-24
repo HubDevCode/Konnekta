@@ -48,6 +48,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import org.json.JSONObject
 import org.konnekta.app.core.Types
+import org.konnekta.app.service.CameraCaps
 import org.konnekta.app.service.Streams
 import org.konnekta.app.state.supports
 
@@ -79,6 +80,7 @@ object CameraSettings {
 @Composable
 fun ColumnScope.CameraScreen(current: JSONObject?, onBack: () -> Unit) {
     val ctx = LocalContext.current
+    val ui = LocalUi.current
     val id = current?.optString("id") ?: return onBack()
     val name = current.optString("name")
     val live by Streams.live.collectAsState()
@@ -90,11 +92,23 @@ fun ColumnScope.CameraScreen(current: JSONObject?, onBack: () -> Unit) {
     // Set while the stream starts: the page lets go of the camera first.
     var starting by remember { mutableStateOf(false) }
     val start = rememberStreamStarter()
-    val (w, h) = CameraSettings.RESOLUTIONS[res]
-    fun saveAll() = CameraSettings.save(ctx, front, res, fps)
+    val (w, h) = remember(front, res) {
+        // The preview at a size the camera really gives (the closest to the choice).
+        val (rw, rh) = CameraSettings.RESOLUTIONS[res]
+        runCatching {
+            val cm = ctx.getSystemService(CameraManager::class.java)
+            val cid = CameraCaps.cameraId(cm, front)!!
+            CameraCaps.size(cm, cid, rw, rh, SurfaceHolder::class.java).let { it.width to it.height }
+        }.getOrDefault(rw to rh)
+    }
+    /** Save, and while streaming switch the live webcam to the new choice. */
+    fun saveAll() {
+        CameraSettings.save(ctx, front, res, fps)
+        if (streaming) Streams.reconfigureCamera(id, CameraSettings.params(ctx))
+    }
 
     // The page's own preview while nothing streams (the stream draws here itself).
-    DisposableEffect(surface, streaming, starting, front, res) {
+    DisposableEffect(surface, streaming, starting, front, w, h) {
         val s = surface
         val p = if (s != null && !streaming && !starting) LocalPreview(ctx, s, front) else null
         onDispose { p?.close() }
@@ -135,62 +149,67 @@ fun ColumnScope.CameraScreen(current: JSONObject?, onBack: () -> Unit) {
 
         SectionTitle("Fotocamera")
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(!front, { front = false; saveAll() }, { Text("Posteriore") }, enabled = !streaming)
-            FilterChip(front, { front = true; saveAll() }, { Text("Anteriore") }, enabled = !streaming)
+            FilterChip(!front, { front = false; saveAll() }, { Text("Posteriore") })
+            FilterChip(front, { front = true; saveAll() }, { Text("Anteriore") })
         }
         SectionTitle("Risoluzione")
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             CameraSettings.RESOLUTIONS.forEachIndexed { i, (_, rh) ->
-                FilterChip(res == i, { res = i; saveAll() }, { Text("${rh}p") }, enabled = !streaming)
+                FilterChip(res == i, { res = i; saveAll() }, { Text("${rh}p") })
             }
         }
         SectionTitle("Fotogrammi al secondo")
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            CameraSettings.RATES.forEach { r -> FilterChip(fps == r, { fps = r; saveAll() }, { Text("$r") }, enabled = !streaming) }
+            CameraSettings.RATES.forEach { r -> FilterChip(fps == r, { fps = r; saveAll() }, { Text("$r") }) }
         }
-        if (streaming) Hint("Per cambiare fotocamera o qualità ferma la webcam, poi riavviala.")
+        if (streaming) Hint("Puoi cambiare fotocamera, risoluzione e fotogrammi anche mentre è attiva: il computer continua a ricevere. " +
+            "La webcam resta accesa anche se esci dall'app o spegni lo schermo, finché non la fermi.")
         Row(Modifier.fillMaxWidth().padding(vertical = 16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             if (streaming) OutlinedButton(onClick = { Thread { Streams.stop(id, "camera") }.start() }, Modifier.weight(1f)) {
                 Text("Ferma la webcam")
             } else Button(
-                enabled = current.optBoolean("connected") && current.supports(Types.CAMERA),
                 onClick = {
-                    starting = true
-                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(
-                        { start(Streams.newRequest(id, name, "camera", CameraSettings.params(ctx))) }, 300)
+                    val blocked = blockedReason(current, "camera", Types.CAMERA, av = true)
+                    if (blocked != null) ui.toast(blocked) else {
+                        starting = true
+                        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(
+                            { start(Streams.newRequest(id, name, "camera", CameraSettings.params(ctx))) }, 300)
+                    }
                 },
                 modifier = Modifier.weight(1f),
             ) { Text("Usa come webcam su $name") }
         }
-        Hint("Sul computer scegli «Konnekta Camera» nell'app (videochiamata, OBS…) dopo averla avviata: " +
-            "il sistema la mostra solo mentre riceve il video.")
+        Hint("Sul computer scegli «Konnekta Camera» nell'app (videochiamata, OBS…): resta disponibile finché Konnekta è aperto sul computer, " +
+            "anche quando il telefono non trasmette.")
     }
 }
 
-/** Camera preview on the page while it does not stream. */
+/**
+ * Camera preview on the page while it does not stream. A camera that opens
+ * after the page closed is closed at once on the same thread (never left
+ * open, which would block it for the webcam).
+ */
 private class LocalPreview(ctx: Context, private val surface: Surface, front: Boolean) {
     private val thread = HandlerThread("konnekta-preview").apply { start() }
     private val handler = Handler(thread.looper)
-    @Volatile
+    private val cm = ctx.getSystemService(CameraManager::class.java)
     private var closed = false
+    private var opening = false
     private var device: CameraDevice? = null
 
     init {
-        runCatching { open(ctx, front) }.onFailure { Log.w("KonnektaCamera", "preview", it) }
+        handler.post { runCatching { open(front) }.onFailure { Log.w("KonnektaCamera", "preview", it); opening = false } }
     }
 
     @SuppressLint("MissingPermission")
-    private fun open(ctx: Context, front: Boolean) {
-        val cm = ctx.getSystemService(CameraManager::class.java)
-        val want = if (front) CameraCharacteristics.LENS_FACING_FRONT else CameraCharacteristics.LENS_FACING_BACK
-        val id = cm.cameraIdList.firstOrNull { cm.getCameraCharacteristics(it).get(CameraCharacteristics.LENS_FACING) == want }
-            ?: cm.cameraIdList.firstOrNull() ?: return
+    private fun open(front: Boolean) {
+        val id = CameraCaps.cameraId(cm, front) ?: return
+        opening = true
         cm.openCamera(id, object : CameraDevice.StateCallback() {
             override fun onOpened(d: CameraDevice) {
-                synchronized(this@LocalPreview) {
-                    if (closed) { d.close(); return }
-                    device = d
-                }
+                opening = false
+                if (closed) { d.close(); thread.quitSafely(); return }
+                device = d
                 runCatching {
                     @Suppress("DEPRECATION")
                     d.createCaptureSession(listOf(surface), object : CameraCaptureSession.StateCallback() {
@@ -204,17 +223,15 @@ private class LocalPreview(ctx: Context, private val surface: Surface, front: Bo
                     }, handler)
                 }
             }
-            override fun onDisconnected(d: CameraDevice) { d.close() }
-            override fun onError(d: CameraDevice, error: Int) { d.close() }
+            override fun onDisconnected(d: CameraDevice) { opening = false; d.close(); if (closed) thread.quitSafely() }
+            override fun onError(d: CameraDevice, error: Int) { opening = false; d.close(); if (closed) thread.quitSafely() }
         }, handler)
     }
 
-    fun close() {
-        synchronized(this) {
-            closed = true
-            runCatching { device?.close() }
-            device = null
-        }
-        thread.quitSafely()
+    fun close() = handler.post {
+        closed = true
+        runCatching { device?.close() }
+        device = null
+        if (!opening) thread.quitSafely()
     }
 }

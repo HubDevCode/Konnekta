@@ -4,7 +4,7 @@
 //! * device discovery (UDP broadcast, mDNS, extra addresses);
 //! * optional bridges to KDE Connect and Flux apps, translated in the link;
 //! * secure links: TCP + mutual TLS with certificate pinning, over the network
-//!   or a USB cable (adb);
+//!   a USB cable (adb) or Bluetooth (RFCOMM);
 //! * pairing with user-confirmed verification keys;
 //! * centralised, per-device, per-feature permissions;
 //! * plugin registry and packet dispatch (a packet only reaches a plugin if the
@@ -12,6 +12,7 @@
 //! * encrypted payload transfers (files, screenshots) with optional resume.
 
 pub mod api;
+pub mod bluetooth;
 pub mod channel;
 pub mod config;
 pub mod core;
@@ -24,6 +25,7 @@ pub mod pairing;
 pub mod payload;
 pub mod permissions;
 pub mod plugin;
+pub mod transport;
 pub mod trust;
 pub mod usb;
 pub mod util;
@@ -35,5 +37,6 @@ pub use device::{DeviceHandle, DeviceInfo};
 pub use event::Event;
 pub use permissions::Permission;
 pub use plugin::{CoreHandle, Plugin, PluginInfo};
+pub use transport::Transport;
 
 pub use konnekta_proto as proto;

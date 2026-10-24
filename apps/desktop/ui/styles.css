@@ -112,3 +112,8 @@ nav button { display: flex; align-items: center; gap: 10px; }
 .cmds { display: flex; gap: 8px; align-items: flex-start; margin-top: 6px; }
 .cmds pre { flex: 1; margin: 0; padding: 10px 12px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; font: 12px/1.5 ui-monospace, "JetBrains Mono", monospace; white-space: pre-wrap; word-break: break-all; user-select: text; }
 code { font: 12px ui-monospace, monospace; background: var(--panel-2); padding: 1px 6px; border-radius: 6px; }
+
+.transports { display: inline-flex; gap: 4px; margin-top: 3px; }
+.transports .tr { display: inline-flex; color: var(--muted); opacity: .75; }
+.transports .tr.on { color: var(--accent); opacity: 1; }
+.transports .tr svg { fill: currentColor; }

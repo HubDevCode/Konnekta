@@ -2,11 +2,6 @@ package org.konnekta.app.service
 
 import android.annotation.SuppressLint
 import android.content.Context
-import android.hardware.camera2.CameraCaptureSession
-import android.hardware.camera2.CameraCharacteristics
-import android.hardware.camera2.CameraDevice
-import android.hardware.camera2.CameraManager
-import android.hardware.camera2.CaptureRequest
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.media.AudioAttributes
@@ -21,7 +16,6 @@ import android.media.projection.MediaProjection
 import android.os.Handler
 import android.os.HandlerThread
 import android.util.Log
-import android.util.Range
 import android.view.Surface
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
@@ -56,6 +50,7 @@ object Streams {
         "desktop" to "konnekta.desktop",
         "systemaudio" to "konnekta.systemaudio",
         "phoneaudio" to "konnekta.phoneaudio",
+        "extend" to "konnekta.extend",
     )
 
     /** Streams the phone produces (the computer consumes them). */
@@ -95,6 +90,23 @@ object Streams {
     /** Webcam page: the camera also draws here while it streams. */
     @Volatile
     var cameraPreview: Surface? = null
+        set(v) {
+            field = v
+            synchronized(workers) { workers.values.filterIsInstance<CameraStream>() }.forEach { it.previewChanged(v) }
+        }
+
+    /** A short message for the user (a stream the computer stopped, and why). */
+    val notice = MutableStateFlow<String?>(null)
+
+    /** Lens, size or frame rate changed while the webcam runs: it carries on with them. */
+    fun reconfigureCamera(deviceId: String, params: JSONObject) {
+        val w = synchronized(workers) { workers["camera/$deviceId"] } as? CameraStream ?: return
+        w.reconfigure(CameraConfig.from(params))
+    }
+
+    /** The link with [deviceId] runs over Bluetooth (no audio or video there). */
+    private fun onBluetooth(deviceId: String) =
+        org.konnekta.app.state.Store.devices.value.firstOrNull { it.optString("id") == deviceId }?.optBoolean("bluetooth") == true
 
     /** Size of the computer's screen as decoded (for the touch mapping). */
     val desktopSize = MutableStateFlow<Pair<Int, Int>?>(null)
@@ -122,7 +134,11 @@ object Streams {
         when (b.optString("action")) {
             "stop" -> {
                 pending.update { l -> l.filterNot { it.deviceId == deviceId && it.plugin == plugin } }
+                val wasLive = live.value.containsKey("$plugin/$deviceId")
                 stop(deviceId, plugin, notifyPeer = false)
+                // Stopped by the computer for a reason worth telling (not "stopped by user").
+                b.optString("reason").takeIf { it.isNotEmpty() && !it.contains("by user") && b.optJSONArray("missing") == null }
+                    ?.let { if (wasLive || plugin in setOf("desktop", "extend", "systemaudio")) notice.value = "${STREAM_NAMES[plugin] ?: plugin}: $it" }
                 // The computer lacks a program or module: tell the user how to fix it.
                 val missing = b.optJSONArray("missing")
                 if (missing != null && missing.length() > 0) {
@@ -134,11 +150,16 @@ object Streams {
                 }
             }
             "request" -> if (plugin in PRODUCED) {
+                if (onBluetooth(deviceId)) {
+                    Thread { send(deviceId, plugin, JSONObject().put("action", "stop").put("session", session)
+                        .put("reason", "il telefono è collegato via Bluetooth: audio e video non sono disponibili")) }.start()
+                    return null
+                }
                 val r = StreamRequest(deviceId, deviceName, plugin, session, params)
                 pending.update { l -> l.filterNot { it.key == r.key } + r }
                 return r
             }
-            "offer" -> if (plugin in setOf("desktop", "systemaudio")) consume(core, deviceId, plugin, session, b)
+            "offer" -> if (plugin in setOf("desktop", "systemaudio", "extend")) consume(core, deviceId, plugin, session, b)
         }
         return null
     }
@@ -157,7 +178,7 @@ object Streams {
         synchronized(workers) { workers.remove(key) }?.stop()
         desktopDecoders.remove(key)
         live.update { it - key }
-        if (plugin == "desktop") desktopSize.value = null
+        if (plugin == "desktop" || plugin == "extend") desktopSize.value = null
         if (l != null) onChanged?.invoke()
         if (notifyPeer && l != null) Thread { send(deviceId, plugin, JSONObject().put("action", "stop").put("session", l.session)) }.start()
     }
@@ -188,12 +209,10 @@ object Streams {
                 "microphone" -> MicProducer(core, channel, ended) to
                     JSONObject().put("codec", "pcm_s16le").put("sampleRate", 48000).put("channels", 1)
                 "camera" -> {
-                    val w = r.params.optInt("width", 1280).coerceIn(320, 1920)
-                    val h = r.params.optInt("height", 720).coerceIn(240, 1080)
-                    val fps = r.params.optInt("fps", 30).coerceIn(10, 30)
-                    val facing = r.params.optString("facing", "back")
-                    CameraProducer(ctx, core, channel, w, h, fps, facing, ended) to
-                        JSONObject().put("codec", "h264").put("width", w).put("height", h).put("fps", fps).put("facing", facing)
+                    val cfg = CameraConfig.from(r.params)
+                    val cam = CameraStream(ctx, core, channel, cfg, ended)
+                    cam to JSONObject().put("codec", "h264").put("width", cam.size.width).put("height", cam.size.height)
+                        .put("fps", cfg.fps).put("facing", if (cfg.front) "front" else "back")
                 }
                 "phoneaudio" -> {
                     val p = projection ?: return
@@ -240,7 +259,7 @@ object Streams {
             return
         }
         val params = offer.optJSONObject("params") ?: JSONObject()
-        val worker: Worker = if (plugin == "desktop") {
+        val worker: Worker = if (plugin == "desktop" || plugin == "extend") {
             DesktopDecoder(core, channel, params.optInt("width", 1920), params.optInt("height", 1080)) { stop(deviceId, plugin, notifyPeer = false) }
                 .also { desktopDecoders[key] = it }
         } else {
@@ -384,73 +403,6 @@ object Streams {
 
         override fun stop() {
             running = false
-        }
-    }
-
-    private class CameraProducer(ctx: Context, core: Core, channel: Long, w: Int, h: Int, private val fps: Int, facing: String, ended: () -> Unit) :
-        SurfaceEncoder(core, channel, w, h, fps, ended) {
-        private val thread = HandlerThread("konnekta-cam").apply { start() }
-        private val handler = Handler(thread.looper)
-        private var device: CameraDevice? = null
-        /** The webcam page's preview, if open when the stream started. */
-        private val preview = cameraPreview?.takeIf { it.isValid }
-
-        init {
-            val cm = ctx.getSystemService(CameraManager::class.java)
-            val want = if (facing == "front") CameraCharacteristics.LENS_FACING_FRONT else CameraCharacteristics.LENS_FACING_BACK
-            val id = cm.cameraIdList.firstOrNull { cm.getCameraCharacteristics(it).get(CameraCharacteristics.LENS_FACING) == want }
-                ?: cm.cameraIdList.firstOrNull() ?: error("nessuna fotocamera")
-            open(cm, id)
-        }
-
-        /*
-         * The camera answers on its own thread, possibly after the stream
-         * ended (the computer refused it, or the user stopped it at once): the
-         * encoder's Surface is gone by then, so every step checks `running`
-         * and never lets an exception escape (it would close the app).
-         */
-        @SuppressLint("MissingPermission")
-        private fun open(cm: CameraManager, id: String) {
-            cm.openCamera(id, object : CameraDevice.StateCallback() {
-                override fun onOpened(d: CameraDevice) {
-                    synchronized(this@CameraProducer) {
-                        if (!running) {
-                            runCatching { d.close() }
-                            return
-                        }
-                        device = d
-                    }
-                    try {
-                        @Suppress("DEPRECATION")
-                        d.createCaptureSession(listOfNotNull(input, preview), object : CameraCaptureSession.StateCallback() {
-                            override fun onConfigured(s: CameraCaptureSession) {
-                                if (!running) return
-                                runCatching {
-                                    val req = d.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
-                                        addTarget(input)
-                                        preview?.let { p -> addTarget(p) }
-                                        set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, Range(fps, fps))
-                                    }.build()
-                                    s.setRepeatingRequest(req, null, handler)
-                                }.onFailure { Log.w(TAG, "camera request failed", it); stop() }
-                            }
-
-                            override fun onConfigureFailed(s: CameraCaptureSession) = stop()
-                        }, handler)
-                    } catch (e: Exception) {
-                        Log.w(TAG, "camera session failed", e)
-                        stop()
-                    }
-                }
-
-                override fun onDisconnected(d: CameraDevice) = stop()
-                override fun onError(d: CameraDevice, error: Int) = stop()
-            }, handler)
-        }
-
-        override fun onClosed() {
-            synchronized(this) { runCatching { device?.close() }; device = null }
-            thread.quitSafely()
         }
     }
 

@@ -14,6 +14,23 @@ import org.json.JSONObject
 object Settings {
     private const val PREFS = "konnekta"
 
+    /**
+     * How a finger drives the computer's pointer on remote desktop and on
+     * the second screen: the pointer jumps where you touch, or the screen
+     * works as a touchpad (drag to move it).
+     */
+    enum class PointerMode { Direct, Touchpad }
+
+    val pointerMode = MutableStateFlow(PointerMode.Direct)
+
+    fun setPointerMode(ctx: Context, m: PointerMode) {
+        pointerMode.value = m
+        prefs(ctx).putString("pointerMode", m.name).apply()
+    }
+
+    /** Accept Bluetooth links from the computers paired with the phone. */
+    val bluetooth = MutableStateFlow(true)
+
     /** Where the tab bar goes when the phone is in landscape. */
     enum class NavSide { Bottom, Left, Right }
 
@@ -55,6 +72,13 @@ object Settings {
         hidden.value = p.getStringSet("hiddenFeatures", emptySet())!!.toSet()
         presenterAnywhere.value = p.getBoolean("presenterAnywhere", false)
         pcMediaControls.value = p.getBoolean("pcMediaControls", true)
+        bluetooth.value = p.getBoolean("bluetooth", true)
+        pointerMode.value = runCatching { PointerMode.valueOf(p.getString("pointerMode", null)!!) }.getOrDefault(PointerMode.Direct)
+    }
+
+    fun setBluetooth(ctx: Context, on: Boolean) {
+        bluetooth.value = on
+        prefs(ctx).putBoolean("bluetooth", on).apply()
     }
 
     fun setPcMediaControls(ctx: Context, on: Boolean) {

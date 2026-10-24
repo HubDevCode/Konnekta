@@ -76,6 +76,11 @@ pub struct Config {
     pub listen_udp: bool,
     /// Connect to Android phones attached by USB cable, through adb.
     pub usb: bool,
+    /// Connect to paired phones over Bluetooth (Linux computers).
+    pub bluetooth: bool,
+    /// Keep the "Konnekta Camera" listed in video apps while Konnekta runs,
+    /// also when no phone streams (Linux, v4l2loopback).
+    pub virtual_camera: bool,
     pub bind_addr: IpAddr,
     /// Native protocol ports (0 = ephemeral, used by tests).
     pub udp_port: u16,
@@ -111,6 +116,8 @@ impl Default for Config {
             mdns: true,
             listen_udp: true,
             usb: true,
+            bluetooth: true,
+            virtual_camera: true,
             bind_addr: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             udp_port: Protocol::Konnekta.udp_port(),
             tcp_port: *Protocol::Konnekta.tcp_ports().start(),

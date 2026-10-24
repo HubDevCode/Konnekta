@@ -37,6 +37,13 @@ pub struct TrustedDevice {
     /// e.g. its Tailscale name or IP (`host` or `host:port`).
     #[serde(default)]
     pub extra_addresses: Vec<String>,
+    /// The way the pair chose to connect (synced on both devices); none =
+    /// the fastest available.
+    #[serde(default)]
+    pub preferred_transport: Option<crate::Transport>,
+    /// Wall clock ms of the last change of `preferred_transport`.
+    #[serde(default)]
+    pub transport_changed_at: i64,
 }
 
 fn native() -> Protocol {

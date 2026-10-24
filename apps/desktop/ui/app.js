@@ -30,6 +30,9 @@ function h(tag, props, ...kids) {
 
 // Material icons (the phone app uses the same set), drawn inline.
 const MATERIAL = {
+  wifi: 'M1 9l2 2c4.97-4.97 13.03-4.97 18 0l2-2C16.93 2.93 7.08 2.93 1 9zm8 8l3 3 3-3c-1.65-1.66-4.34-1.66-6 0zm-4-4l2 2c2.76-2.76 7.24-2.76 10 0l2-2C15.14 9.14 8.87 9.14 5 13z',
+  bluetooth: 'M17.71 7.71L12 2h-1v7.59L6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 11 14.41V22h1l5.71-5.71-4.3-4.29 4.3-4.29zM13 5.83l1.88 1.88L13 9.59V5.83zm1.88 10.46L13 18.17v-3.76l1.88 1.88z',
+  usb: 'M15 7v4h1v2h-3V5h2l-3-4-3 4h2v8H8v-2.07c.7-.37 1.2-1.08 1.2-1.93 0-1.21-.99-2.2-2.2-2.2-1.21 0-2.2.99-2.2 2.2 0 .85.5 1.56 1.2 1.93V13c0 1.11.89 2 2 2h3v3.05c-.71.37-1.2 1.1-1.2 1.95 0 1.22.99 2.2 2.2 2.2 1.21 0 2.2-.98 2.2-2.2 0-.85-.49-1.58-1.2-1.95V15h3c1.11 0 2-.89 2-2v-2h1V7h-4z',
   smartphone: 'M17 1.01L7 1c-1.1 0-2 .9-2 2v18c0 1.1.9 2 2 2h10c1.1 0 2-.9 2-2V3c0-1.1-.9-1.99-2-1.99zM17 19H7V5h10v14z',
   tablet: 'M18 0H6C4.34 0 3 1.34 3 3v18c0 1.66 1.34 3 3 3h12c1.66 0 3-1.34 3-3V3c0-1.66-1.34-3-3-3zm-4 22h-4v-1h4v1zm5.25-3H4.75V3h14.5v16z',
   laptop: 'M20 18c1.1 0 1.99-.9 1.99-2L22 6c0-1.1-.9-2-2-2H4c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2H0v2h24v-2h-4zM4 6h16v10H4V6z',
@@ -276,7 +279,7 @@ function onPluginEvent({ deviceId, plugin, kind, data }) {
       if (!data.ok) toast(`Pulsante Deck: ${data.error}`, 'err');
       return;
     default:
-      if (['microphone', 'camera', 'phonescreen', 'desktop', 'systemaudio'].includes(plugin)) {
+      if (['microphone', 'camera', 'phonescreen', 'phoneaudio', 'desktop', 'extend', 'systemaudio'].includes(plugin)) {
         const st = (S.streams[deviceId] ||= {});
         if (kind === 'started') st[plugin] = true;
         if (kind === 'stopped') st[plugin] = false;
@@ -317,42 +320,82 @@ document.getElementById('nav').addEventListener('click', (e) => {
 
 // --- devices ------------------------------------------------------------------
 
-function deviceList() {
-  if (!S.devices.length) {
-    return h('div', { class: 'card empty' },
-      h('p', {}, 'Nessun dispositivo trovato.'),
-      h('p', { class: 'small' }, 'Apri Konnekta sul telefono nella stessa rete Wi-Fi, oppure collegalo tramite indirizzo (anche Tailscale).'),
-      connectBox());
-  }
-  return h('div', { class: 'card' },
-    S.devices.map((d) => h('div', {
-      class: `dev ${d.id === S.selected ? 'sel' : ''}`,
-      onclick: () => { S.selected = d.id; render(); },
-    },
-    h('div', { class: 'icon' }, typeIcon(d.deviceType)),
-    h('div', { class: 'grow dev-text' },
-      h('div', { class: 'dev-name', title: d.name }, d.name),
-      h('div', { class: 'small muted row', style: 'gap:6px' },
-        h('span', { class: `dot ${d.connected ? 'on' : ''}` }),
-        d.connected ? 'Online' : 'Offline',
-        S.battery[d.id] ? ` · batteria ${S.battery[d.id].currentCharge}%` : '')),
-    d.paired ? h('span', { class: 'badge ok' }, 'Associato')
-      : h('span', { class: 'badge warn' }, { requested: 'In attesa', confirm: 'Da confermare', requestedByPeer: 'Richiesta' }[d.pairState] || 'Nuovo'))),
-    h('div', { style: 'margin-top:10px' }, connectBox()),
-    nearbyBox());
+const TRANSPORT_LABELS = { wifi: 'Wi-Fi', bluetooth: 'Bluetooth', usb: 'cavo USB' };
+
+/** Small icons of the ways a device can be reached now; the one in use is coloured. */
+function transportIcons(d) {
+  const list = d.transports || [];
+  if (!list.length) return null;
+  const active = d.connected ? d.transport : null;
+  return h('span', { class: 'transports' }, ['usb', 'wifi', 'bluetooth'].filter((t) => list.includes(t)).map((t) => {
+    const el = h('span', { class: `tr ${t === active ? 'on' : ''}`, title: `${TRANSPORT_LABELS[t]}${t === active ? ' (in uso)' : ' (disponibile)'}` });
+    el.append(icon(t, 14));
+    return el;
+  }));
 }
 
-function nearbyBox() {
+function deviceRow(d) {
+  return h('div', {
+    class: `dev ${d.id === S.selected ? 'sel' : ''}`,
+    onclick: () => { S.selected = d.id; render(); },
+  },
+  h('div', { class: 'icon' }, typeIcon(d.deviceType)),
+  h('div', { class: 'grow dev-text' },
+    h('div', { class: 'dev-name', title: d.name }, d.name),
+    h('div', { class: 'small muted row', style: 'gap:6px' },
+      h('span', { class: `dot ${d.connected ? 'on' : ''}` }),
+      d.connected ? 'Online' : 'Offline',
+      S.battery[d.id] ? ` · batteria ${S.battery[d.id].currentCharge}%` : ''),
+    transportIcons(d)),
+  d.paired ? h('span', { class: 'badge ok' }, 'Associato')
+    : h('span', { class: 'badge warn' }, { requested: 'In attesa', confirm: 'Da confermare', requestedByPeer: 'Richiesta' }[d.pairState] || 'Nuovo'));
+}
+
+/**
+ * Saved devices (paired, online or not) and detected ones (reachable right
+ * now: connected, or seen on the network, by cable or over Bluetooth), each
+ * with the icons of the ways it was detected.
+ */
+function deviceList() {
+  const saved = S.devices.filter((d) => d.paired);
+  const detected = S.devices.filter((d) => d.connected || (d.transports || []).length);
+  return h('div', { class: 'card' },
+    h('h3', { style: 'margin-top:0' }, 'Dispositivi salvati'),
+    saved.length ? saved.map(deviceRow)
+      : h('p', { class: 'small muted' }, 'Nessun dispositivo associato: scegline uno tra quelli rilevati.'),
+    h('h3', {}, 'Dispositivi rilevati'),
+    detected.length ? detected.map(deviceRow) : null,
+    nearbyBox(detected.length),
+    h('div', { style: 'margin-top:10px' }, connectBox()));
+}
+
+function nearbyBox(shown) {
   const box = h('div');
+  const empty = h('p', { class: 'small muted' }, 'Nessun dispositivo raggiungibile ora. Apri Konnekta sul telefono nella stessa rete Wi-Fi, collegalo con il cavo o via Bluetooth (associato nel sistema), oppure scrivi il suo indirizzo (anche Tailscale).');
+  if (!shown) box.append(empty);
   api('discovered').then((list) => {
     if (!list.length) return;
-    box.append(h('h3', {}, 'Nelle vicinanze (non connessi)'),
-      ...list.map((x) => h('div', { class: 'dev', onclick: () => run(api('connect', { address: x.address }), 'Connessione in corso') },
-        h('div', { class: 'icon' }, typeIcon(x.deviceType)),
-        h('div', { class: 'grow' }, h('div', {}, x.name), h('div', { class: 'small muted' }, x.address)),
-        protoBadge(x.protocol))));
+    empty.remove();
+    box.append(...list.map((x) => h('div', { class: 'dev', onclick: () => run(api('connect', { address: x.address }), 'Connessione in corso') },
+      h('div', { class: 'icon' }, typeIcon(x.deviceType)),
+      h('div', { class: 'grow' }, h('div', {}, x.name),
+        h('div', { class: 'small muted' }, x.address),
+        transportIcons({ transports: ['wifi'], connected: false })),
+      protoBadge(x.protocol))));
   }).catch(() => {});
   return box;
+}
+
+/** How to reach a paired device: automatic or one way, remembered on both sides. */
+function transportPicker(d) {
+  const avail = d.transports || [];
+  const sel = h('select', { title: 'Tecnologia di collegamento', onchange: (e) => run(api('setTransport', { deviceId: d.id, transport: e.target.value || null }),
+    e.target.value ? `Userò ${TRANSPORT_LABELS[e.target.value]} appena disponibile` : 'Collegamento automatico').then(refreshDevices) },
+  h('option', { value: '' }, 'Automatico (il più veloce)'),
+  ...['wifi', 'bluetooth', 'usb'].map((t) => h('option', { value: t },
+    `${TRANSPORT_LABELS[t]}${d.connected && d.transport === t ? ' · in uso' : avail.includes(t) ? ' · disponibile' : ' · non disponibile'}`)));
+  sel.value = d.preferredTransport || '';
+  return h('label', { class: 'small muted row', style: 'gap:6px' }, 'Collegamento', sel);
 }
 
 function connectBox() {
@@ -379,7 +422,8 @@ async function deviceDetail(d) {
     h('div', { class: 'dev-ic' }, typeIcon(d.deviceType, 30)),
     h('div', { class: 'grow' },
       h('div', { style: 'font-size:18px;font-weight:700' }, d.name),
-      h('div', { class: 'small muted row', style: 'gap:6px' }, d.connected ? `Connesso · ${d.usb ? 'cavo USB' : d.address}` : 'Non raggiungibile', protoBadge(d.protocol))),
+      h('div', { class: 'small muted row', style: 'gap:6px' }, d.connected ? `Connesso · ${TRANSPORT_LABELS[d.transport] || d.address}` : 'Non raggiungibile', protoBadge(d.protocol), transportIcons(d)),
+      d.paired ? transportPicker(d) : null),
     d.paired ? btn('Dissocia', () => modal('Dissociare il dispositivo?',
       h('p', {}, `${d.name} non potrà più comunicare con questo computer finché non verrà associato di nuovo.`),
       [['Annulla'], ['Dissocia', () => run(api('unpair', { deviceId: d.id })), 'danger']]), 'danger')
@@ -529,6 +573,7 @@ function streamsTab(d) {
       extra || null,
       supported ? (st[plugin]
         ? btn('Interrompi', () => run(act(plugin, 'stop', null, d.id)), 'danger')
+        : d.bluetooth ? h('span', { class: 'small muted' }, 'Non via Bluetooth')
         : startable ? btn('Chiedi al telefono', () => run(act(plugin, 'start', extraArgs(plugin), d.id), 'Richiesta inviata: conferma sul telefono'), 'primary')
           : h('span', { class: 'small muted' }, 'Si avvia dal telefono')) : null);
   };
@@ -544,6 +589,8 @@ function streamsTab(d) {
     return { codec: 'h264' };
   }
   return h('div', {},
+    d.bluetooth ? h('p', { class: 'badge warn', style: 'display:block;padding:8px 12px' },
+      'Collegato via Bluetooth: audio e video sono spenti (il Bluetooth è troppo lento per il tempo reale). Passa a Wi-Fi o al cavo per usarli.') : null,
     h('p', { class: 'small muted' }, 'Tutti i flussi sono cifrati end-to-end con TLS e autenticati con il certificato del dispositivo associato. ' +
       'Il telefono chiede sempre conferma prima di accendere microfono, fotocamera o cattura dello schermo.'),
     h('h3', {}, 'Dal telefono a questo computer'),
@@ -553,6 +600,7 @@ function streamsTab(d) {
     row('phoneaudio', 'headphones', 'Audio del telefono', 'Musica, video e giochi del telefono dalle casse di questo computer.', true),
     h('h3', {}, 'Da questo computer al telefono'),
     row('desktop', 'desktop', 'Desktop remoto', 'Il telefono vede e controlla questo schermo (servono i permessi Desktop remoto e Mouse e tastiera).', false),
+    row('extend', 'screen', 'Schermo secondario', 'Il telefono diventa un altro monitor di questo computer: lo sistemi nelle impostazioni dello schermo come ogni monitor (Hyprland o Sway).', false),
     row('systemaudio', 'speaker', 'Audio del computer', 'Il telefono ascolta l\'audio riprodotto da questo computer.', false));
 }
 
@@ -909,7 +957,7 @@ async function renderSettings() {
   const get = (p) => act(p, 'getConfig').catch(() => null);
   const [share, clip, shot, filter, dnd, pres, tel] = await Promise.all([
     get('share'), get('clipboard'), get('screenshot'), act('notifications', 'getFilter').catch(() => null), get('dnd'), get('presenter'), get('calls')]);
-  const general = { deviceName: cfg.device_name, downloadDir: cfg.download_dir, announce: cfg.announce, mdns: cfg.mdns, usb: cfg.usb !== false,
+  const general = { deviceName: cfg.device_name, downloadDir: cfg.download_dir, announce: cfg.announce, mdns: cfg.mdns, usb: cfg.usb !== false, bluetooth: cfg.bluetooth !== false, virtualCamera: cfg.virtual_camera !== false,
     kdeConnect: !!cfg.kde_connect?.enabled, flux: !!cfg.flux?.enabled, syncPermissions: cfg.sync_permissions !== false };
   const txt = (o, k, label) => h('label', { class: 'field' }, label, h('input', { type: 'text', value: o[k] ?? '', oninput: (e) => { o[k] = e.target.value; } }));
   const chk = (o, k, label) => h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: o[k], onchange: (e) => { o[k] = e.target.checked; } }), label);
@@ -931,6 +979,8 @@ async function renderSettings() {
       chk(general, 'announce', 'Annuncia questo computer sulla rete locale (disattiva sulle reti pubbliche: i dispositivi associati vengono comunque contattati)'),
       chk(general, 'mdns', 'Trova i dispositivi con mDNS (_konnekta._tcp)'),
       chk(general, 'usb', 'Collegati ai telefoni Android attaccati con il cavo USB (serve adb e il debug USB attivo sul telefono)'),
+      chk(general, 'bluetooth', 'Collegati ai telefoni associati via Bluetooth (solo Linux; associa prima il telefono nelle impostazioni Bluetooth del computer)'),
+      chk(general, 'virtualCamera', 'Tieni sempre disponibile la webcam «Konnekta Camera» mentre Konnekta è aperto (Linux, v4l2loopback; richiede il riavvio)'),
       chk(general, 'syncPermissions', 'Sincronizza i permessi con i dispositivi: ciò che concedi o revochi sul telefono vale anche qui, e viceversa'),
       h('h3', {}, 'Ponti verso altre app (facoltativi)'),
       chk(general, 'kdeConnect', 'Accetta le app KDE Connect e GSConnect (porte 1716; solo le funzioni comuni; richiede il riavvio)'),

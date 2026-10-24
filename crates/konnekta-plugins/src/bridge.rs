@@ -209,6 +209,7 @@ pub fn mobile(pending: Arc<PendingPayloads>, call_control: bool) -> Vec<Arc<dyn 
             [PHONE_SCREEN]
         ),
         bridge!("desktop", "Remote desktop", Desktop, [DESKTOP], [DESKTOP]),
+        bridge!("extend", "Second screen", Desktop, [EXTEND], [EXTEND]),
         bridge!(
             "phoneaudio",
             "Phone audio",

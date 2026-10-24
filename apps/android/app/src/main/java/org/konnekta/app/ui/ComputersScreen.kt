@@ -14,6 +14,11 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Bluetooth
+import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.Usb
+import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.filled.Computer
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Info
@@ -77,6 +82,7 @@ fun ComputersScreen(devices: List<JSONObject>, open: (Route) -> Unit) {
     val nearby by Store.nearby.collectAsState()
     var address by remember { mutableStateOf("") }
     var me by remember { mutableStateOf<JSONObject?>(null) }
+    var transportFor by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(Unit) { me = core(ui.toast) { it.callObject("info") } }
     val paired = devices.filter { it.optBoolean("paired") }
     val available = availableComputers(devices, nearby)
@@ -90,7 +96,7 @@ fun ComputersScreen(devices: List<JSONObject>, open: (Route) -> Unit) {
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
                     Text(me?.optString("deviceName") ?: "Questo telefono", style = MaterialTheme.typography.titleMedium)
-                    Text("Visibile ai computer su questa rete", style = MaterialTheme.typography.bodySmall,
+                    Text("Tieni premuto un computer per scegliere come collegarti (Wi-Fi, Bluetooth, cavo)", style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 IconButton(onClick = { open(Route.Settings) }) { Icon(Icons.Filled.Settings, "Impostazioni") }
@@ -102,17 +108,22 @@ fun ComputersScreen(devices: List<JSONObject>, open: (Route) -> Unit) {
             val online = d.optBoolean("connected")
             ActionCard(
                 if (d.optString("deviceType") in setOf("phone", "tablet")) Icons.Filled.PhoneAndroid else Icons.Filled.Computer, d.optString("name"),
-                if (online) "Connesso · ${if (d.optBoolean("usb")) "cavo USB" else d.optString("address")}"
+                if (online) "Connesso · ${TRANSPORT_LABELS[d.optString("transport")] ?: d.optString("address")}" +
+                    (d.optString("preferredTransport").takeIf { it.isNotEmpty() && it != "null" }?.let { " · scelto: ${TRANSPORT_LABELS[it]}" } ?: "")
                 else "Non raggiungibile${d.optString("address").takeIf { it.isNotEmpty() }?.let { " · $it" } ?: ""}",
                 trailing = {
-                    if (online) StatusDot(true) else TextButton(onClick = {
-                        scope.launch {
-                            d.optString("address").takeIf { it.isNotEmpty() }?.let { a ->
-                                core(ui.toast) { it.call("connect", JSONObject().put("address", a)) }
+                    Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        if (online) StatusDot(true) else TextButton(onClick = {
+                            scope.launch {
+                                d.optString("address").takeIf { it.isNotEmpty() }?.let { a ->
+                                    core(ui.toast) { it.call("connect", JSONObject().put("address", a)) }
+                                }
                             }
-                        }
-                    }) { Text("Riprova") }
+                        }) { Text("Riprova") }
+                        TransportIcons(d)
+                    }
                 },
+                onLongClick = { transportFor = d.optString("id") },
             ) { open(Route.Device(d.optString("id"))) }
         }
         item { SectionTitle("Disponibili") }
@@ -143,7 +154,102 @@ fun ComputersScreen(devices: List<JSONObject>, open: (Route) -> Unit) {
             }
         }
         item {
-            ActionCard(Icons.Filled.Info, "Informazioni", me?.let { "Konnekta ${it.optString("version", "0.1")} · ${it.optString("deviceId").take(8)}" } ?: "Konnekta") {}
+            ActionCard(Icons.Filled.Info, "Informazioni", me?.let { "Konnekta ${it.optString("version", "0.1")} · aggiornamenti, identità del telefono" } ?: "Konnekta") {
+                open(Route.About)
+            }
+        }
+    }
+    transportFor?.let { id ->
+        devices.firstOrNull { it.optString("id") == id }?.let { d -> TransportDialog(d) { transportFor = null } } ?: run { transportFor = null }
+    }
+}
+
+/** Names of the ways to reach a computer. */
+val TRANSPORT_LABELS = mapOf("wifi" to "Wi-Fi", "bluetooth" to "Bluetooth", "usb" to "cavo USB")
+
+private fun JSONObject.transports(): List<String> =
+    optJSONArray("transports")?.let { a -> (0 until a.length()).map { a.optString(it) } }.orEmpty()
+
+/** Small icons of the ways the computer can be reached now; the one in use is coloured. */
+@Composable
+fun TransportIcons(d: JSONObject) {
+    val list = d.transports()
+    if (list.isEmpty()) return
+    val active = d.optString("transport").takeIf { d.optBoolean("connected") }
+    Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+        listOf("usb", "wifi", "bluetooth").filter { it in list }.forEach { t ->
+            Icon(transportIcon(t), TRANSPORT_LABELS[t], Modifier.size(14.dp),
+                tint = if (t == active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .7f))
+        }
+    }
+}
+
+fun transportIcon(t: String) = when (t) {
+    "usb" -> Icons.Filled.Usb
+    "bluetooth" -> Icons.Filled.Bluetooth
+    else -> Icons.Filled.Wifi
+}
+
+/**
+ * Long press on a computer: the ways to reach it, which are available now,
+ * and the one to use. The choice is remembered (also by the computer); when
+ * it is not available the fastest available one is used meanwhile.
+ */
+@Composable
+private fun TransportDialog(d: JSONObject, onClose: () -> Unit) {
+    val ui = LocalUi.current
+    val scope = rememberCoroutineScope()
+    val id = d.optString("id")
+    val available = d.transports()
+    val active = d.optString("transport").takeIf { d.optBoolean("connected") }
+    val chosen = d.optString("preferredTransport").takeIf { it.isNotEmpty() && it != "null" }
+    fun choose(t: String?) = scope.launch {
+        core(ui.toast) { it.call("setTransport", JSONObject().put("deviceId", id).put("transport", t ?: JSONObject.NULL)) }?.let {
+            ui.toast(if (t == null) "Collegamento automatico" else
+                if (t in available) "Uso ${TRANSPORT_LABELS[t]}" else "${TRANSPORT_LABELS[t]} non è disponibile ora: lo userò appena c'è")
+        }
+        core(ui.toast) { it.callArray("devices") }?.let { Store.devices.value = it.objects() }
+        onClose()
+    }
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("Collegamento con ${d.optString("name")}") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text("Scegli la tecnologia da usare. Resta ricordata; se non è disponibile Konnekta passa da solo a un'altra.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                TransportRow(Icons.Filled.Bolt, "Automatico", "Il più veloce disponibile: cavo, poi Wi-Fi, poi Bluetooth", chosen == null) { choose(null) }
+                listOf("wifi", "bluetooth", "usb").forEach { t ->
+                    val state = when {
+                        t == active -> "in uso"
+                        t in available -> "disponibile"
+                        else -> "non disponibile ora"
+                    }
+                    val note = if (t == "bluetooth") "$state · senza audio e video" else state
+                    TransportRow(transportIcon(t), TRANSPORT_LABELS.getValue(t).replaceFirstChar { it.uppercase() }, note,
+                        chosen == t, ok = t in available) { choose(t) }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onClose) { Text("Chiudi") } },
+    )
+}
+
+@Composable
+private fun TransportRow(icon: androidx.compose.ui.graphics.vector.ImageVector, title: String, note: String, selected: Boolean,
+                         ok: Boolean = true, onClick: () -> Unit) {
+    Surface(onClick = onClick, shape = RoundedCornerShape(12.dp),
+        color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
+        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+        Row(Modifier.padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            androidx.compose.material3.RadioButton(selected = selected, onClick = onClick)
+            Icon(icon, null, tint = if (ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .5f))
+            Spacer(Modifier.width(10.dp))
+            Column {
+                Text(title, style = MaterialTheme.typography.titleSmall)
+                Text(note, style = MaterialTheme.typography.bodySmall,
+                    color = if (ok) LocalStatus.current.ok else MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
     }
 }

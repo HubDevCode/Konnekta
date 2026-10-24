@@ -55,7 +55,7 @@ object PcMediaControls {
         runCatching {
             core.sendPacket(deviceId, Types.MEDIA_REQUEST,
                 JSONObject().put("requestNowPlaying", true).put("requestPlayerList", true))
-        }
+        }.onFailure { Log.w(TAG, "cannot ask $deviceId for its player", it) }
     }
 
     /** A konnekta.media packet from a computer. */

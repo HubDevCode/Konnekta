@@ -40,6 +40,12 @@ pub enum InputEvent {
         x: f64,
         y: f64,
     },
+    /// A point of the desktop layout (any monitor), placed through the
+    /// compositor where it can.
+    MoveTo {
+        x: i32,
+        y: i32,
+    },
     Button {
         button: MouseButton,
         action: ButtonAction,
@@ -257,6 +263,11 @@ mod enigo_backend {
     fn apply(e: &mut Enigo, ev: InputEvent) -> Result<()> {
         match ev {
             InputEvent::MoveRelative { dx, dy } => e.move_mouse(dx, dy, Coordinate::Rel)?,
+            InputEvent::MoveTo { x, y } => {
+                if crate::display::move_cursor(x, y).is_err() {
+                    e.move_mouse(x, y, Coordinate::Abs)?
+                }
+            }
             InputEvent::MoveAbsolute { x, y } => {
                 let (w, h) = e.main_display()?;
                 let px = (x.clamp(0.0, 1.0) * f64::from(w - 1)).round() as i32;
@@ -385,6 +396,7 @@ mod ydotool {
                     "-y",
                     &dy.to_string(),
                 ])),
+                InputEvent::MoveTo { x, y } => crate::display::move_cursor(x, y)?,
                 InputEvent::MoveAbsolute { .. } => {
                     anyhow::bail!("absolute pointer not supported by ydotool backend")
                 }
