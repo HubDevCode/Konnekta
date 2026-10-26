@@ -101,6 +101,12 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** Back on screen: link the computers now (Bluetooth dials at once). */
+    override fun onResume() {
+        super.onResume()
+        org.konnekta.app.service.BluetoothBridge.kick()
+    }
+
     private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
 
     override fun onNewIntent(intent: android.content.Intent) {

@@ -2656,7 +2656,7 @@ dependencies = [
 
 [[package]]
 name = "konnekta-approve"
-version = "2.5.0"
+version = "2.5.5"
 dependencies = [
  "base64 0.22.1",
  "hex",
@@ -2670,7 +2670,7 @@ dependencies = [
 
 [[package]]
 name = "konnekta-cli"
-version = "2.5.0"
+version = "2.5.5"
 dependencies = [
  "anyhow",
  "clap",
@@ -2690,7 +2690,7 @@ dependencies = [
 
 [[package]]
 name = "konnekta-core"
-version = "2.5.0"
+version = "2.5.5"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2719,7 +2719,7 @@ dependencies = [
 
 [[package]]
 name = "konnekta-crypto"
-version = "2.5.0"
+version = "2.5.5"
 dependencies = [
  "base64 0.22.1",
  "hex",
@@ -2741,7 +2741,7 @@ dependencies = [
 
 [[package]]
 name = "konnekta-desktop"
-version = "2.5.0"
+version = "2.5.5"
 dependencies = [
  "anyhow",
  "konnekta-core",
@@ -2761,7 +2761,7 @@ dependencies = [
 
 [[package]]
 name = "konnekta-ffi"
-version = "2.5.0"
+version = "2.5.5"
 dependencies = [
  "anyhow",
  "bytes",
@@ -2777,7 +2777,7 @@ dependencies = [
 
 [[package]]
 name = "konnekta-media"
-version = "2.5.0"
+version = "2.5.5"
 dependencies = [
  "anyhow",
  "bytes",
@@ -2790,7 +2790,7 @@ dependencies = [
 
 [[package]]
 name = "konnekta-platform"
-version = "2.5.0"
+version = "2.5.5"
 dependencies = [
  "anyhow",
  "arboard",
@@ -2809,7 +2809,7 @@ dependencies = [
 
 [[package]]
 name = "konnekta-plugins"
-version = "2.5.0"
+version = "2.5.5"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2818,6 +2818,7 @@ dependencies = [
  "directories",
  "flate2",
  "hex",
+ "if-addrs",
  "konnekta-approve",
  "konnekta-core",
  "konnekta-crypto",
@@ -2827,16 +2828,18 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "socket2 0.5.10",
  "tar",
  "tempfile",
  "tokio",
+ "tokio-rustls",
  "tracing",
  "uuid",
 ]
 
 [[package]]
 name = "konnekta-proto"
-version = "2.5.0"
+version = "2.5.5"
 dependencies = [
  "serde",
  "serde_json",

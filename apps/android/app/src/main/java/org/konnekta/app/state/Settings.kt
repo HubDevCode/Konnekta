@@ -23,6 +23,48 @@ object Settings {
 
     val pointerMode = MutableStateFlow(PointerMode.Direct)
 
+    /**
+     * How the phone is held for the second screen and remote desktop:
+     * landscape (the screen turns), portrait (the second screen becomes a
+     * portrait monitor), or as the phone is turned (remote desktop only).
+     */
+    enum class ScreenOrientation { Landscape, Portrait, Auto }
+
+    val extendOrientation = MutableStateFlow(ScreenOrientation.Landscape)
+    val desktopOrientation = MutableStateFlow(ScreenOrientation.Auto)
+
+    /** The computer's sound with the remote desktop. */
+    val desktopAudio = MutableStateFlow(false)
+
+    /**
+     * Sound with the second screen: the same as the computer's speakers,
+     * an output of its own ("Konnekta-Schermo", like a monitor with
+     * speakers), or none.
+     */
+    enum class ScreenAudio { Duplicate, Separate, None }
+
+    val extendAudio = MutableStateFlow(ScreenAudio.None)
+
+    fun setDesktopAudio(ctx: Context, on: Boolean) {
+        desktopAudio.value = on
+        prefs(ctx).putBoolean("desktopAudio", on).apply()
+    }
+
+    fun setExtendAudio(ctx: Context, a: ScreenAudio) {
+        extendAudio.value = a
+        prefs(ctx).putString("extendAudio", a.name).apply()
+    }
+
+    fun setExtendOrientation(ctx: Context, o: ScreenOrientation) {
+        extendOrientation.value = o
+        prefs(ctx).putString("extendOrientation", o.name).apply()
+    }
+
+    fun setDesktopOrientation(ctx: Context, o: ScreenOrientation) {
+        desktopOrientation.value = o
+        prefs(ctx).putString("desktopOrientation", o.name).apply()
+    }
+
     fun setPointerMode(ctx: Context, m: PointerMode) {
         pointerMode.value = m
         prefs(ctx).putString("pointerMode", m.name).apply()
@@ -74,6 +116,12 @@ object Settings {
         pcMediaControls.value = p.getBoolean("pcMediaControls", true)
         bluetooth.value = p.getBoolean("bluetooth", true)
         pointerMode.value = runCatching { PointerMode.valueOf(p.getString("pointerMode", null)!!) }.getOrDefault(PointerMode.Direct)
+        extendOrientation.value = runCatching { ScreenOrientation.valueOf(p.getString("extendOrientation", null)!!) }
+            .getOrDefault(ScreenOrientation.Landscape).takeIf { it != ScreenOrientation.Auto } ?: ScreenOrientation.Landscape
+        desktopOrientation.value = runCatching { ScreenOrientation.valueOf(p.getString("desktopOrientation", null)!!) }
+            .getOrDefault(ScreenOrientation.Auto)
+        desktopAudio.value = p.getBoolean("desktopAudio", false)
+        extendAudio.value = runCatching { ScreenAudio.valueOf(p.getString("extendAudio", null)!!) }.getOrDefault(ScreenAudio.None)
     }
 
     fun setBluetooth(ctx: Context, on: Boolean) {

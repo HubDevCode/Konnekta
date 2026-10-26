@@ -178,20 +178,21 @@ fun ColumnScope.RemoteDesktopScreen(current: JSONObject?, onBack: () -> Unit) {
     val size by Streams.desktopSize.collectAsState()
     val running = live.containsKey("desktop/$id")
     val pointerMode by Settings.pointerMode.collectAsState()
+    val orientation by Settings.desktopOrientation.collectAsState()
     val queue = remember { Channel<JSONObject>(Channel.UNLIMITED) }
+    // Horizontal turns the screen, vertical keeps it upright (Impostazioni).
+    LockOrientation(orientation)
     // Ask (again) whenever the computer is connected and nothing is running.
     val connected = current.optBoolean("connected")
     LaunchedEffect(id, connected) {
         val m = ctx.resources.displayMetrics
         if (connected && !Streams.live.value.containsKey("desktop/$id")) {
-            Streams.request(id, "desktop", JSONObject().put("width", maxOf(m.widthPixels, m.heightPixels)).put("height", minOf(m.widthPixels, m.heightPixels)).put("fps", 30))
+            Streams.request(id, "desktop", JSONObject().put("width", maxOf(m.widthPixels, m.heightPixels)).put("height", minOf(m.widthPixels, m.heightPixels)).put("fps", 60))
         }
     }
-    LaunchedEffect(id) {
-        withContext(Dispatchers.IO) {
-            for (b in queue) runCatching { KonnektaApp.core?.sendPacket(id, Types.INPUT, b) }
-        }
-    }
+    // The computer's sound too, when chosen in Impostazioni.
+    ScreenAudio(id, connected, if (Settings.desktopAudio.value) Settings.ScreenAudio.Duplicate else Settings.ScreenAudio.None)
+    LaunchedEffect(id) { sendInput(id, queue) }
     DisposableEffect(id) { onDispose { Thread { Streams.stop(id, "desktop") }.start() } }
 
     val ratio = size?.let { (w, h) -> w.toFloat() / h } ?: (16f / 9f)
@@ -226,9 +227,46 @@ fun ColumnScope.RemoteDesktopScreen(current: JSONObject?, onBack: () -> Unit) {
             Column(Modifier.fillMaxSize()) {
                 SubHeader("Desktop remoto", current.optString("name"), onBack)
                 Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) { video(Modifier.fillMaxWidth()) }
-                Hint(pointerHint(pointerMode) + " Ruota il telefono per vederlo più grande.")
+                Hint(pointerHint(pointerMode) + if (orientation == Settings.ScreenOrientation.Auto) " Ruota il telefono per vederlo più grande." else "")
             }
         }
+    }
+}
+
+/**
+ * The computer's sound while a screen is shown: what it plays
+ * ([Settings.ScreenAudio.Duplicate]), its own output for the second screen
+ * (Separate), or nothing. Stopped with the screen, unless it was already
+ * on from Controllo.
+ */
+@Composable
+private fun ScreenAudio(id: String, connected: Boolean, mode: Settings.ScreenAudio) {
+    var started by remember { mutableStateOf(false) }
+    LaunchedEffect(id, connected, mode) {
+        if (!connected || mode == Settings.ScreenAudio.None || Streams.live.value.containsKey("systemaudio/$id")) return@LaunchedEffect
+        val params = JSONObject().put("codec", "pcm_s16le").put("sampleRate", 48000).put("channels", 2)
+        if (mode == Settings.ScreenAudio.Separate) params.put("source", "screen")
+        Streams.request(id, "systemaudio", params)
+        started = true
+    }
+    DisposableEffect(id) {
+        onDispose { if (started) Thread { Streams.stop(id, "systemaudio") }.start() }
+    }
+}
+
+/** Hold the activity in [o] while on screen; Auto follows the phone's rotation. */
+@Composable
+private fun LockOrientation(o: Settings.ScreenOrientation) {
+    val ctx = LocalContext.current
+    DisposableEffect(o) {
+        val act = ctx as? Activity
+        val before = act?.requestedOrientation
+        when (o) {
+            Settings.ScreenOrientation.Landscape -> act?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            Settings.ScreenOrientation.Portrait -> act?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+            Settings.ScreenOrientation.Auto -> {}
+        }
+        onDispose { if (before != null && o != Settings.ScreenOrientation.Auto) act.requestedOrientation = before }
     }
 }
 
@@ -324,8 +362,9 @@ private suspend fun androidx.compose.ui.input.pointer.PointerInputScope.remoteTo
 /**
  * The phone as a second monitor of the computer: the computer makes a
  * monitor of the phone's size (arranged in its display settings like any
- * other) and the phone shows it full screen, in landscape. Touches drive
- * the pointer as set in Impostazioni (where you touch, or touchpad).
+ * other) and the phone shows it full screen, in landscape or, as set in
+ * Impostazioni, in portrait (then the monitor is portrait too). Touches
+ * drive the pointer as set in Impostazioni (where you touch, or touchpad).
  */
 @Composable
 fun ExtendScreen(current: JSONObject?, onBack: () -> Unit) {
@@ -338,11 +377,14 @@ fun ExtendScreen(current: JSONObject?, onBack: () -> Unit) {
     val queue = remember { Channel<JSONObject>(Channel.UNLIMITED) }
     var help by remember { mutableStateOf(true) }
     val connected = current.optBoolean("connected")
-    // Landscape, full screen, screen kept on while it shows the monitor.
+    // Read once: the monitor's shape is fixed for the session.
+    val portrait = remember { Settings.extendOrientation.value == Settings.ScreenOrientation.Portrait }
+    // Landscape or portrait, full screen, screen kept on while it shows the monitor.
     DisposableEffect(Unit) {
         val act = ctx as? Activity
         val before = act?.requestedOrientation
-        act?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        act?.requestedOrientation = if (portrait) android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+            else android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
         act?.window?.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         val bars = act?.window?.let { androidx.core.view.WindowCompat.getInsetsController(it, it.decorView) }
         bars?.systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
@@ -355,18 +397,16 @@ fun ExtendScreen(current: JSONObject?, onBack: () -> Unit) {
     }
     LaunchedEffect(id, connected) {
         if (connected && !Streams.live.value.containsKey("extend/$id")) {
-            // The real size of the screen, in landscape: the monitor matches it pixel for pixel.
+            // The real size of the screen, in the chosen orientation: the monitor matches it pixel for pixel.
             val b = if (android.os.Build.VERSION.SDK_INT >= 30) (ctx as? Activity)?.windowManager?.maximumWindowMetrics?.bounds else null
-            val (w, h) = b?.let { maxOf(it.width(), it.height()) to minOf(it.width(), it.height()) }
+            val (long, short) = b?.let { maxOf(it.width(), it.height()) to minOf(it.width(), it.height()) }
                 ?: ctx.resources.displayMetrics.let { maxOf(it.widthPixels, it.heightPixels) to minOf(it.widthPixels, it.heightPixels) }
+            val (w, h) = if (portrait) short to long else long to short
             Streams.request(id, "extend", JSONObject().put("width", w).put("height", h).put("fps", 60))
         }
     }
-    LaunchedEffect(id) {
-        withContext(Dispatchers.IO) {
-            for (b in queue) runCatching { KonnektaApp.core?.sendPacket(id, Types.INPUT, b) }
-        }
-    }
+    ScreenAudio(id, connected, remember { Settings.extendAudio.value })
+    LaunchedEffect(id) { sendInput(id, queue) }
     LaunchedEffect(help) {
         if (help) {
             kotlinx.coroutines.delay(6000)

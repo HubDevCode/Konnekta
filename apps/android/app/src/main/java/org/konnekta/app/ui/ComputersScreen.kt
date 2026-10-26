@@ -27,7 +27,6 @@ import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -99,7 +98,6 @@ fun ComputersScreen(devices: List<JSONObject>, open: (Route) -> Unit) {
                     Text("Tieni premuto un computer per scegliere come collegarti (Wi-Fi, Bluetooth, cavo)", style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                IconButton(onClick = { open(Route.Settings) }) { Icon(Icons.Filled.Settings, "Impostazioni") }
             }
         }
         item { SectionTitle("Associati") }

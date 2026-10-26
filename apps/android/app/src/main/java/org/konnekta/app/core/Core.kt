@@ -83,6 +83,10 @@ class Core private constructor(private val handle: Pointer) {
         call("sendPacket", JSONObject().put("deviceId", deviceId).put("type", type).put("body", body))
     }
 
+    /** Local action of a core plugin that is not tied to a computer (e.g. LocalSend). */
+    fun pluginAction(plugin: String, action: String, args: JSONObject? = null): Any? =
+        call("pluginAction", JSONObject().put("plugin", plugin).put("action", action).put("args", args ?: JSONObject()))
+
     /**
      * Write one frame on a stream channel (see [Frame]): 0 sent, 1 dropped
      * (peer not connected yet, or too slow), -1 channel gone.

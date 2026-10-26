@@ -59,6 +59,16 @@ const MATERIAL = {
   battery: 'M15.67 4H14V2h-4v2H8.33C7.6 4 7 4.6 7 5.33v15.33C7 21.4 7.6 22 8.33 22h7.33c.74 0 1.34-.6 1.34-1.33V5.33C17 4.6 16.4 4 15.67 4z',
   build: 'M22.7 19l-9.1-9.1c.9-2.3.4-5-1.5-6.9-2-2-5-2.4-7.4-1.3L9 6 6 9 1.6 4.7C.4 7.1.9 10.1 2.9 12.1c1.9 1.9 4.6 2.4 6.9 1.5l9.1 9.1c.4.4 1 .4 1.4 0l2.3-2.3c.5-.4.5-1.1.1-1.4z',
   volume: 'M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z',
+  send: 'M2.01 21L23 12 2.01 3 2 10l15 2-15 2z',
+  download: 'M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z',
+  sync: 'M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z',
+  target: 'M11.71 17.99C8.53 17.84 6 15.22 6 12c0-3.31 2.69-6 6-6 3.22 0 5.84 2.53 5.99 5.71l-2.1-.63C15.48 9.31 13.89 8 12 8c-2.21 0-4 1.79-4 4 0 1.89 1.31 3.48 3.08 3.89l.63 2.1zM22 12c0 .3-.01.6-.04.9l-1.97-.59c.01-.1.01-.21.01-.31 0-4.42-3.58-8-8-8s-8 3.58-8 8 3.58 8 8 8c.1 0 .21 0 .31-.01l.59 1.97c-.3.03-.6.04-.9.04-5.52 0-10-4.48-10-10S6.48 2 12 2s10 4.48 10 10zm-3.77 4.26L22 15l-10-3 3 10 1.26-3.77 4.27 4.27 1.98-1.98-4.28-4.26z',
+  file: 'M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z',
+  image: 'M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z',
+  text: 'M14 17H4v2h10v-2zm6-8H4v2h16V9zM4 15h16v-2H4v2zM4 5v2h16V5H4z',
+  close: 'M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z',
+  add: 'M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z',
+  openNew: 'M19 19H5V5h7V3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z',
 };
 function icon(name, size = 18) {
   const NS = 'http://www.w3.org/2000/svg';
@@ -155,6 +165,11 @@ const S = {
   deckProfile: null,
   deckPage: 0,
   deckCategory: '',
+  // Invia page (LocalSend-style): mode, what to send, LocalSend state.
+  sendMode: 'send',
+  sel: [],
+  ls: { status: null, peers: [], transfers: new Map(), request: null },
+  received: [],
 };
 
 const hasCap = (d, cap) => (d?.incomingCapabilities || []).includes(cap);
@@ -228,15 +243,19 @@ function devName(id) {
 
 function onPluginEvent({ deviceId, plugin, kind, data }) {
   const key = `${plugin}/${kind}`;
+  if (plugin === 'localsend') return onLocalSend(kind, data);
   switch (key) {
-    case 'share/transfer':
+    case 'share/transfer': {
+      const before = S.transfers.get(data.id);
       S.transfers.set(data.id, data);
-      if (data.state === 'completed' && data.direction === 'incoming') {
-        toast(`Ricevuto ${data.name}`);
+      if (data.state === 'completed' && data.direction === 'incoming' && before?.state !== 'completed') {
+        addReceived({ name: data.name, path: data.path, from: devName(data.deviceId), via: 'Konnekta', at: Date.now() });
+        toast(`Ricevuto ${data.name}`, '', data.path ? [['Apri', () => openPath(data.path)], ['Mostra nella cartella', () => openPath(data.path, true)]] : []);
       }
       if (data.state === 'failed') toast(`Trasferimento non riuscito: ${data.name} — ${data.error}`, 'err');
-      if (S.view === 'transfers' || (S.view === 'devices' && S.tab === 'actions')) render();
+      if (['transfers', 'send'].includes(S.view) || (S.view === 'devices' && S.tab === 'actions')) render();
       return;
+    }
     case 'share/text':
       toast(`Testo ricevuto da ${devName(deviceId)} (copiato negli appunti)`);
       return;
@@ -294,6 +313,7 @@ function onPluginEvent({ deviceId, plugin, kind, data }) {
 
 const views = {
   devices: renderDevices,
+  send: renderSend,
   transfers: renderTransfers,
   commands: renderCommands,
   deck: renderDeck,
@@ -304,10 +324,18 @@ const views = {
 };
 
 let renderSeq = 0;
+let shownView = null;
 async function render() {
   const seq = ++renderSeq;
-  const el = await views[S.view]();
-  if (seq === renderSeq) $main.replaceChildren(el);
+  const view = S.view;
+  const el = await views[view]();
+  if (seq !== renderSeq) return;
+  $main.replaceChildren(el);
+  // A new page starts at the top; a refresh of the same page keeps its place.
+  if (view !== shownView) {
+    shownView = view;
+    $main.scrollTop = 0;
+  }
 }
 
 document.getElementById('nav').addEventListener('click', (e) => {
@@ -650,6 +678,301 @@ function infoTab(d) {
       }), 'Indirizzi salvati')))) : null);
 }
 
+// --- send (LocalSend-style page: Invia / Ricevi) ----------------------------------
+
+/** Open a received file, or the folder that holds it. */
+const openPath = (path, reveal = false) => run(invoke('open_path', { path: String(path), reveal }));
+const openButtons = (path) => h('div', { class: 'row', style: 'gap:6px;flex-wrap:nowrap' },
+  btn([icon('openNew', 16), ' Apri'], () => openPath(path), 'small'),
+  btn([icon('folder', 16), ' Cartella'], () => openPath(path, true), 'small'));
+
+function addReceived(r) {
+  S.received.unshift(r);
+  S.received = S.received.slice(0, 50);
+}
+
+const lsAct = (action, args = null) => act('localsend', action, args);
+
+async function lsRefresh() {
+  try {
+    const [status, peers, transfers] = await Promise.all([lsAct('status'), lsAct('peers'), lsAct('transfers')]);
+    S.ls.status = status;
+    S.ls.peers = peers;
+    for (const t of transfers) S.ls.transfers.set(t.id, t);
+  } catch { S.ls.status = null; /* plugin disabled */ }
+}
+
+function onLocalSend(kind, data) {
+  switch (kind) {
+    case 'status': S.ls.status = data; break;
+    case 'peers': S.ls.peers = data.peers; break;
+    case 'transfer': {
+      const before = S.ls.transfers.get(data.id);
+      S.ls.transfers.set(data.id, data);
+      if (before?.state !== data.state) {
+        if (data.state === 'rejected') toast(`${data.peer} ha rifiutato i file`, 'warn');
+        if (data.state === 'completed' && data.direction === 'outgoing') toast(`Inviato a ${data.peer}`);
+      }
+      break;
+    }
+    case 'received':
+      addReceived({ name: data.name, path: data.path, from: data.from, via: 'LocalSend', at: Date.now() });
+      toast(`Ricevuto ${data.name} da ${data.from}`, '', [['Apri', () => openPath(data.path)], ['Mostra nella cartella', () => openPath(data.path, true)]]);
+      break;
+    case 'request': lsRequestModal(data); return;
+    case 'requestClosed':
+      if (S.ls.request === data.id) { S.ls.request = null; document.getElementById('modal-root').innerHTML = ''; }
+      return;
+    case 'text':
+      modal(`Messaggio da ${data.from}`, h('div', {}, h('p', { style: 'white-space:pre-wrap;user-select:text' }, data.text)),
+        [['Chiudi'], ['Copia', () => navigator.clipboard.writeText(data.text).then(() => toast('Copiato negli appunti')), 'primary']]);
+      return;
+    case 'scanDone': S.ls.scanning = false; break;
+  }
+  if (S.view === 'send') render();
+}
+
+function lsRequestModal(r) {
+  S.ls.request = r.id;
+  const list = h('div', { class: 'list', style: 'max-height:260px;overflow:auto' }, r.files.map((f) => h('div', { class: 'item', style: 'padding:8px 12px' },
+    icon(fileIcon(f.mime), 20), h('div', { class: 'grow', style: 'min-width:0' }, h('div', { class: 'dev-name' }, f.name)),
+    h('span', { class: 'small muted' }, fmtBytes(f.size)))));
+  modal(`${r.from} vuole inviarti ${r.files.length === 1 ? 'un file' : `${r.files.length} file`}`, h('div', {},
+    h('div', { class: 'row small muted', style: 'margin-bottom:10px' }, h('span', { class: 'badge k' }, 'LocalSend'),
+      [r.deviceModel, r.ip].filter(Boolean).join(' · '), `· ${fmtBytes(r.total)}`),
+    list,
+    h('p', { class: 'small muted' }, 'Accetta solo se aspetti questi file. Verranno salvati nella cartella dei file ricevuti.')),
+  [['Rifiuta', () => lsAct('reject', { id: r.id }).catch(() => {}), 'danger'],
+   ['Accetta', () => run(lsAct('accept', { id: r.id })), 'primary']]);
+}
+
+const fileIcon = (mime = '') => mime.startsWith('image/') ? 'image' : mime.startsWith('text/') ? 'text'
+  : mime.startsWith('video/') ? 'videocam' : mime.startsWith('audio/') ? 'headphones' : 'file';
+const baseName = (p) => String(p).split(/[\\/]/).pop();
+
+/** One selection button (File, Cartella, Testo, Appunti). */
+const bigButton = (ic, label, onclick) => h('button', { class: 'ls-big', onclick }, icon(ic, 26), h('span', {}, label));
+
+function addPick(kind) {
+  const add = (items) => { S.sel.push(...items); render(); };
+  if (kind === 'file') invoke('pick_files').then((paths) => add(paths.map((path) => ({ kind: 'file', path, name: baseName(path) }))));
+  if (kind === 'folder') invoke('pick_folder').then((path) => path && add([{ kind: 'folder', path, name: baseName(path) }]));
+  if (kind === 'clipboard') add([{ kind: 'clipboard', name: 'Appunti' }]);
+  if (kind === 'text') {
+    const ta = h('textarea', { placeholder: 'Testo o link…', style: 'min-height:120px' });
+    modal('Testo da inviare', ta, [['Annulla'], ['Aggiungi', () => {
+      if (!ta.value.trim()) return false;
+      add([{ kind: 'text', text: ta.value, name: ta.value.slice(0, 40) }]);
+      return true;
+    }, 'primary']]);
+    setTimeout(() => ta.focus(), 50);
+  }
+}
+
+function selectionCard() {
+  const pickers = [['file', 'file', 'File'], ['folder', 'folder', 'Cartella'], ['text', 'text', 'Testo'], ['clipboard', 'paste', 'Appunti']];
+  if (!S.sel.length) {
+    return h('div', {}, h('h2', {}, 'Selezione'),
+      h('div', { class: 'ls-pickers' }, pickers.map(([k, ic, label]) => bigButton(ic, label, () => addPick(k)))));
+  }
+  const files = S.sel.filter((x) => x.kind === 'file' || x.kind === 'folder').length;
+  return h('div', { class: 'card ls-sel' },
+    h('div', { class: 'row' }, h('h2', { class: 'grow', style: 'margin:0' }, 'Selezione'),
+      h('button', { class: 'icon-btn', title: 'Svuota', onclick: () => { S.sel = []; render(); } }, icon('close', 20))),
+    h('div', { class: 'small muted', style: 'margin:4px 0 10px' },
+      `${S.sel.length === 1 ? '1 elemento' : `${S.sel.length} elementi`}${files ? ` · ${files} tra file e cartelle` : ''}`),
+    h('div', { class: 'ls-thumbs' }, S.sel.map((x, i) => h('div', { class: 'ls-thumb', title: x.path || x.text || x.name },
+      h('div', { class: 'ls-thumb-ic' }, icon({ file: 'file', folder: 'folder', text: 'text', clipboard: 'paste' }[x.kind], 28)),
+      h('div', { class: 'ls-thumb-name' }, x.name),
+      h('button', { class: 'ls-thumb-x', title: 'Togli', onclick: () => { S.sel.splice(i, 1); render(); } }, icon('close', 14))))),
+    h('div', { class: 'row', style: 'justify-content:flex-end;margin-top:10px' },
+      pickers.map(([k, ic, label]) => btn([icon(ic, 16), ` ${label}`], () => addPick(k), 'small'))));
+}
+
+/** A nearby device as LocalSend shows it: icon, name, tags. */
+function nearbyTile({ ic, name, tags, onclick, extra, busy }) {
+  return h('div', { class: `ls-dev ${busy ? 'busy' : ''}`, onclick },
+    h('div', { class: 'ls-dev-ic' }, icon(ic, 26)),
+    h('div', { class: 'grow', style: 'min-width:0' },
+      h('div', { class: 'dev-name' }, name),
+      h('div', { class: 'ls-tags' }, tags.filter(Boolean).map(([t, cls]) => h('span', { class: `badge ${cls || ''}` }, t)))),
+    extra || null);
+}
+
+const lastOctet = (ip) => ip ? `#${String(ip).split('.').pop()}` : null;
+
+async function sendToKonnekta(d) {
+  for (const x of S.sel) {
+    if (x.kind === 'file') continue;
+    if (x.kind === 'folder') await act('share', 'sendFolder', { path: x.path }, d.id);
+    if (x.kind === 'clipboard') await act('clipboard', 'send', null, d.id);
+    if (x.kind === 'text') {
+      const t = x.text.trim();
+      await (/^https?:\/\/\S+$/.test(t) ? act('share', 'sendUrl', { url: t }, d.id) : act('share', 'sendText', { text: x.text }, d.id));
+    }
+  }
+  const paths = S.sel.filter((x) => x.kind === 'file').map((x) => x.path);
+  if (paths.length) await act('share', 'sendFiles', { paths }, d.id);
+}
+
+async function sendToLocalSend(p, pin) {
+  const paths = S.sel.filter((x) => x.kind === 'file' || x.kind === 'folder').map((x) => x.path);
+  const texts = [];
+  for (const x of S.sel) {
+    if (x.kind === 'text') texts.push(x.text);
+    if (x.kind === 'clipboard') {
+      try { texts.push(await navigator.clipboard.readText()); } catch { throw new Error('Non riesco a leggere gli appunti: incolla il testo con "Testo"'); }
+    }
+  }
+  // LocalSend sends a message on its own, then the files.
+  for (const text of texts) if (text) await lsAct('send', { peerId: p.id, text, pin });
+  if (paths.length) await lsAct('send', { peerId: p.id, paths, pin });
+}
+
+async function sendTo(target) {
+  if (!S.sel.length) { toast('Scegli prima cosa inviare: file, cartella, testo o appunti', 'warn'); return; }
+  try {
+    if (target.konnekta) await sendToKonnekta(target.konnekta);
+    else await sendToLocalSend(target.peer);
+    toast(target.konnekta ? `Invio a ${target.konnekta.name} avviato` : `Inviato a ${target.peer.alias}`);
+  } catch (e) {
+    if (target.peer && String(e).includes('PIN')) {
+      const pin = h('input', { type: 'text', placeholder: 'PIN' });
+      modal(`PIN per ${target.peer.alias}`, h('div', {}, h('p', { class: 'muted' }, 'Questo dispositivo chiede un PIN per ricevere.'), pin),
+        [['Annulla'], ['Invia', () => run(sendToLocalSend(target.peer, pin.value), `Inviato a ${target.peer.alias}`), 'primary']]);
+      return;
+    }
+    toast(String(e), 'err');
+  }
+}
+
+function lsOffCard() {
+  return h('div', { class: 'card ls-hint' },
+    h('div', { class: 'grow' }, h('b', {}, 'Compatibilità LocalSend'),
+      h('div', { class: 'small muted' }, 'Attivala per vedere qui anche i telefoni e i computer con l\'app LocalSend e scambiare file con loro.')),
+    btn('Attiva', () => run(lsAct('setConfig', { enabled: true }), 'LocalSend attivo').then(lsRefresh).then(render), 'primary'));
+}
+
+function activeTransfers() {
+  const list = [
+    ...[...S.ls.transfers.values()].filter((t) => ['waiting', 'inProgress'].includes(t.state)).map((t) => ({ ...t, ls: true })),
+    ...[...S.transfers.values()].filter((t) => t.state === 'inProgress').map((t) => ({ id: t.id, peer: devName(t.deviceId), direction: t.direction, total: t.size, transferred: t.transferred, files: [{ name: t.name }], state: t.state })),
+  ];
+  if (!list.length) return null;
+  return h('div', {}, h('h2', {}, 'In corso'), h('div', { class: 'list' }, list.map((t) => {
+    const pct = t.total ? Math.round((t.transferred / t.total) * 100) : 0;
+    return h('div', { class: 'item' },
+      icon(t.direction === 'incoming' ? 'download' : 'send', 20),
+      h('div', { class: 'grow' },
+        h('div', { class: 'row' }, h('b', {}, t.files.length === 1 ? t.files[0].name : `${t.files.length} file`),
+          h('span', { class: 'small muted' }, `${t.direction === 'incoming' ? 'da' : 'a'} ${t.peer}`)),
+        h('div', { class: 'small muted' }, t.state === 'waiting' ? 'In attesa che accetti…' : `${fmtBytes(t.transferred)} / ${fmtBytes(t.total)}`),
+        h('div', { class: 'progress', style: 'margin-top:6px' }, h('div', { style: `width:${pct}%` }))),
+      t.ls ? btn('Annulla', () => run(lsAct('cancel', { id: t.id })), 'small danger') : null);
+  })));
+}
+
+function sendPane() {
+  const konnekta = S.devices.filter((d) => d.paired && d.connected);
+  const st = S.ls.status;
+  const lsOn = st?.enabled;
+  const tiles = [
+    ...konnekta.map((d) => nearbyTile({
+      ic: { phone: 'smartphone', tablet: 'tablet', laptop: 'laptop', desktop: 'desktop', tv: 'tv' }[d.deviceType] || 'smartphone',
+      name: d.name,
+      tags: [['Konnekta', 'k'], d.transport ? [TRANSPORT_LABELS[d.transport] || d.transport] : null, S.battery[d.id] ? [`${S.battery[d.id].currentCharge}%`] : null],
+      onclick: () => sendTo({ konnekta: d }),
+      extra: h('button', { class: 'icon-btn', title: `Ping a ${d.name}`, onclick: (e) => { e.stopPropagation(); run(act('ping', 'send', { message: 'Ping da Konnekta' }, d.id), `Ping inviato a ${d.name}`); } }, icon('bell', 20)),
+    })),
+    ...(lsOn ? S.ls.peers.map((p) => nearbyTile({
+      ic: p.deviceType === 'mobile' ? 'smartphone' : p.deviceType === 'web' ? 'link' : 'desktop',
+      name: p.alias,
+      tags: [['LocalSend', 'ok'], p.ip ? [lastOctet(p.ip)] : null, p.deviceModel ? [p.deviceModel] : null],
+      onclick: () => sendTo({ peer: p }),
+    })) : []),
+  ];
+  const manual = () => {
+    const ip = h('input', { type: 'text', placeholder: '192.168.1.20 oppure 192.168.1.20:53317' });
+    modal('Invia a un indirizzo', h('div', {}, h('p', { class: 'muted' }, 'L\'indirizzo IP di un dispositivo con LocalSend (lo trovi nella sua pagina Ricevi).'), ip),
+      [['Annulla'], ['Aggiungi', () => run(lsAct('addPeer', { address: ip.value }), 'Dispositivo trovato').then(lsRefresh).then(render), 'primary']]);
+  };
+  return h('div', {},
+    selectionCard(),
+    h('div', { class: 'row', style: 'margin-top:18px' }, h('h2', { class: 'grow', style: 'margin:0' }, 'Dispositivi vicini'),
+      lsOn ? h('button', { class: `icon-btn ${S.ls.scanning ? 'spin' : ''}`, title: 'Cerca di nuovo', onclick: () => {
+        S.ls.scanning = true; render();
+        lsAct('scan').catch((e) => { S.ls.scanning = false; toast(String(e), 'err'); render(); });
+        refreshDevices();
+      } }, icon('sync', 20)) : h('button', { class: 'icon-btn', title: 'Aggiorna', onclick: () => run(api('refresh')).then(refreshDevices) }, icon('sync', 20)),
+      lsOn ? h('button', { class: 'icon-btn', title: 'Invia a un indirizzo', onclick: manual }, icon('target', 20)) : null),
+    h('div', { class: 'ls-devs' }, tiles.length ? tiles
+      : h('div', { class: 'ls-dev placeholder' }, h('div', { class: 'ls-dev-ic' }, icon('devices', 26)),
+        h('div', { class: 'grow' }, h('div', { class: 'dev-name' }, 'Nessun dispositivo vicino'),
+          h('div', { class: 'small muted' }, 'Apri Konnekta (o LocalSend) sull\'altro dispositivo, nella stessa rete.')))),
+    st && !lsOn ? lsOffCard() : null,
+    st?.enabled && st.error ? h('p', { class: 'badge warn', style: 'display:block;padding:8px 12px;margin-top:10px' }, st.error) : null,
+    activeTransfers(),
+    h('p', { class: 'small muted', style: 'margin-top:18px' }, 'Scegli cosa inviare, poi tocca il dispositivo. I dispositivi Konnekta ricevono subito; quelli con LocalSend chiedono conferma.'));
+}
+
+function receivePane() {
+  const st = S.ls.status;
+  const ips = st?.ips || [];
+  const quick = (on) => run(lsAct('setConfig', { autoAccept: on })).then(lsRefresh).then(render);
+  return h('div', { class: 'ls-receive' },
+    // Same mark as the sidebar, larger; it pulses while ready to receive.
+    h('div', { class: 'ls-logo on' }, document.querySelector('.brand svg').cloneNode(true)),
+    h('div', { class: 'ls-name' }, S.me?.deviceName || '—'),
+    h('div', { class: 'ls-tags', style: 'justify-content:center' }, ips.map((ip) => h('span', { class: 'badge', title: ip }, lastOctet(ip)))),
+    h('div', { class: 'ls-status' },
+      h('div', { class: 'row' }, h('span', { class: 'dot on' }), 'Konnekta: pronto a ricevere dai dispositivi associati'),
+      h('div', { class: 'row' }, h('span', { class: `dot ${st?.running ? 'on' : ''}` }),
+        !st ? 'LocalSend: plugin disattivato' : !st.enabled ? 'LocalSend: disattivato'
+          : st.running ? `LocalSend: visibile come «${st.alias}» (porta ${st.port}, ${st.https ? 'HTTPS' : 'HTTP'})` : `LocalSend: ${st.error || 'avvio…'}`,
+        st && !st.enabled ? btn('Attiva', () => run(lsAct('setConfig', { enabled: true }), 'LocalSend attivo').then(lsRefresh).then(render), 'small primary') : null)),
+    st?.enabled ? h('div', { class: 'ls-quick' },
+      h('div', { class: 'small muted', style: 'margin-bottom:6px' }, 'Ricezione rapida (LocalSend)'),
+      h('div', { class: 'seg' },
+        h('button', { class: st.autoAccept ? '' : 'active', onclick: () => quick(false) }, 'Chiedi sempre'),
+        h('button', { class: st.autoAccept ? 'active' : '', onclick: () => quick(true) }, 'Accetta tutto'))) : null,
+    activeTransfers(),
+    h('div', { style: 'width:100%;text-align:left' },
+      h('div', { class: 'row', style: 'margin-top:18px' }, h('h2', { class: 'grow', style: 'margin:0' }, 'Ricevuti'),
+        S.received.length ? btn('Svuota', () => { S.received = []; render(); }, 'small') : null),
+      S.received.length ? h('div', { class: 'list', style: 'margin-top:10px' }, S.received.map((r) => h('div', { class: 'item' },
+        icon('download', 20),
+        h('div', { class: 'grow', style: 'min-width:0' }, h('div', { class: 'dev-name' }, r.name),
+          h('div', { class: 'small muted' }, `da ${r.from} · ${r.via} · ${new Date(r.at).toLocaleTimeString()}`)),
+        r.path ? openButtons(r.path) : null)))
+        : h('p', { class: 'small muted' }, 'I file che ricevi compaiono qui: aprili con un clic.')));
+}
+
+async function renderSend() {
+  await lsRefresh();
+  const seg = h('div', { class: 'seg big' },
+    h('button', { class: S.sendMode === 'send' ? 'active' : '', onclick: () => { S.sendMode = 'send'; render(); } }, icon('send', 18), ' Invia'),
+    h('button', { class: S.sendMode === 'receive' ? 'active' : '', onclick: () => { S.sendMode = 'receive'; render(); } }, icon('download', 18), ' Ricevi'));
+  const page = h('div', { class: 'ls-page' },
+    h('div', { class: 'row', style: 'margin-bottom:16px' }, h('h1', { class: 'grow', style: 'margin:0' }, 'Invia'), seg),
+    S.sendMode === 'send' ? sendPane() : receivePane());
+  return page;
+}
+
+/**
+ * Files chosen with "Invia tramite Konnekta" in the file manager: Invia
+ * opens with them selected, the user only picks the device.
+ */
+async function takeSend() {
+  const items = await invoke('take_send').catch(() => []);
+  if (!items.length) return;
+  S.sel.push(...items.map((x) => ({ kind: x.dir ? 'folder' : 'file', path: x.path, name: x.name })));
+  S.view = 'send';
+  S.sendMode = 'send';
+  for (const b of document.querySelectorAll('#nav button')) b.classList.toggle('active', b.dataset.view === 'send');
+  await render();
+  toast(items.length === 1 ? `${items[0].name}: scegli a quale dispositivo inviarlo` : `${items.length} elementi: scegli a quale dispositivo inviarli`);
+}
+
 // --- transfers ----------------------------------------------------------------
 
 const STATE_LABEL = { inProgress: 'In corso', completed: 'Completato', interrupted: 'Interrotto', failed: 'Non riuscito', cancelled: 'Annullato' };
@@ -665,7 +988,8 @@ function transferItem(t) {
       h('div', { class: 'small muted' }, `${devName(t.deviceId)} · ${fmtBytes(t.transferred)} / ${fmtBytes(t.size)}`, t.error ? ` · ${t.error}` : ''),
       t.state === 'inProgress' ? h('div', { class: 'progress', style: 'margin-top:6px' }, h('div', { style: `width:${pct}%` })) : null),
     t.direction === 'outgoing' && ['failed', 'interrupted'].includes(t.state)
-      ? btn('Riprova', () => run(act('share', 'retry', { id: t.id }, t.deviceId)), 'small') : null);
+      ? btn('Riprova', () => run(act('share', 'retry', { id: t.id }, t.deviceId)), 'small') : null,
+    t.direction === 'incoming' && t.state === 'completed' && t.path ? openButtons(t.path) : null);
 }
 
 async function renderTransfers() {
@@ -955,8 +1279,8 @@ async function renderSettings() {
   const cfg = await api('getConfig');
   const shell = await invoke('desktop_prefs_get');
   const get = (p) => act(p, 'getConfig').catch(() => null);
-  const [share, clip, shot, filter, dnd, pres, tel] = await Promise.all([
-    get('share'), get('clipboard'), get('screenshot'), act('notifications', 'getFilter').catch(() => null), get('dnd'), get('presenter'), get('calls')]);
+  const [share, clip, shot, filter, dnd, pres, tel, ls] = await Promise.all([
+    get('share'), get('clipboard'), get('screenshot'), act('notifications', 'getFilter').catch(() => null), get('dnd'), get('presenter'), get('calls'), get('localsend')]);
   const general = { deviceName: cfg.device_name, downloadDir: cfg.download_dir, announce: cfg.announce, mdns: cfg.mdns, usb: cfg.usb !== false, bluetooth: cfg.bluetooth !== false, virtualCamera: cfg.virtual_camera !== false,
     kdeConnect: !!cfg.kde_connect?.enabled, flux: !!cfg.flux?.enabled, syncPermissions: cfg.sync_permissions !== false };
   const txt = (o, k, label) => h('label', { class: 'field' }, label, h('input', { type: 'text', value: o[k] ?? '', oninput: (e) => { o[k] = e.target.value; } }));
@@ -989,12 +1313,23 @@ async function renderSettings() {
     card('Programma sul computer', h('div', { class: 'list' },
       chk(shell, 'tray', 'Mostra l\'icona nella tray (se disattivata, chiudere la finestra chiude Konnekta)'),
       chk(shell, 'autostart', 'Avvia Konnekta con il computer, solo nella tray, senza aprire la finestra'),
-      chk(shell, 'appList', 'Mostra Konnekta nella lista delle applicazioni del computer')),
+      chk(shell, 'appList', 'Mostra Konnekta nella lista delle applicazioni del computer'),
+      chk(shell, 'sendTo', 'Aggiungi «Invia tramite Konnekta» al menu dei file (Dolphin, Nautilus, Nemo, Caja, «Apri con»; su Windows «Invia a» e il menu del tasto destro)')),
     () => invoke('desktop_prefs_set', { prefs: shell })),
     share && card('File', h('div', { class: 'list' },
       folder(share, 'destination', 'Cartella di destinazione (vuoto = predefinita)'),
       chk(share, 'textToClipboard', 'Copia negli appunti il testo ricevuto')),
     () => act('share', 'setConfig', share)),
+    ls && card('LocalSend', h('div', { class: 'list' },
+      h('p', { class: 'small muted', style: 'margin:0' }, 'Scambia file e testi con le app LocalSend sulla stessa rete, dalla pagina Invia. I dispositivi LocalSend non vengono associati: ogni invio verso questo computer va accettato (salvo la ricezione rapida) e non hanno accesso a nient\'altro di Konnekta.'),
+      chk(ls, 'enabled', 'Compatibilità con LocalSend (porta TCP/UDP 53317)'),
+      txt(ls, 'alias', `Nome mostrato su LocalSend (vuoto = ${S.me?.deviceName || 'nome del computer'})`),
+      chk(ls, 'autoAccept', 'Ricezione rapida: accetta i file senza chiedere'),
+      txt(ls, 'pin', 'PIN richiesto a chi invia (vuoto = nessuno)'),
+      folder(ls, 'destination', 'Cartella per i file ricevuti (vuoto = predefinita)'),
+      chk(ls, 'https', 'Cifra con HTTPS (come LocalSend; disattiva solo per dispositivi vecchi)'),
+      h('label', { class: 'field' }, 'Porta', h('input', { type: 'number', value: ls.port, min: 1024, max: 65535, oninput: (e) => { ls.port = Number(e.target.value) || 53317; } }))),
+    () => act('localsend', 'setConfig', { ...ls, alias: ls.alias || null, pin: ls.pin || null, destination: ls.destination || null })),
     clip && card('Appunti', h('div', { class: 'list' },
       chk(clip, 'autoSend', 'Invia automaticamente ai dispositivi ciò che copio'),
       chk(clip, 'autoReceive', 'Ricevi automaticamente gli appunti dei dispositivi')),
@@ -1110,8 +1445,10 @@ async function renderSecurity() {
     S.me = await api('info');
     document.getElementById('me-name').textContent = S.me.deviceName;
     await T.event.listen('konnekta', (e) => onEvent(e.payload));
+    await T.event.listen('konnekta-send', () => takeSend());
     await refreshDevices();
     render();
+    await takeSend();
     checkUpdateOnStart();
   } catch (e) {
     $main.replaceChildren(h('div', { class: 'card' }, h('h1', {}, 'Errore di avvio'), h('p', {}, String(e))));

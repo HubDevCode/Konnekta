@@ -130,7 +130,7 @@ fun InboxCard(item: InboxItem) {
     SmallCard("$label · $time", color, title, if (item.kind in setOf("clipboard", "text", "link")) "Da ${item.deviceName}" else body,
         onDismiss = { Store.dismiss(item.id) },
         onClick = when (item.kind) {
-            "file" -> item.target?.let { t -> { Files.open(ctx, Uri.parse(t), item.mime) } }
+            "file" -> item.target?.let { t -> { Files.open(ctx, Uri.parse(t), item.mime)?.let(ui.toast) } }
             "link" -> item.target?.let { t -> { runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(t)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } } }
             "clipboard", "text" -> { {
                 ctx.getSystemService(ClipboardManager::class.java)?.setPrimaryClip(ClipData.newPlainText("Konnekta", item.text))
@@ -140,7 +140,7 @@ fun InboxCard(item: InboxItem) {
         },
     ) {
         when (item.kind) {
-            "file" -> OutlinedButton(onClick = { item.target?.let { Files.open(ctx, Uri.parse(it), item.mime) } }) { Text("Apri") }
+            "file" -> OutlinedButton(onClick = { item.target?.let { Files.open(ctx, Uri.parse(it), item.mime)?.let(ui.toast) } }) { Text("Apri") }
             "link" -> OutlinedButton(onClick = {
                 runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(item.target)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
             }) { Text("Apri") }

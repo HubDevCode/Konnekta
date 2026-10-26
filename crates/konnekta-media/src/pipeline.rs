@@ -78,14 +78,20 @@ pub fn screen_capture_command(q: Quality, output: Option<&str>) -> Result<(Strin
             ("cq", "23".into()),
             ("maxrate", rate.clone()),
             ("zerolatency", "1".into()),
+            // Hand each picture out as soon as it is encoded.
+            ("delay", "0".into()),
         ]
     } else {
         vec![
             ("preset", "ultrafast".into()),
             ("tune", "zerolatency".into()),
             // zerolatency cuts each picture in one slice per thread; some
-            // phone decoders draw stripes and grey from those.
-            ("x264-params", "sliced-threads=0".into()),
+            // phone decoders draw stripes and grey from those. Without sliced
+            // threads x264 would thread by frame instead, holding back one
+            // picture per thread (21 frames, 0.7 s, on a 20-core CPU): one
+            // thread keeps the delay at zero and still encodes 1080p60 at
+            // several times real time with ultrafast.
+            ("x264-params", "sliced-threads=0:threads=1".into()),
             ("crf", "23".into()),
             ("maxrate", rate.clone()),
             ("bufsize", format!("{}k", q.bitrate_kbps / 2)),
@@ -280,14 +286,15 @@ fn fit(w: u32, h: u32, height: u32) -> (u32, u32) {
     (even(w), even(h))
 }
 
-/// System audio (what you hear) as s16le 48 kHz stereo on stdout.
-pub fn system_audio_command() -> Result<(String, Vec<String>)> {
+/// System audio as s16le 48 kHz stereo on stdout: what you hear
+/// (`device` None), or the monitor of one output (`<sink>.monitor`).
+pub fn system_audio_command(device: Option<&str>) -> Result<(String, Vec<String>)> {
     #[cfg(target_os = "linux")]
     {
         return Ok((
             "parec".into(),
             [
-                "--device=@DEFAULT_MONITOR@",
+                &format!("--device={}", device.unwrap_or("@DEFAULT_MONITOR@")),
                 "--format=s16le",
                 "--rate=48000",
                 "--channels=2",
@@ -301,6 +308,7 @@ pub fn system_audio_command() -> Result<(String, Vec<String>)> {
     }
     #[allow(unreachable_code)]
     {
+        let _ = device;
         bail!("use virtual_devices::SystemAudioCapture (cpal loopback) on this platform")
     }
 }

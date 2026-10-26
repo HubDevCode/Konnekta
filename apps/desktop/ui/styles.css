@@ -117,3 +117,40 @@ code { font: 12px ui-monospace, monospace; background: var(--panel-2); padding: 
 .transports .tr { display: inline-flex; color: var(--muted); opacity: .75; }
 .transports .tr.on { color: var(--accent); opacity: 1; }
 .transports .tr svg { fill: currentColor; }
+
+/* Invia page, laid out like LocalSend: big pickers, device cards with tags. */
+.ls-page { max-width: 860px; }
+.seg { display: inline-flex; background: var(--panel-2); border: 1px solid var(--border); border-radius: 99px; padding: 3px; gap: 2px; }
+.seg button { border: 0; background: none; padding: 6px 14px; border-radius: 99px; cursor: pointer; color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
+.seg button.active { background: var(--accent); color: var(--on-accent); font-weight: 600; }
+.seg.big button { padding: 8px 18px; }
+.ls-pickers { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 10px; }
+.ls-big { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 18px 8px; border-radius: var(--radius); border: 1px solid var(--border); background: var(--panel); cursor: pointer; color: var(--accent); }
+.ls-big span { color: var(--text); font-weight: 600; }
+.ls-big:hover { background: var(--accent-cont); border-color: var(--accent); }
+.ls-thumbs { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 4px; }
+.ls-thumb { position: relative; flex: none; width: 96px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel-2); padding: 10px 6px 8px; text-align: center; }
+.ls-thumb-ic { color: var(--accent); }
+.ls-thumb-name { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 4px; }
+.ls-thumb-x { position: absolute; top: 2px; right: 2px; border: 0; background: none; cursor: pointer; color: var(--muted); padding: 2px; border-radius: 50%; display: flex; }
+.ls-thumb-x:hover { background: var(--panel-3); color: var(--danger); }
+.icon-btn { border: 0; background: none; cursor: pointer; padding: 8px; border-radius: 50%; color: var(--accent); display: inline-flex; }
+.icon-btn:hover { background: var(--panel-2); }
+.icon-btn.spin .ic { animation: ls-spin 1s linear infinite; }
+@keyframes ls-spin { to { transform: rotate(360deg); } }
+.ls-devs { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.ls-dev { display: flex; align-items: center; gap: 14px; padding: 12px 14px; border-radius: var(--radius); border: 1px solid var(--border); background: var(--panel); cursor: pointer; }
+.ls-dev:hover { background: var(--panel-2); border-color: var(--accent); }
+.ls-dev.placeholder { opacity: .6; cursor: default; border-style: dashed; }
+.ls-dev-ic { width: 46px; height: 46px; border-radius: 50%; background: var(--accent-cont); color: var(--on-accent-cont); display: flex; align-items: center; justify-content: center; flex: none; }
+.ls-tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+.ls-hint { display: flex; gap: 12px; align-items: center; margin-top: 12px; }
+.ls-receive { display: flex; flex-direction: column; align-items: center; text-align: center; padding-top: 12px; }
+.ls-logo { width: 150px; height: 150px; border-radius: 50%; display: flex; align-items: center; justify-content: center; background: var(--accent-cont); position: relative; }
+.ls-logo svg { width: 96px; height: 96px; }
+.ls-logo.on::after { content: ""; position: absolute; inset: -10px; border-radius: 50%; border: 3px solid var(--accent); opacity: 0; animation: ls-pulse 2.4s ease-out infinite; }
+@keyframes ls-pulse { 0% { transform: scale(.9); opacity: .7; } 100% { transform: scale(1.25); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .ls-logo.on::after, .icon-btn.spin .ic { animation: none; } }
+.ls-name { font-size: 26px; font-weight: 700; margin-top: 18px; }
+.ls-status { display: flex; flex-direction: column; gap: 6px; margin: 16px 0 8px; font-size: 13px; color: var(--muted); align-items: center; }
+.ls-quick { margin: 10px 0; }

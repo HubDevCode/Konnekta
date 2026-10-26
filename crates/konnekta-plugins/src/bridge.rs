@@ -233,7 +233,7 @@ pub fn mobile(pending: Arc<PendingPayloads>, call_control: bool) -> Vec<Arc<dyn 
         incoming: telephony_in,
         outgoing: &[CALL],
     });
-    infos
+    let mut plugins: Vec<Arc<dyn Plugin>> = infos
         .into_iter()
         .map(|info| {
             Arc::new(BridgePlugin {
@@ -241,5 +241,11 @@ pub fn mobile(pending: Arc<PendingPayloads>, call_control: bool) -> Vec<Arc<dyn 
                 pending: pending.clone(),
             }) as Arc<dyn Plugin>
         })
-        .collect()
+        .collect();
+    // LocalSend runs in the core on the phone too; the app moves received
+    // files to the shared Download folder.
+    plugins.push(crate::localsend::LocalSendPlugin::new(
+        konnekta_platform::Platform::unsupported(),
+    ));
+    plugins
 }

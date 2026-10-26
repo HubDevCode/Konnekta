@@ -15,6 +15,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Bluetooth
+import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Slideshow
@@ -28,6 +29,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
+import org.json.JSONObject
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -68,10 +73,6 @@ fun SettingsScreen(onBack: () -> Unit) {
             Settings.editing.value = "control"
             onBack()
         }
-        ActionCard(Icons.AutoMirrored.Filled.Send, "Personalizza Invia", "Ordine e funzioni nascoste della pagina Invia") {
-            Settings.editing.value = "send"
-            onBack()
-        }
 
         SectionTitle("Touchpad")
         Box14 {
@@ -98,6 +99,56 @@ fun SettingsScreen(onBack: () -> Unit) {
         ) { Settings.setPointerMode(ctx, it) }
         Hint(if (pointer == Settings.PointerMode.Direct) "Il puntatore va dove tocchi: tocca per cliccare, trascina per trascinare."
             else "Trascina per spostare il puntatore, tocca per cliccare, tocca due volte e trascina per selezionare.")
+        val extendO by Settings.extendOrientation.collectAsState()
+        Choice(
+            "Schermo secondario",
+            listOf(Settings.ScreenOrientation.Landscape to "Orizzontale", Settings.ScreenOrientation.Portrait to "Verticale"),
+            extendO,
+        ) { Settings.setExtendOrientation(ctx, it) }
+        val desktopO by Settings.desktopOrientation.collectAsState()
+        Choice(
+            "Desktop remoto",
+            listOf(
+                Settings.ScreenOrientation.Landscape to "Orizzontale",
+                Settings.ScreenOrientation.Portrait to "Verticale",
+                Settings.ScreenOrientation.Auto to "Automatico",
+            ),
+            desktopO,
+        ) { Settings.setDesktopOrientation(ctx, it) }
+        Hint(
+            (if (extendO == Settings.ScreenOrientation.Portrait) "Schermo secondario verticale: il computer crea un monitor alto e stretto, della risoluzione del telefono in verticale. "
+            else "Schermo secondario orizzontale: lo schermo del telefono gira e il monitor è largo. ") +
+                when (desktopO) {
+                    Settings.ScreenOrientation.Landscape -> "Il desktop remoto gira lo schermo in orizzontale, a tutto schermo."
+                    Settings.ScreenOrientation.Portrait -> "Il desktop remoto resta in verticale."
+                    Settings.ScreenOrientation.Auto -> "Il desktop remoto segue la rotazione del telefono."
+                },
+        )
+        val desktopAudio by Settings.desktopAudio.collectAsState()
+        Choice(
+            "Audio del desktop remoto",
+            listOf(true to "Sul telefono", false to "No"),
+            desktopAudio,
+        ) { Settings.setDesktopAudio(ctx, it) }
+        val extendAudio by Settings.extendAudio.collectAsState()
+        Choice(
+            "Audio dello schermo secondario",
+            listOf(
+                Settings.ScreenAudio.Duplicate to "Duplica",
+                Settings.ScreenAudio.Separate to "Uscita a sé",
+                Settings.ScreenAudio.None to "Nessuno",
+            ),
+            extendAudio,
+        ) { Settings.setExtendAudio(ctx, it) }
+        Hint(
+            (if (desktopAudio) "Con il desktop remoto senti sul telefono l'audio del computer, in tempo reale. " else "") +
+                when (extendAudio) {
+                    Settings.ScreenAudio.Duplicate -> "Con lo schermo secondario il telefono suona lo stesso audio del computer."
+                    Settings.ScreenAudio.Separate -> "Con lo schermo secondario il computer ha un'uscita audio in più, «Konnekta-Schermo» (solo Linux): " +
+                        "le app che mandi lì suonano solo sul telefono, come un monitor con le casse."
+                    Settings.ScreenAudio.None -> "Lo schermo secondario resta muto."
+                } + " Serve il permesso «Audio di sistema» del telefono sul computer.",
+        )
 
         SectionTitle("Lettore del computer")
         val pcMedia by Settings.pcMediaControls.collectAsState()
@@ -136,6 +187,8 @@ fun SettingsScreen(onBack: () -> Unit) {
             else "Spento: solo rete e cavo USB",
             trailing = { Switch(bt, { setBt(it) }) },
         ) { setBt(!bt) }
+
+        LocalSendSettings()
 
         SectionTitle("Sul telefono")
         NotificationsSetting()
@@ -176,5 +229,36 @@ private fun Box14(content: @Composable () -> Unit) {
         modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
     ) {
         Column(Modifier.padding(14.dp)) { content() }
+    }
+}
+
+/**
+ * LocalSend compatibility: off by default. On, this phone appears in the
+ * LocalSend apps of the same network and Invia shows their devices.
+ */
+@Composable
+private fun LocalSendSettings() {
+    val ui = LocalUi.current
+    val scope = rememberCoroutineScope()
+    val status by Store.lsStatus.collectAsState()
+    LaunchedEffect(Unit) { refreshLocalSend() }
+    val st = status ?: return
+    val on = st.optBoolean("enabled")
+    SectionTitle("LocalSend")
+    ActionCard(
+        Icons.AutoMirrored.Filled.Send, "Compatibilità con LocalSend",
+        if (on) "Visibile come «${st.optString("alias")}» nelle app LocalSend della stessa rete"
+        else "Spenta: scambia file anche con chi usa LocalSend, dalla pagina Invia",
+        trailing = { Switch(on, { v -> scope.launch { setLocalSend(ui, JSONObject().put("enabled", v)) } }) },
+    ) { scope.launch { setLocalSend(ui, JSONObject().put("enabled", !on)) } }
+    if (on) {
+        val quick = st.optBoolean("autoAccept")
+        ActionCard(
+            Icons.Filled.Bolt, "Ricezione rapida",
+            if (quick) "Accetta i file dai dispositivi LocalSend senza chiedere" else "Chiede ogni volta prima di ricevere",
+            trailing = { Switch(quick, { v -> scope.launch { setLocalSend(ui, JSONObject().put("autoAccept", v)) } }) },
+        ) { scope.launch { setLocalSend(ui, JSONObject().put("autoAccept", !quick)) } }
+        Hint("I dispositivi LocalSend non vengono associati: ogni invio a questo telefono va accettato (salvo la ricezione rapida) " +
+            "e non possono usare nient'altro di Konnekta. I file ricevuti vanno in Download/Konnekta.")
     }
 }

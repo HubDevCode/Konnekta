@@ -368,17 +368,106 @@ pub struct SystemAudioCapture {
     pub rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
     stop: Arc<AtomicBool>,
     _proc: Option<crate::pipeline::ProcessPipeline>,
+    /// The output made for the second screen, removed with the capture.
+    _sink: Option<ScreenSink>,
+}
+
+/// An audio output of its own for the phone's second screen
+/// ("Konnekta-Schermo" in the sound settings): what plays there goes to the phone
+/// only, like a monitor with speakers. Removed when dropped.
+pub struct ScreenSink {
+    #[allow(dead_code)]
+    module: String,
+}
+
+/// Name of the output (PulseAudio / PipeWire sink).
+pub const SCREEN_SINK: &str = "konnekta_screen";
+
+impl ScreenSink {
+    pub async fn create() -> Result<Self> {
+        #[cfg(target_os = "linux")]
+        {
+            // Ours left by a crash would make the name ambiguous: only that one goes.
+            if let Ok(list) = tokio::process::Command::new("pactl")
+                .args(["list", "short", "modules"])
+                .output()
+                .await
+            {
+                for line in String::from_utf8_lossy(&list.stdout).lines() {
+                    if line.contains(&format!("sink_name={SCREEN_SINK}"))
+                        && let Some(id) = line.split_whitespace().next()
+                    {
+                        let _ = tokio::process::Command::new("pactl")
+                            .args(["unload-module", id])
+                            .output()
+                            .await;
+                    }
+                }
+            }
+            let out = tokio::process::Command::new("pactl")
+                .args([
+                    "load-module",
+                    "module-null-sink",
+                    &format!("sink_name={SCREEN_SINK}"),
+                    // PipeWire cuts a description at the first space.
+                    "sink_properties=device.description=Konnekta-Schermo",
+                    "rate=48000",
+                    "channels=2",
+                ])
+                .output()
+                .await
+                .context("pactl not found (install pipewire-pulse or pulseaudio-utils)")?;
+            if !out.status.success() {
+                bail!(
+                    "cannot create the second screen's audio output: {}",
+                    String::from_utf8_lossy(&out.stderr)
+                );
+            }
+            let module = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            tracing::info!("audio output 'Konnekta-Schermo' ready");
+            return Ok(Self { module });
+        }
+        #[allow(unreachable_code)]
+        {
+            bail!("a separate audio output for the second screen is available on Linux only")
+        }
+    }
+}
+
+impl Drop for ScreenSink {
+    fn drop(&mut self) {
+        #[cfg(target_os = "linux")]
+        let _ = std::process::Command::new("pactl")
+            .args(["unload-module", &self.module])
+            .status();
+    }
 }
 
 impl SystemAudioCapture {
+    /// What the computer plays (its default output).
     pub async fn start() -> Result<Self> {
+        Self::start_from(false).await
+    }
+
+    /// `screen`: a new output of its own for the second screen, captured
+    /// alone; otherwise what you hear.
+    pub async fn start_from(screen: bool) -> Result<Self> {
         // The type is fixed here: on platforms without capture `tx` is unused.
-        let (tx, rx) = tokio::sync::mpsc::channel::<Vec<u8>>(32);
+        // Small queue: audio that cannot go out at once is dropped, never
+        // delayed (real time).
+        let (tx, rx) = tokio::sync::mpsc::channel::<Vec<u8>>(8);
         let stop = Arc::new(AtomicBool::new(false));
+        let sink = if screen {
+            Some(ScreenSink::create().await?)
+        } else {
+            None
+        };
         #[cfg(target_os = "linux")]
         {
             use tokio::io::AsyncReadExt;
-            let (prog, args) = crate::pipeline::system_audio_command()?;
+            let monitor = format!("{SCREEN_SINK}.monitor");
+            let (prog, args) =
+                crate::pipeline::system_audio_command(sink.as_ref().map(|_| monitor.as_str()))?;
             let mut p = crate::pipeline::ProcessPipeline::spawn(&prog, &args, false, true)?;
             let mut out = p.stdout.take().context("no stdout")?;
             let s = stop.clone();
@@ -398,6 +487,7 @@ impl SystemAudioCapture {
                 rx,
                 stop,
                 _proc: Some(p),
+                _sink: sink,
             });
         }
         #[cfg(any(windows, target_os = "macos"))]
@@ -407,11 +497,12 @@ impl SystemAudioCapture {
                 rx,
                 stop,
                 _proc: None,
+                _sink: sink,
             });
         }
         #[allow(unreachable_code)]
         {
-            let _ = (tx, rx, stop);
+            let _ = (tx, rx, stop, sink);
             bail!("system audio capture not supported on this platform")
         }
     }

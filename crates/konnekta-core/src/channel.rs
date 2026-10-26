@@ -63,7 +63,7 @@ fn boxed<T: Channel + 'static>(io: T, usb: Option<crate::usb::Mapping>) -> Secur
 /// Bytes the kernel may hold for a stream before the sender waits. Small on
 /// purpose: a big buffer on a slow network turns into seconds of delay; a
 /// small one makes the producer skip stale pictures instead.
-const STREAM_SEND_BUFFER: usize = 256 * 1024;
+const STREAM_SEND_BUFFER: usize = 128 * 1024;
 
 fn tune(tcp: &TcpStream) {
     let _ = tcp.set_nodelay(true);

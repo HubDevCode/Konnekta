@@ -500,7 +500,8 @@ object Streams {
             val track = AudioTrack.Builder()
                 .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build())
                 .setAudioFormat(AudioFormat.Builder().setSampleRate(rate).setChannelMask(mask).setEncoding(AudioFormat.ENCODING_PCM_16BIT).build())
-                .setBufferSizeInBytes(maxOf(AudioTrack.getMinBufferSize(rate, mask, AudioFormat.ENCODING_PCM_16BIT) * 2, 19200))
+                .setBufferSizeInBytes(maxOf(AudioTrack.getMinBufferSize(rate, mask, AudioFormat.ENCODING_PCM_16BIT) * 2, 9600))
+                .setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
                 .setTransferMode(AudioTrack.MODE_STREAM)
                 .build()
             track.play()
@@ -508,10 +509,20 @@ object Streams {
                 val buf = ByteArray(256 * 1024)
                 val meta = ByteArray(2)
                 val pts = LongArray(1)
+                val frameBytes = 2 * channels
+                // Real time: never more than this much sound waiting to play.
+                // Late audio (a network hiccup, or the two clocks drifting
+                // apart over a long session) is dropped to catch up.
+                val maxQueued = rate * 60L / 1000
+                var written = 0L
                 while (running) {
                     val n = core.streamRead(channel, buf, meta, pts, 500)
                     if (n < 0) break
-                    if (n > 0 && meta[0].toInt() == Frame.AUDIO) track.write(buf, 0, n)
+                    if (n <= 0 || meta[0].toInt() != Frame.AUDIO) continue
+                    val played = track.playbackHeadPosition.toLong() and 0xffffffffL
+                    if (written - played > maxQueued) continue
+                    val w = track.write(buf, 0, n - n % frameBytes, AudioTrack.WRITE_NON_BLOCKING)
+                    if (w > 0) written += w / frameBytes
                 }
                 track.stop()
                 track.release()
@@ -581,6 +592,18 @@ object Streams {
                 // Room for a detailed keyframe: a picture that does not fit is lost.
                 setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 4 * 1024 * 1024)
                 if (android.os.Build.VERSION.SDK_INT >= 30) setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
+                // Decode as fast as possible, not at the stream's pace.
+                setInteger(MediaFormat.KEY_OPERATING_RATE, Short.MAX_VALUE.toInt())
+                // The same "no picture held back" switch under each maker's
+                // name (Qualcomm, Exynos, MediaTek, HiSilicon, Amlogic); a
+                // decoder ignores the names it does not know.
+                setInteger("vendor.qti-ext-dec-low-latency.enable", 1)
+                setInteger("vendor.qti-ext-dec-picture-order.enable", 1)
+                setInteger("vendor.rtc-ext-dec-low-latency.enable", 1)
+                setInteger("vendor.low-latency.enable", 1)
+                setInteger("vendor.hisi-ext-low-latency-video-dec.video-scene-for-low-latency-req", 1)
+                setInteger("vendor.hisi-ext-low-latency-video-dec.video-scene-for-low-latency-rdy", -1)
+                setInteger("vendor.amlogic-ext-dec-low-latency.enable", 1)
             }
             val names = buildList {
                 if (!software) android.media.MediaCodecList(android.media.MediaCodecList.REGULAR_CODECS)

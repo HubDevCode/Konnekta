@@ -35,9 +35,11 @@ const JANITOR_INTERVAL: Duration = Duration::from_secs(2);
 const USB_INTERVAL: Duration = Duration::from_secs(3);
 /// Wait after a failed USB dial (phone without Konnekta running).
 const USB_RETRY: Duration = Duration::from_secs(30);
-const BT_INTERVAL: Duration = Duration::from_secs(6);
+const BT_INTERVAL: Duration = Duration::from_secs(3);
 /// Wait after a failed Bluetooth dial (phone away, Konnekta not running).
-const BT_RETRY: Duration = Duration::from_secs(60);
+/// Short: a phone that opens Konnekta also dials us, but an older app only
+/// waits to be dialed.
+const BT_RETRY: Duration = Duration::from_secs(8);
 /// A device announced on the network this recently counts as reachable there.
 const SEEN_ON_NETWORK: Duration = Duration::from_secs(150);
 
@@ -1141,7 +1143,11 @@ impl Inner {
             let mut g = self.bluez.lock().await;
             if g.is_none() {
                 match bluetooth::open_bluez().await {
-                    Ok(b) => *g = Some(Arc::new(b)),
+                    Ok(b) => {
+                        let b = Arc::new(b);
+                        self.clone().take_bt_incoming(b.clone());
+                        *g = Some(b);
+                    }
                     Err(e) => {
                         tracing::debug!("bluetooth unavailable: {e:#}");
                         return;
@@ -1175,6 +1181,40 @@ impl Inner {
                 }
             });
         }
+    }
+
+    /// Phones that dial us over Bluetooth (when Konnekta opens on them):
+    /// the link starts at once, through the same multiplexer as our dials.
+    fn take_bt_incoming(self: Arc<Self>, bluez: Arc<bluetooth::Bluez>) {
+        let weak = Arc::downgrade(&self);
+        drop(self);
+        tokio::spawn(async move {
+            while let Some(session) = bluez.next_incoming().await {
+                let Some(this) = weak.upgrade() else { break };
+                let Some(address) = session.address().map(str::to_owned) else {
+                    continue;
+                };
+                if !this.config.read().unwrap().bluetooth {
+                    continue;
+                }
+                let known = this.bt_known.lock().unwrap().get(&address).cloned();
+                if known.is_some_and(|id| !this.wants(&id, Transport::Bluetooth)) {
+                    // Already linked a better way: keep the session for later.
+                    this.bt_sessions.lock().unwrap().insert(address, session);
+                    continue;
+                }
+                this.bt_sessions
+                    .lock()
+                    .unwrap()
+                    .insert(address.clone(), session);
+                let b = bluez.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = this.clone().dial_bluetooth(&b, &address).await {
+                        tracing::debug!(phone = %address, "bluetooth link from the phone failed: {e:#}");
+                    }
+                });
+            }
+        });
     }
 
     async fn dial_bluetooth(

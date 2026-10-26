@@ -64,6 +64,9 @@ fun RequestDialogs() {
         }
     }
 
+    val localSend by Store.lsRequest.collectAsState()
+    LocalSendPinDialog()
+
     val ring = items.firstOrNull { it.kind == "ring" }
     val photo = items.firstOrNull { it.kind == "photo" }
     val ask = asks.firstOrNull()
@@ -84,6 +87,7 @@ fun RequestDialogs() {
                 }) { Text("Rivedi") }
             },
         )
+        localSend != null -> LocalSendRequest(localSend!!)
         ask != null -> AlertDialog(
             onDismissRequest = {},
             title = { Text("${ask.deviceName} chiede ${STREAM_ASK[ask.plugin]}") },
@@ -183,5 +187,35 @@ fun StreamProblemDialog() {
             }) { Text("Copia comandi") }
         },
         dismissButton = { TextButton(onClick = close) { Text("Chiudi") } },
+    )
+}
+
+/** A LocalSend device wants to send files: who, what, accept or refuse. */
+@Composable
+private fun LocalSendRequest(r: JSONObject) {
+    val id = r.optString("id")
+    fun answer(accept: Boolean) {
+        Store.lsRequest.value = null
+        Thread { runCatching { KonnektaApp.core?.pluginAction("localsend", if (accept) "accept" else "reject", JSONObject().put("id", id)) } }.start()
+    }
+    val files = r.optJSONArray("files")?.objects().orEmpty()
+    AlertDialog(
+        onDismissRequest = {},
+        title = { Text("${r.optString("from")} vuole inviarti ${if (files.size == 1) "un file" else "${files.size} file"}") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(listOf("LocalSend", r.optString("deviceModel"), r.optString("ip"), humanSize(r.optLong("total")))
+                    .filter { it.isNotEmpty() && it != "null" }.joinToString(" · "),
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                files.take(20).forEach { f ->
+                    Text("• ${f.optString("name")} (${humanSize(f.optLong("size"))})", style = MaterialTheme.typography.bodyMedium)
+                }
+                if (files.size > 20) Text("… e altri ${files.size - 20}")
+                Text("Accetta solo se aspetti questi file: vanno in Download/Konnekta.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        },
+        confirmButton = { Button(onClick = { answer(true) }) { Text("Accetta") } },
+        dismissButton = { TextButton(onClick = { answer(false) }) { Text("Rifiuta") } },
     )
 }

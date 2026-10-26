@@ -60,6 +60,13 @@ object Store {
     /** Transfers in progress: id -> label. */
     val transfers = MutableStateFlow<Map<Long, String>>(emptyMap())
 
+    /** LocalSend (compatibility on in the settings): status, devices seen, transfers by id. */
+    val lsStatus = MutableStateFlow<JSONObject?>(null)
+    val lsPeers = MutableStateFlow<List<JSONObject>>(emptyList())
+    val lsTransfers = MutableStateFlow<Map<String, JSONObject>>(emptyMap())
+    /** A LocalSend device waiting for "Accetta" / "Rifiuta". */
+    val lsRequest = MutableStateFlow<JSONObject?>(null)
+
     /** Features shown two per row instead of one per line (setting). */
     val grid = MutableStateFlow(false)
 
@@ -100,6 +107,10 @@ object Store {
 
     fun item(deviceId: String, kind: String, title: String, text: String = "", target: String? = null, mime: String? = null) =
         post(InboxItem(ids.incrementAndGet(), deviceId, name(deviceId), kind, title, text, target, mime))
+
+    /** An item from a device that is not a paired computer (LocalSend). */
+    fun itemFrom(deviceName: String, kind: String, title: String, text: String = "", target: String? = null, mime: String? = null) =
+        post(InboxItem(ids.incrementAndGet(), "", deviceName, kind, title, text, target, mime))
 
     fun dismiss(id: Long) = inbox.update { l -> l.filterNot { it.id == id } }
 

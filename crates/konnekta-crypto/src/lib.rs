@@ -18,7 +18,9 @@ pub use cert::{
     public_key_der, verification_key,
 };
 pub use store::{FileKeyStore, KeyStore, write_private_file};
-pub use tls::{PeerExpectation, client_config, server_config};
+pub use tls::{
+    PeerExpectation, client_config, open_client_config, open_server_config, server_config,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum CryptoError {

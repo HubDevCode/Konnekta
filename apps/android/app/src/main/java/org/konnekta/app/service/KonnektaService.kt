@@ -23,6 +23,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.util.Log
+import kotlinx.coroutines.flow.update
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -71,6 +72,8 @@ class KonnektaService : Service() {
         private const val ACTION_DECLINE_STREAM = "org.konnekta.app.DECLINE_STREAM"
         private const val ACTION_DECLINE_PHOTO = "org.konnekta.app.DECLINE_PHOTO"
         private const val ACTION_PAIR_ANSWER = "org.konnekta.app.PAIR_ANSWER"
+        private const val ACTION_LOCALSEND_ANSWER = "org.konnekta.app.LOCALSEND_ANSWER"
+        private const val N_LOCALSEND = 9
         private const val ACTION_PC_MEDIA_REFRESH = "org.konnekta.app.PC_MEDIA_REFRESH"
 
         /** The "computer player" setting changed: subscribe or remove the controls. */
@@ -174,6 +177,13 @@ class KonnektaService : Service() {
             nm.cancel(N_PHOTO)
             transfers.execute { runCatching { KonnektaApp.core?.sendPacket(dev, Types.PHOTO, JSONObject().put("cancelled", true)) } }
         }
+        if (intent?.action == ACTION_LOCALSEND_ANSWER) {
+            val id = intent.getStringExtra("id").orEmpty()
+            val accept = intent.getBooleanExtra("accept", false)
+            nm.cancel(N_LOCALSEND)
+            Store.lsRequest.value = null
+            transfers.execute { runCatching { KonnektaApp.core?.pluginAction("localsend", if (accept) "accept" else "reject", JSONObject().put("id", id)) } }
+        }
         if (intent?.action == ACTION_PAIR_ANSWER) {
             val dev = intent.getStringExtra("device").orEmpty()
             val key = intent.getStringExtra("key").orEmpty()
@@ -233,6 +243,8 @@ class KonnektaService : Service() {
             "plugin" -> if (e.optString("kind") == "packet") {
                 val data = e.optJSONObject("data") ?: return
                 onPacket(core, e.optString("deviceId"), data)
+            } else if (e.optString("plugin") == "localsend") {
+                onLocalSend(core, e.optString("kind"), e.optJSONObject("data") ?: JSONObject())
             }
             "pairRequested" -> showPair(e, confirm = false)
             "pairConfirm" -> showPair(e, confirm = true)
@@ -469,13 +481,63 @@ class KonnektaService : Service() {
                 val (uri, fname) = Files.receive(this, core, payloadKey, filename)
                 val mime = Files.mimeOf(fname)
                 Store.item(deviceId, "file", fname, "Salvato in Download/${Files.FOLDER}", target = uri.toString(), mime = mime)
-                notify(N_SHARE, "File da ${name(core, deviceId)}", fname,
-                    Intent(Intent.ACTION_VIEW).setDataAndType(uri, mime).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
+                notify(N_SHARE, "File da ${name(core, deviceId)}", fname, Files.viewIntent(this, uri, mime))
             } catch (e: Exception) {
                 Log.w(TAG, "receive failed", e)
                 Store.item(deviceId, "error", "Ricezione non riuscita", "${Files.safeName(filename)}: ${e.message}")
             } finally {
                 Store.endTransfer(t)
+            }
+        }
+    }
+
+    // --- LocalSend -------------------------------------------------------------
+
+    /** LocalSend devices (compatibility on in the settings): requests, files, texts. */
+    private fun onLocalSend(core: Core, kind: String, data: JSONObject) {
+        when (kind) {
+            "status" -> Store.lsStatus.value = data
+            "peers" -> Store.lsPeers.value = data.optJSONArray("peers")?.let { a -> (0 until a.length()).mapNotNull { a.optJSONObject(it) } }.orEmpty()
+            "transfer" -> Store.lsTransfers.update { it + (data.optString("id") to data) }
+            "request" -> {
+                Store.lsRequest.value = data
+                val id = data.optString("id")
+                val files = data.optJSONArray("files")
+                val what = if (files?.length() == 1) files.optJSONObject(0)?.optString("name").orEmpty()
+                    else "${files?.length() ?: 0} file"
+                fun answer(code: Int, accept: Boolean) = serviceAction(code, ACTION_LOCALSEND_ANSWER) {
+                    it.putExtra("id", id).putExtra("accept", accept)
+                }
+                notify(N_LOCALSEND, "${data.optString("from")} vuole inviarti dei file", "$what · LocalSend",
+                    actions = listOf("Accetta" to answer(90, true), "Rifiuta" to answer(91, false)))
+            }
+            "requestClosed" -> {
+                if (Store.lsRequest.value?.optString("id") == data.optString("id")) Store.lsRequest.value = null
+                nm.cancel(N_LOCALSEND)
+            }
+            "received" -> {
+                val from = data.optString("from")
+                transfers.execute {
+                    try {
+                        val (uri, fname) = Files.importReceived(this, data.optString("path"))
+                        val mime = data.optString("mime").ifBlank { Files.mimeOf(fname) }
+                        Store.itemFrom(from, "file", fname, "Da $from con LocalSend · Download/${Files.FOLDER}", target = uri.toString(), mime = mime)
+                        notify(N_SHARE, "File da $from", fname, Files.viewIntent(this, uri, mime))
+                    } catch (e: Exception) {
+                        Log.w(TAG, "LocalSend import failed", e)
+                        Store.itemFrom(from, "error", "Ricezione non riuscita", "${data.optString("name")}: ${e.message}")
+                    }
+                }
+            }
+            "text" -> {
+                val text = data.optString("text")
+                val from = data.optString("from")
+                main.post {
+                    ClipboardSync.fromComputer = text
+                    getSystemService(ClipboardManager::class.java)?.setPrimaryClip(ClipData.newPlainText("Konnekta", text))
+                }
+                Store.itemFrom(from, "text", "Testo ricevuto", text)
+                notify(N_SHARE, "Testo da $from (LocalSend)", "Copiato negli appunti")
             }
         }
     }

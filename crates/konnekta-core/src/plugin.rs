@@ -144,6 +144,19 @@ impl CoreHandle {
         Some(dir)
     }
 
+    /// This device's name, as shown to the other devices.
+    pub fn local_name(&self) -> String {
+        self.upgrade()
+            .map(|i| i.config.read().unwrap().device_name.clone())
+            .unwrap_or_default()
+    }
+
+    pub fn local_device_type(&self) -> konnekta_proto::DeviceType {
+        self.upgrade()
+            .map(|i| i.config.read().unwrap().device_type)
+            .unwrap_or_default()
+    }
+
     pub fn local_device_id(&self) -> String {
         self.upgrade()
             .map(|i| i.identity.device_id.clone())

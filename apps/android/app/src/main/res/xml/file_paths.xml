@@ -2,4 +2,6 @@
 <!-- Photos taken for a computer live in the cache until they are sent. -->
 <paths>
     <cache-path name="photo" path="photo/" />
+    <!-- Android 9: received files stay in the app's Download folder. -->
+    <external-files-path name="downloads" path="Download/" />
 </paths>

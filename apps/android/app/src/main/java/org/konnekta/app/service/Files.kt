@@ -1,5 +1,7 @@
 package org.konnekta.app.service
 
+import android.content.ActivityNotFoundException
+import android.content.ClipData
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
@@ -8,7 +10,9 @@ import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import android.provider.OpenableColumns
+import android.util.Log
 import android.webkit.MimeTypeMap
+import androidx.core.content.FileProvider
 import org.json.JSONObject
 import org.konnekta.app.core.Core
 import java.io.File
@@ -111,9 +115,64 @@ object Files {
         }
     }
 
-    fun open(ctx: Context, uri: Uri, mime: String?) {
-        val i = Intent(Intent.ACTION_VIEW).setDataAndType(uri, mime ?: "*/*")
+    /**
+     * Move a file the core saved itself (LocalSend) into Download/Konnekta,
+     * like the files from the computers. Returns the uri to open.
+     */
+    fun importReceived(ctx: Context, path: String): Pair<Uri, String> {
+        val src = File(path)
+        val name = safeName(src.name)
+        try {
+            return publish(ctx, src, name) to name
+        } finally {
+            src.delete()
+        }
+    }
+
+    /**
+     * A uri other apps can read: `file://` (Android 9, app folder) goes
+     * through our FileProvider, which Android requires since 7.
+     */
+    private fun shareable(ctx: Context, uri: Uri): Uri =
+        if (uri.scheme == "file") FileProvider.getUriForFile(ctx, "${ctx.packageName}.files", File(uri.path!!)) else uri
+
+    /** Intent that opens a received file in its app (also from a notification). */
+    fun viewIntent(ctx: Context, uri: Uri, mime: String?): Intent {
+        val u = shareable(ctx, uri)
+        val type = mime?.takeIf { it.isNotBlank() && it != "application/octet-stream" }
+            ?: runCatching { ctx.contentResolver.getType(u) }.getOrNull()?.takeIf { it != "application/octet-stream" }
+            ?: "*/*"
+        return Intent(Intent.ACTION_VIEW).setDataAndType(u, type)
             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
-        runCatching { ctx.startActivity(Intent.createChooser(i, null).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+            // The grant travels with the clip also through the "Open with" picker.
+            .also { it.clipData = ClipData.newRawUri(null, u) }
+    }
+
+    /** Open a received file; returns why it could not, or null. */
+    fun open(ctx: Context, uri: Uri, mime: String?): String? {
+        val i = try {
+            viewIntent(ctx, uri, mime)
+        } catch (e: Exception) {
+            Log.w("Konnekta", "cannot share $uri", e)
+            return "Non riesco ad aprire il file"
+        }
+        val there = runCatching { ctx.contentResolver.openFileDescriptor(i.data!!, "r")?.use { true } ?: false }.getOrDefault(false)
+        if (!there) return "Il file non c'è più: è stato spostato o eliminato"
+        return try {
+            ctx.startActivity(i)
+            null
+        } catch (_: ActivityNotFoundException) {
+            // No app for this type: let the user pick any app.
+            try {
+                ctx.startActivity(Intent.createChooser(Intent(i).setDataAndType(i.data, "*/*"), "Apri con")
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION))
+                null
+            } catch (_: Exception) {
+                "Nessuna app può aprire questo tipo di file"
+            }
+        } catch (e: Exception) {
+            Log.w("Konnekta", "cannot open $uri", e)
+            "Non riesco ad aprire il file: ${e.message}"
+        }
     }
 }
