@@ -3,7 +3,7 @@
 Il workflow `.github/workflows/release.yml` parte su ogni tag `v*`:
 
 ```bash
-git tag v2.5.0 && git push origin v2.5.0
+git tag v2.5.5 && git push origin v2.5.5
 ```
 
 Crea una release su GitHub (in bozza finché le build non finiscono) e allega:

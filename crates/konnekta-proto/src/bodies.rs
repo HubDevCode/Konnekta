@@ -456,6 +456,10 @@ pub struct StreamParams {
     /// "front" / "back" for cameras.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub facing: Option<String>,
+    /// Computer audio: "screen" plays the phone's own output device (the
+    /// second screen as a monitor with speakers); none = what you hear.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
 }
 
 impl Default for StreamParams {
@@ -469,6 +473,7 @@ impl Default for StreamParams {
             sample_rate: 48_000,
             channels: 1,
             facing: None,
+            source: None,
         }
     }
 }

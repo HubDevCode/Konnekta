@@ -479,9 +479,7 @@ fun ColumnScope.TouchpadScreen(current: JSONObject?, onBack: () -> Unit) {
     // One queue keeps packets in order without blocking the gesture handlers.
     val queue = remember { Channel<JSONObject>(Channel.UNLIMITED) }
     LaunchedEffect(id) {
-        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-            for (b in queue) runCatching { KonnektaApp.core?.sendPacket(id, Types.INPUT, b) }
-        }
+        sendInput(id, queue)
     }
     var locked by remember { mutableStateOf(setOf<Mod>()) }
     var showKeys by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(true) }
@@ -736,11 +734,7 @@ fun ColumnScope.PresenterScreen(current: JSONObject?, onBack: () -> Unit) {
     }
     val laser = LocalStatus.current.danger
     val queue = remember { Channel<JSONObject>(Channel.UNLIMITED) }
-    LaunchedEffect(id) {
-        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-            for (b in queue) runCatching { KonnektaApp.core?.sendPacket(id, Types.PRESENTER, b) }
-        }
-    }
+    LaunchedEffect(id) { sendInput(id, queue, Types.PRESENTER) }
     val laserPad: @Composable (Modifier) -> Unit = { m ->
         Surface(
             shape = RoundedCornerShape(16.dp),

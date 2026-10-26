@@ -441,15 +441,31 @@ pub struct Peer {
 #[cfg(target_os = "linux")]
 mod linux {
     use super::*;
-    use bluer::rfcomm::{Profile, ProfileHandle, Role};
+    use bluer::rfcomm::{Profile, Role};
     use futures_util::StreamExt;
 
+    type Waiters =
+        Arc<Mutex<HashMap<bluer::Address, tokio::sync::oneshot::Sender<bluer::rfcomm::Stream>>>>;
+
+    /// Both ends of the Konnekta service: the computer dials paired phones,
+    /// and a phone that opens Konnekta dials the computer (so it connects
+    /// at once, without waiting for the computer's next try).
     pub struct Bluez {
         /// Keeps the D-Bus connection (and the registered profile) alive.
         _session: bluer::Session,
         adapter: bluer::Adapter,
-        profile: tokio::sync::Mutex<ProfileHandle>,
         uuid: bluer::Uuid,
+        /// Our own dials waiting for their connection.
+        waiting: Waiters,
+        /// Connections the phones opened, with their multiplexer running.
+        incoming: tokio::sync::Mutex<mpsc::Receiver<Session>>,
+        acceptor: AbortHandle,
+    }
+
+    impl Drop for Bluez {
+        fn drop(&mut self) {
+            self.acceptor.abort();
+        }
     }
 
     pub async fn open() -> Result<Bluez> {
@@ -459,22 +475,63 @@ mod linux {
             bail!("bluetooth adapter is off");
         }
         let uuid: bluer::Uuid = SERVICE_UUID.parse().context("uuid")?;
-        let profile = session
+        // No role: client (we dial phones) and server (phones dial us, the
+        // service is published in SDP). Only devices paired in the system.
+        let mut profile = session
             .register_profile(Profile {
                 uuid,
                 name: Some("Konnekta".into()),
-                role: Some(Role::Client),
-                require_authentication: Some(false),
+                role: None::<Role>,
+                require_authentication: Some(true),
                 require_authorization: Some(false),
                 auto_connect: Some(false),
                 ..Default::default()
             })
             .await?;
+        let waiting: Waiters = Arc::default();
+        let (tx, rx) = mpsc::channel(8);
+        let w = waiting.clone();
+        let a = adapter.clone();
+        let acceptor = tokio::spawn(async move {
+            while let Some(req) = profile.next().await {
+                let addr = req.device();
+                // A dial of ours: hand the connection to it.
+                let waiter = w.lock().unwrap().remove(&addr);
+                if let Some(waiter) = waiter {
+                    if let Ok(stream) = req.accept() {
+                        let _ = waiter.send(stream);
+                    }
+                    continue;
+                }
+                // The phone dialed us: only one paired in the system.
+                let paired = match a.device(addr) {
+                    Ok(d) => d.is_paired().await.unwrap_or(false),
+                    Err(_) => false,
+                };
+                if !paired {
+                    req.reject(bluer::rfcomm::ReqError::Rejected);
+                    continue;
+                }
+                match req.accept() {
+                    Ok(stream) => {
+                        tracing::info!(phone = %addr, "bluetooth connection from the phone");
+                        let s = Session::start(stream, true, Arc::new(|_| false))
+                            .with_address(&addr.to_string());
+                        if tx.send(s).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(e) => tracing::debug!("bluetooth accept failed: {e}"),
+                }
+            }
+        });
         Ok(Bluez {
             _session: session,
             adapter,
-            profile: tokio::sync::Mutex::new(profile),
             uuid,
+            waiting,
+            incoming: tokio::sync::Mutex::new(rx),
+            acceptor: acceptor.abort_handle(),
         })
     }
 
@@ -510,28 +567,31 @@ mod linux {
         }
 
         /// Connect to the Konnekta service of `address` and start the
-        /// multiplexer on it.
+        /// multiplexer on it. Fails as soon as BlueZ says the phone does
+        /// not answer or does not offer the service.
         pub async fn connect(&self, address: &str) -> Result<Session> {
             let addr: bluer::Address = address.parse().context("bluetooth address")?;
             let dev = self.adapter.device(addr)?;
-            let mut profile = self.profile.lock().await;
-            let connecting = dev.connect_profile(&self.uuid);
-            let accepting = async {
-                loop {
-                    let req = tokio::time::timeout(CONNECT_TIMEOUT * 3, profile.next())
-                        .await
-                        .context("no bluetooth connection")?
-                        .context("profile closed")?;
-                    if req.device() == addr {
-                        return Ok::<_, anyhow::Error>(req.accept()?);
-                    }
-                    req.reject(bluer::rfcomm::ReqError::Rejected);
-                }
-            };
-            let (stream, connected) = tokio::join!(accepting, connecting);
-            let stream = stream?;
-            connected.context("the phone does not offer Konnekta over bluetooth")?;
-            Ok(Session::start(stream, true, Arc::new(|_| false)).with_address(address))
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            self.waiting.lock().unwrap().insert(addr, tx);
+            let r = async {
+                tokio::time::timeout(CONNECT_TIMEOUT, dev.connect_profile(&self.uuid))
+                    .await
+                    .context("the phone did not answer over bluetooth")?
+                    .context("the phone does not offer Konnekta over bluetooth")?;
+                tokio::time::timeout(Duration::from_secs(5), rx)
+                    .await
+                    .context("no bluetooth connection")?
+                    .context("no bluetooth connection")
+            }
+            .await;
+            self.waiting.lock().unwrap().remove(&addr);
+            Ok(Session::start(r?, true, Arc::new(|_| false)).with_address(address))
+        }
+
+        /// The next connection a phone opened towards us.
+        pub async fn next_incoming(&self) -> Option<Session> {
+            self.incoming.lock().await.recv().await
         }
     }
 }
@@ -547,6 +607,9 @@ pub struct Bluez;
 impl Bluez {
     pub async fn peers(&self) -> Vec<Peer> {
         Vec::new()
+    }
+    pub async fn next_incoming(&self) -> Option<Session> {
+        std::future::pending().await
     }
     pub async fn connect(&self, _address: &str) -> Result<Session> {
         bail!("bluetooth is not available on this system")
@@ -643,5 +706,30 @@ mod tests {
         let mut buf = Vec::new();
         let _ = tokio::time::timeout(Duration::from_secs(2), c.read_to_end(&mut buf)).await;
         assert!(!hit.load(Ordering::Relaxed));
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod bluez_probe {
+    /// Run by hand on a computer with Bluetooth: BlueZ accepts a profile
+    /// that is both client and server (another UUID, so a running Konnekta
+    /// does not get in the way).
+    #[tokio::test]
+    #[ignore]
+    async fn profile_without_role_registers() {
+        use bluer::rfcomm::Profile;
+        let session = bluer::Session::new().await.unwrap();
+        let _h = session
+            .register_profile(Profile {
+                uuid: "6b6f6e6e-656b-7461-8000-000000000001".parse().unwrap(),
+                name: Some("Konnekta probe".into()),
+                role: None,
+                require_authentication: Some(true),
+                require_authorization: Some(false),
+                auto_connect: Some(false),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
     }
 }

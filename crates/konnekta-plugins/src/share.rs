@@ -446,15 +446,35 @@ impl SharePlugin {
             t.transferred = size;
             t.path = Some(dest.clone());
         });
+        // A click on the notification (or "Apri") opens the file; received
+        // files are never opened without the user asking.
+        let launcher = self.platform.launcher.clone();
+        let (file, folder) = (dest.clone(), dir.clone());
         let _ = self.platform.notifier.show(
             DesktopNotification {
                 id: format!("share-{id}"),
                 app_name: dev.name().into(),
-                title: "File received".into(),
+                title: "File ricevuto".into(),
                 body: name,
+                actions: vec![
+                    ("default".into(), "Apri".into()),
+                    ("open".into(), "Apri".into()),
+                    ("folder".into(), "Mostra nella cartella".into()),
+                ],
                 ..Default::default()
             },
-            None,
+            Some(Box::new(move |a| {
+                let target = match a.as_str() {
+                    "default" | "open" => file.clone(),
+                    "folder" => folder.clone(),
+                    _ => return,
+                };
+                if let Ok(h) = tokio::runtime::Handle::try_current() {
+                    h.spawn(async move {
+                        let _ = launcher.open(&target.to_string_lossy()).await;
+                    });
+                }
+            })),
         );
         if body.open == Some(true) {
             // Only reveal the folder: never auto-execute received files.

@@ -445,14 +445,19 @@ impl StreamPlugin {
             .unwrap_or(0)
             .min(3);
         let mut q = DEFAULT_LADDER[level];
-        // Second screen: a monitor of the phone's own size (landscape),
-        // captured whole so text stays sharp on the phone.
+        // More pictures per second: each change reaches the phone sooner.
+        if params.fps >= 50 {
+            q.fps = 60;
+        }
+        // Second screen: a monitor of the phone's own size, in the shape the
+        // phone asks for (landscape, or portrait when held upright), captured
+        // whole so text stays sharp on the phone.
         let monitor = if extend {
-            let (w, h) = (
-                params.width.max(params.height),
-                params.width.min(params.height),
-            );
-            let (w, h) = if w == 0 { (1920, 1080) } else { (w, h) };
+            let (w, h) = if params.width == 0 || params.height == 0 {
+                (1920, 1080)
+            } else {
+                (params.width, params.height)
+            };
             let fps = if params.fps >= 50 { 60 } else { 30 };
             let m = tokio::task::spawn_blocking(move || {
                 konnekta_platform::display::VirtualMonitor::create(w, h, fps)
@@ -516,9 +521,12 @@ impl StreamPlugin {
         }
     }
 
-    async fn produce_system_audio(ch: SecureChannel) -> Result<()> {
-        let sender = FrameSender::new(ch, 50);
-        let mut cap = SystemAudioCapture::start().await?;
+    /// What the computer plays, or (`screen`) a new output of its own for
+    /// the second screen. Real time: a short queue, and audio that cannot
+    /// leave at once is dropped rather than delayed.
+    async fn produce_system_audio(ch: SecureChannel, screen: bool) -> Result<()> {
+        let sender = FrameSender::new(ch, 6);
+        let mut cap = SystemAudioCapture::start_from(screen).await?;
         while let Some(chunk) = cap.rx.recv().await {
             sender.push(Frame::new(FrameKind::Audio, now_us(), chunk));
             if sender.is_closed() {
@@ -569,7 +577,10 @@ impl StreamPlugin {
             match kind {
                 Kind::Desktop => Self::produce_desktop(ch, params, false).await,
                 Kind::Extend => Self::produce_desktop(ch, params, true).await,
-                _ => Self::produce_system_audio(ch).await,
+                _ => {
+                    let screen = params.source.as_deref() == Some("screen");
+                    Self::produce_system_audio(ch, screen).await
+                }
             }
         });
         Ok(())

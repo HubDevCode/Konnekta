@@ -251,6 +251,75 @@ pub fn server_config(local: &LocalIdentity, expect: PeerExpectation) -> Result<A
     Ok(Arc::new(cfg))
 }
 
+/// Server side of a foreign protocol without pinning (the LocalSend bridge):
+/// our certificate, no client certificate asked. LocalSend devices are not
+/// paired, so TLS only hides the traffic from passive listeners.
+pub fn open_server_config(local: &LocalIdentity) -> Result<Arc<ServerConfig>> {
+    let cfg = ServerConfig::builder_with_provider(provider())
+        .with_protocol_versions(VERSIONS)?
+        .with_no_client_auth()
+        .with_single_cert(
+            vec![CertificateDer::from(local.cert_der.clone())],
+            key(local),
+        )?;
+    Ok(Arc::new(cfg))
+}
+
+/// Client side of [`open_server_config`]: any self-signed certificate is
+/// accepted (handshake signatures are still verified).
+pub fn open_client_config() -> Result<Arc<ClientConfig>> {
+    let provider = provider();
+    let verifier = Arc::new(OpenVerifier {
+        algs: provider.signature_verification_algorithms,
+    });
+    let cfg = ClientConfig::builder_with_provider(provider)
+        .with_protocol_versions(VERSIONS)?
+        .dangerous() // unpaired foreign devices: nothing to pin, see open_server_config
+        .with_custom_certificate_verifier(verifier)
+        .with_no_client_auth();
+    Ok(Arc::new(cfg))
+}
+
+#[derive(Debug)]
+struct OpenVerifier {
+    algs: WebPkiSupportedAlgorithms,
+}
+
+impl ServerCertVerifier for OpenVerifier {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp: &[u8],
+        _now: UnixTime,
+    ) -> std::result::Result<ServerCertVerified, Error> {
+        Ok(ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> std::result::Result<HandshakeSignatureValid, Error> {
+        rustls::crypto::verify_tls12_signature(message, cert, dss, &self.algs)
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> std::result::Result<HandshakeSignatureValid, Error> {
+        rustls::crypto::verify_tls13_signature(message, cert, dss, &self.algs)
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        self.algs.supported_schemes()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

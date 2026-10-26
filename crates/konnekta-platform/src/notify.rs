@@ -30,7 +30,10 @@ pub struct NativeNotifier;
 impl NotifierBackend for NativeNotifier {
     fn show(&self, n: DesktopNotification, on_action: Option<ActionCallback>) -> Result<()> {
         // notify-rust blocks while waiting for actions: run on a blocking thread.
+        // Callbacks spawn async work, so they run inside the caller's runtime.
+        let rt = tokio::runtime::Handle::try_current().ok();
         std::thread::spawn(move || {
+            let _rt = rt.as_ref().map(|h| h.enter());
             let mut notif = notify_rust::Notification::new();
             notif
                 .appname("Konnekta")

@@ -55,6 +55,26 @@ async fn pick_folder(app: AppHandle) -> Option<String> {
         .map(|p| p.to_string_lossy().into_owned())
 }
 
+/// Open a received file with its default app, or (`reveal`) the folder
+/// that holds it.
+#[tauri::command]
+async fn open_path(path: String, reveal: bool) -> Result<(), String> {
+    use konnekta_platform::LauncherBackend;
+    let p = std::path::PathBuf::from(&path);
+    if !p.exists() {
+        return Err(format!("{path} non esiste più (spostato o eliminato?)"));
+    }
+    let target = if reveal && p.is_file() {
+        p.parent().map(std::path::Path::to_path_buf).unwrap_or(p)
+    } else {
+        p
+    };
+    konnekta_platform::launcher::NativeLauncher
+        .open(&target.to_string_lossy())
+        .await
+        .map_err(|e| format!("{e:#}"))
+}
+
 fn show_main(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();
@@ -71,6 +91,8 @@ struct DesktopPrefs {
     tray: bool,
     autostart: bool,
     app_list: bool,
+    /// "Invia tramite Konnekta" in the file managers' menus.
+    send_to: bool,
 }
 
 impl Default for DesktopPrefs {
@@ -79,8 +101,256 @@ impl Default for DesktopPrefs {
             tray: true,
             autostart: true,
             app_list: true,
+            send_to: true,
         }
     }
+}
+
+/// A file or folder handed over by the system ("Invia tramite Konnekta").
+#[derive(serde::Serialize, Clone)]
+struct SendItem {
+    path: String,
+    name: String,
+    dir: bool,
+}
+
+/// What the system asked to send and the window has not picked up yet.
+static PENDING_SEND: std::sync::Mutex<Vec<SendItem>> = std::sync::Mutex::new(Vec::new());
+
+/// The paths after `--send` (absolute, or relative to `cwd`; `file://`
+/// URIs too), keeping only those that exist.
+fn send_args(args: &[String], cwd: &std::path::Path) -> Vec<SendItem> {
+    let Some(at) = args.iter().position(|a| a == "--send") else {
+        return Vec::new();
+    };
+    args[at + 1..]
+        .iter()
+        .filter(|a| !a.starts_with("--"))
+        .filter_map(|a| {
+            let raw = a
+                .strip_prefix("file://")
+                .map(percent_decode)
+                .unwrap_or_else(|| a.clone());
+            let p = std::path::PathBuf::from(&raw);
+            let p = if p.is_absolute() { p } else { cwd.join(p) };
+            let meta = std::fs::metadata(&p).ok()?;
+            Some(SendItem {
+                name: p
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| raw.clone()),
+                path: p.to_string_lossy().into_owned(),
+                dir: meta.is_dir(),
+            })
+        })
+        .collect()
+}
+
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        let hex = |c: u8| (c as char).to_digit(16);
+        if b[i] == b'%'
+            && i + 2 < b.len()
+            && let (Some(h), Some(l)) = (hex(b[i + 1]), hex(b[i + 2]))
+        {
+            out.push((h * 16 + l) as u8);
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Hand files to the window: it opens Invia with them selected.
+fn queue_send(app: &AppHandle, items: Vec<SendItem>) {
+    if items.is_empty() {
+        return;
+    }
+    PENDING_SEND.lock().unwrap().extend(items);
+    let _ = app.emit("konnekta-send", ());
+    show_main(app);
+}
+
+/// The files waiting to be sent (emptied by the call).
+#[tauri::command]
+fn take_send() -> Vec<SendItem> {
+    std::mem::take(&mut *PENDING_SEND.lock().unwrap())
+}
+
+/// The program the system menus should start: the AppImage itself rather
+/// than its temporary mount, else this executable.
+fn launcher_exe() -> Option<std::path::PathBuf> {
+    std::env::var_os("APPIMAGE")
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.is_file())
+        .or_else(|| std::env::current_exe().ok())
+}
+
+/// "Invia tramite Konnekta" where the system offers to send or open files:
+/// Linux file managers (Dolphin, Nautilus, Nemo, Caja and every "Apri con"
+/// list) and the Windows Explorer ("Invia a" and the right-click menu).
+/// Each runs `konnekta-desktop --send <files>`; a running Konnekta takes
+/// the files (single instance) and opens Invia with them.
+fn apply_send_to(on: bool) {
+    let Some(exe) = launcher_exe() else { return };
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) else {
+            return;
+        };
+        let data = std::env::var_os("XDG_DATA_HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| home.join(".local/share"));
+        let config = std::env::var_os("XDG_CONFIG_HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| home.join(".config"));
+        let icon = data.join("icons/hicolor/256x256/apps/konnekta.png");
+        let icon = if icon.is_file() {
+            icon.display().to_string()
+        } else {
+            "konnekta".into()
+        };
+        let exe = exe.display().to_string().replace('"', "\\\"");
+        let label = "Invia tramite Konnekta";
+        let script = |var: &str| {
+            format!(
+                "#!/bin/sh\n# {label}: the selected files go to Konnekta's Invia page.\nset -f\nIFS='\n'\n[ -n \"${var}\" ] && set -- ${var}\nexec \"{exe}\" --send \"$@\"\n"
+            )
+        };
+        // (path, content, executable)
+        let files: Vec<(std::path::PathBuf, String, bool)> = vec![
+            (
+                data.join("applications/konnekta-send.desktop"),
+                format!(
+                    "[Desktop Entry]\nType=Application\nName={label}\nComment=Invia i file a un telefono o a un computer\nExec=\"{exe}\" --send %F\nIcon={icon}\nTerminal=false\nNoDisplay=true\nMimeType=application/octet-stream;inode/directory;text/plain;image/*;video/*;audio/*;text/*;application/*;image/jpeg;image/png;image/gif;image/webp;image/heic;video/mp4;video/x-matroska;audio/mpeg;audio/flac;application/pdf;application/zip;application/vnd.android.package-archive;application/msword;application/vnd.openxmlformats-officedocument.wordprocessingml.document;application/vnd.oasis.opendocument.text;\n"
+                ),
+                false,
+            ),
+            (
+                data.join("kio/servicemenus/konnekta-send.desktop"),
+                format!(
+                    "[Desktop Entry]\nType=Service\nMimeType=all/all;\nActions=konnektaSend;\nX-KDE-Priority=TopLevel\n\n[Desktop Action konnektaSend]\nName={label}\nIcon={icon}\nExec=\"{exe}\" --send %F\n"
+                ),
+                true,
+            ),
+            (
+                data.join(format!("nautilus/scripts/{label}")),
+                script("NAUTILUS_SCRIPT_SELECTED_FILE_PATHS"),
+                true,
+            ),
+            (
+                config.join(format!("caja/scripts/{label}")),
+                script("CAJA_SCRIPT_SELECTED_FILE_PATHS"),
+                true,
+            ),
+            (
+                data.join("nemo/actions/konnekta-send.nemo_action"),
+                format!(
+                    "[Nemo Action]\nName={label}\nComment=Invia i file a un telefono o a un computer\nExec=\"{exe}\" --send %F\nIcon-Name=konnekta\nSelection=notnone\nExtensions=any;\n"
+                ),
+                false,
+            ),
+        ];
+        for (path, content, executable) in files {
+            if !on {
+                let _ = std::fs::remove_file(&path);
+                continue;
+            }
+            if let Some(dir) = path.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            if std::fs::write(&path, content).is_ok() && executable {
+                let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755));
+            }
+        }
+        let _ = std::process::Command::new("update-desktop-database")
+            .arg(data.join("applications"))
+            .output();
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const NO_WINDOW: u32 = 0x0800_0000;
+        let exe = exe.display().to_string();
+        let run = |program: &str, args: &[&str]| {
+            let _ = std::process::Command::new(program)
+                .args(args)
+                .creation_flags(NO_WINDOW)
+                .output();
+        };
+        // Right-click menu of files and folders.
+        for class in [
+            r"HKCU\Software\Classes\*\shell\Konnekta",
+            r"HKCU\Software\Classes\Directory\shell\Konnekta",
+        ] {
+            if on {
+                run(
+                    "reg",
+                    &[
+                        "add",
+                        class,
+                        "/v",
+                        "MUIVerb",
+                        "/d",
+                        "Invia tramite Konnekta",
+                        "/f",
+                    ],
+                );
+                run(
+                    "reg",
+                    &[
+                        "add",
+                        class,
+                        "/v",
+                        "Icon",
+                        "/d",
+                        &format!("\"{exe}\",0"),
+                        "/f",
+                    ],
+                );
+                run(
+                    "reg",
+                    &[
+                        "add",
+                        &format!(r"{class}\command"),
+                        "/ve",
+                        "/d",
+                        &format!("\"{exe}\" --send \"%1\""),
+                        "/f",
+                    ],
+                );
+            } else {
+                run("reg", &["delete", class, "/f"]);
+            }
+        }
+        // "Invia a" (Send to): every selected file in one go.
+        if let Some(appdata) = std::env::var_os("APPDATA") {
+            let link =
+                std::path::PathBuf::from(appdata).join(r"Microsoft\Windows\SendTo\Konnekta.lnk");
+            if on {
+                let ps = format!(
+                    "$s=(New-Object -ComObject WScript.Shell).CreateShortcut('{}');$s.TargetPath='{}';$s.Arguments='--send';$s.IconLocation='{},0';$s.Description='Invia tramite Konnekta';$s.Save()",
+                    link.display().to_string().replace('\'', "''"),
+                    exe.replace('\'', "''"),
+                    exe.replace('\'', "''"),
+                );
+                run(
+                    "powershell",
+                    &["-NoProfile", "-NonInteractive", "-Command", &ps],
+                );
+            } else {
+                let _ = std::fs::remove_file(&link);
+            }
+        }
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    let _ = (on, exe);
 }
 
 static TRAY_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
@@ -105,7 +375,7 @@ fn apply_desktop_entries(p: &DesktopPrefs) {
         let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) else {
             return;
         };
-        let Ok(exe) = std::env::current_exe() else {
+        let Some(exe) = launcher_exe() else {
             return;
         };
         let data = std::env::var_os("XDG_DATA_HOME")
@@ -172,6 +442,9 @@ fn apply_desktop_entries(p: &DesktopPrefs) {
     }
     #[cfg(not(target_os = "linux"))]
     let _ = p;
+    // Registry and shortcut writes are slow on Windows: off the start path.
+    let send_to = p.send_to;
+    std::thread::spawn(move || apply_send_to(send_to));
 }
 
 #[tauri::command]
@@ -398,7 +671,9 @@ fn main() {
         )
         .init();
     tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
+        .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
+            // "Invia tramite Konnekta" while Konnekta runs: the files come here.
+            queue_send(app, send_args(&argv, std::path::Path::new(&cwd)));
             show_main(app)
         }))
         .plugin(tauri_plugin_dialog::init())
@@ -438,7 +713,14 @@ fn main() {
                 .menu(&menu)
                 .tooltip("Konnekta");
             tray = tray.icon(Image::from_bytes(include_bytes!("../icons/tray.png"))?);
-            if !prefs.tray || !std::env::args().any(|a| a == "--background") {
+            // Started by "Invia tramite Konnekta": open with the files selected.
+            let args: Vec<String> = std::env::args().collect();
+            let cwd = std::env::current_dir().unwrap_or_default();
+            let sending = send_args(&args, &cwd);
+            if !sending.is_empty() {
+                PENDING_SEND.lock().unwrap().extend(sending);
+                show_main(app.handle());
+            } else if !prefs.tray || !args.iter().any(|a| a == "--background") {
                 show_main(app.handle());
             }
             tray.show_menu_on_left_click(false)
@@ -482,6 +764,8 @@ fn main() {
             setup_check,
             pick_files,
             pick_folder,
+            open_path,
+            take_send,
             desktop_prefs_get,
             desktop_prefs_set,
             check_update,
@@ -489,4 +773,35 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running Konnekta");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn send_args_resolve_paths_and_uris() {
+        let dir = std::env::temp_dir().join(format!("konnekta-send-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("cartella")).unwrap();
+        std::fs::write(dir.join("foto 1.jpg"), b"x").unwrap();
+        let args: Vec<String> = [
+            "konnekta-desktop",
+            "--send",
+            "foto 1.jpg",
+            &format!("file://{}/foto%201.jpg", dir.display()),
+            "cartella",
+            "manca.txt",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let items = send_args(&args, &dir);
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0].name, "foto 1.jpg");
+        assert!(!items[0].dir);
+        assert_eq!(items[1].path, dir.join("foto 1.jpg").to_string_lossy());
+        assert!(items[2].dir);
+        assert!(send_args(&["konnekta-desktop".into(), "--background".into()], &dir).is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }

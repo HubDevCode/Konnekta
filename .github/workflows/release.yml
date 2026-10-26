@@ -19,15 +19,23 @@ jobs:
       tag: ${{ steps.tag.outputs.tag }}
       version: ${{ steps.tag.outputs.version }}
     steps:
+      - uses: actions/checkout@v4
       - id: tag
         run: |
           echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
           echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      # The release text is the README's "Novità della <version>" section.
+      - name: Release notes
+        run: |
+          awk -v h="## Novità della ${{ steps.tag.outputs.version }}" \
+            '$0 == h { on = 1; next } on && /^## / { exit } on { print }' README.md > notes.md
+          [ -s notes.md ] || echo "Konnekta ${{ steps.tag.outputs.version }}" > notes.md
       - id: release
         uses: softprops/action-gh-release@v2
         with:
           draft: true
           name: Konnekta ${{ steps.tag.outputs.version }}
+          body_path: notes.md
           generate_release_notes: true
 
   desktop:

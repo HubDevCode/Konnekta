@@ -18,6 +18,7 @@ pub mod dnd;
 pub mod finddevice;
 pub mod hyprland;
 pub mod input;
+pub mod localsend;
 pub mod media;
 pub mod mixer;
 pub mod notifications;
@@ -61,6 +62,7 @@ pub fn all(platform: Platform) -> Vec<Arc<dyn Plugin>> {
         Arc::new(screenshot::ScreenshotPlugin::new(platform.clone())),
         Arc::new(chat::ChatPlugin::default()),
         Arc::new(browse::BrowsePlugin::new(platform.clone())),
+        localsend::LocalSendPlugin::new(platform.clone()),
         streams::StreamPlugin::microphone(),
         streams::StreamPlugin::camera(),
         streams::StreamPlugin::phone_screen(),
