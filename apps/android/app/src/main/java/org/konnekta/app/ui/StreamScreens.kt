@@ -15,6 +15,7 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
@@ -34,11 +35,16 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
@@ -62,6 +68,7 @@ import org.konnekta.app.service.Streams
 import org.konnekta.app.state.Settings
 import org.konnekta.app.state.Store
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 /**
  * Starts a stream the phone produces: Android permissions first, then the
@@ -179,6 +186,10 @@ fun ColumnScope.RemoteDesktopScreen(current: JSONObject?, onBack: () -> Unit) {
     val running = live.containsKey("desktop/$id")
     val pointerMode by Settings.pointerMode.collectAsState()
     val orientation by Settings.desktopOrientation.collectAsState()
+    val zoomOn by Settings.desktopZoom.collectAsState()
+    val zoomState = remember { Zoom() }
+    val zoom = zoomState.takeIf { zoomOn }
+    LaunchedEffect(zoomState) { Streams.desktopCursor.collect { c -> c?.let { (x, y) -> zoomState.onCursor(x, y) } } }
     val queue = remember { Channel<JSONObject>(Channel.UNLIMITED) }
     // Horizontal turns the screen, vertical keeps it upright (Impostazioni).
     LockOrientation(orientation)
@@ -197,7 +208,7 @@ fun ColumnScope.RemoteDesktopScreen(current: JSONObject?, onBack: () -> Unit) {
 
     val ratio = size?.let { (w, h) -> w.toFloat() / h } ?: (16f / 9f)
     val video: @Composable (Modifier) -> Unit = { m ->
-        Box(m.aspectRatio(ratio).background(Color.Black)) {
+        Box(m.aspectRatio(ratio).background(Color.Black).clipToBounds()) {
             AndroidView(factory = { c ->
                 SurfaceView(c).apply {
                     holder.addCallback(object : SurfaceHolder.Callback {
@@ -206,8 +217,9 @@ fun ColumnScope.RemoteDesktopScreen(current: JSONObject?, onBack: () -> Unit) {
                         override fun surfaceDestroyed(h: SurfaceHolder) { Streams.desktopSurface = null }
                     })
                 }
-            }, Modifier.fillMaxSize())
-            Box(Modifier.fillMaxSize().pointerInput(id, pointerMode) { remoteTouch(queue, pointerMode, extend = false) })
+            }, Modifier.zoomed(zoom))
+            Box(Modifier.fillMaxSize().pointerInput(id, pointerMode, zoom) { remoteTouch(queue, pointerMode, extend = false, zoom) })
+            zoom?.let { ZoomReset(it) }
             if (size == null) Text(if (running) "Attendo l'immagine…" else "Chiedo lo schermo al computer…",
                 Modifier.align(Alignment.Center), color = Color.White)
         }
@@ -227,7 +239,7 @@ fun ColumnScope.RemoteDesktopScreen(current: JSONObject?, onBack: () -> Unit) {
             Column(Modifier.fillMaxSize()) {
                 SubHeader("Desktop remoto", current.optString("name"), onBack)
                 Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) { video(Modifier.fillMaxWidth()) }
-                Hint(pointerHint(pointerMode) + if (orientation == Settings.ScreenOrientation.Auto) " Ruota il telefono per vederlo più grande." else "")
+                Hint(pointerHint(pointerMode, zoomOn) + if (orientation == Settings.ScreenOrientation.Auto) " Ruota il telefono per vederlo più grande." else "")
             }
         }
     }
@@ -270,10 +282,151 @@ private fun LockOrientation(o: Settings.ScreenOrientation) {
     }
 }
 
-/** How to use the touch surface, for the current pointer mode. */
-fun pointerHint(mode: Settings.PointerMode) = when (mode) {
+/** How to use the touch surface, for the current pointer mode (and pinch zoom, when on). */
+fun pointerHint(mode: Settings.PointerMode, zoom: Boolean = false) = when (mode) {
     Settings.PointerMode.Direct -> "Tocca per cliccare dove tocchi · trascina per trascinare · due dita per scorrere · tieni premuto per il tasto destro · tre dita di lato cambiano workspace."
     Settings.PointerMode.Touchpad -> "Trascina per muovere il puntatore · tocca per cliccare · tocca due volte e trascina per selezionare · due dita per scorrere · tieni premuto per il tasto destro."
+} + if (zoom) " Allarga due dita per ingrandire: la vista segue il puntatore." else ""
+
+/**
+ * Pinch zoom of the computer's picture: [zoom] times bigger, centred on
+ * ([cx], [cy]) as shares of the picture. ([px], [py]) is where the
+ * computer's pointer is, so the view can follow it: the more zoomed in, the
+ * closer it follows. The computer tells where it is ([tracked], see
+ * [onCursor]); else the phone places it itself and knows from that.
+ */
+class Zoom {
+    var zoom by mutableFloatStateOf(1f)
+    var cx by mutableFloatStateOf(.5f)
+    var cy by mutableFloatStateOf(.5f)
+    var px = .5f
+    var py = .5f
+
+    /** The computer reports its pointer. */
+    var tracked = false
+        private set
+
+    /**
+     * Fingers place the pointer where they touch: the view stays still under
+     * them and only moves when the pointer leaves it (moved from the computer).
+     */
+    var direct = false
+
+    /** A finger is on the picture in [direct] mode. */
+    var hold = false
+
+    /** The computer's pointer is at ([x], [y]): follow it while it is on this screen. */
+    fun onCursor(x: Float, y: Float) {
+        tracked = true
+        px = x
+        py = y
+        if (!hold && x in 0f..1f && y in 0f..1f) follow(margin = !direct)
+    }
+
+    val left get() = cx - .5f / zoom
+    val top get() = cy - .5f / zoom
+
+    /** Share of the picture shown at the share ([u], [v]) of the view. */
+    fun toPicture(u: Float, v: Float) = (left + u / zoom) to (top + v / zoom)
+
+    fun reset() {
+        zoom = 1f
+        cx = .5f
+        cy = .5f
+    }
+
+    private fun clamp() {
+        val h = .5f / zoom
+        cx = cx.coerceIn(h, 1 - h)
+        cy = cy.coerceIn(h, 1 - h)
+    }
+
+    /**
+     * Two fingers apart/together: scale by [k], keeping the picture that was
+     * under the fingers' middle ([u0], [v0]) under its new place ([u1], [v1]),
+     * so moving both fingers also pans. Shares of the view.
+     */
+    fun pinch(k: Float, u0: Float, v0: Float, u1: Float, v1: Float) {
+        val (pu, pv) = toPicture(u0, v0)
+        zoom = (zoom * k).coerceIn(1f, MAX)
+        cx = pu - u1 / zoom + .5f / zoom
+        cy = pv - v1 / zoom + .5f / zoom
+        clamp()
+    }
+
+    /**
+     * Touchpad: move the pointer by ([du], [dv]) shares of the view (finer
+     * when zoomed in). If it was off the view (after a pinch moved away) it
+     * starts again from the middle of what is shown.
+     */
+    fun movePointer(du: Float, dv: Float) {
+        if (px !in left..left + 1 / zoom || py !in top..top + 1 / zoom) {
+            px = cx
+            py = cy
+        }
+        px = (px + du / zoom).coerceIn(0f, 1f)
+        py = (py + dv / zoom).coerceIn(0f, 1f)
+        follow()
+    }
+
+    /**
+     * Keep the pointer inside the view, away from its edges by a [margin]
+     * that grows with the zoom: barely zoomed it can reach the edge, fully
+     * zoomed it stays near the middle.
+     */
+    private fun follow(margin: Boolean = true) {
+        if (zoom <= 1f) return
+        val m = if (!margin) 0f else (.1f + .25f * (zoom - 1) / (MAX - 1)) / zoom
+        val h = .5f / zoom
+        cx = cx.coerceIn(px - h + m, px + h - m)
+        cy = cy.coerceIn(py - h + m, py + h - m)
+        clamp()
+    }
+
+    /**
+     * "Where you touch", dragging with the finger near an edge of the view:
+     * slide the view that way, faster closer to the edge. [dt] in seconds.
+     * Returns whether the view moved.
+     */
+    fun edgePan(u: Float, v: Float, dt: Float): Boolean {
+        if (zoom <= 1f) return false
+        fun push(s: Float) = when {
+            s < EDGE -> (s - EDGE) / EDGE
+            s > 1 - EDGE -> (s - 1 + EDGE) / EDGE
+            else -> 0f
+        }
+        val (ox, oy) = cx to cy
+        cx += push(u) * PAN_SPEED * dt / zoom
+        cy += push(v) * PAN_SPEED * dt / zoom
+        clamp()
+        return cx != ox || cy != oy
+    }
+
+    companion object {
+        const val MAX = 5f
+        /** Edge band (share of the view) that pans while dragging. */
+        private const val EDGE = .12f
+        /** View widths per second at the very edge. */
+        private const val PAN_SPEED = .8f
+    }
+}
+
+/** The picture [z] times bigger, shifted so the zoomed part fills the box (which clips it). */
+private fun Modifier.zoomed(z: Zoom?) = if (z == null) fillMaxSize() else layout { m, c ->
+    val w = c.maxWidth
+    val h = c.maxHeight
+    val p = m.measure(Constraints.fixed((w * z.zoom).roundToInt(), (h * z.zoom).roundToInt()))
+    layout(w, h) { p.place((-z.left * p.width).roundToInt(), (-z.top * p.height).roundToInt()) }
+}
+
+/** While zoomed in: how much, and a tap back to 1×. */
+@Composable
+private fun BoxScope.ZoomReset(z: Zoom) {
+    if (z.zoom > 1.01f) Surface(onClick = { z.reset() }, shape = RoundedCornerShape(12.dp), color = Color.Black.copy(alpha = .45f),
+        modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)) {
+        Text("${"%.1f".format(z.zoom)}× · torna a 1×", Modifier.padding(horizontal = 10.dp, vertical = 6.dp), color = Color.White,
+            style = MaterialTheme.typography.labelMedium)
+    }
 }
 
 /**
@@ -281,19 +434,32 @@ fun pointerHint(mode: Settings.PointerMode) = when (mode) {
  * finger is (absolute), or the picture is a touchpad (relative moves, at a
  * speed that crosses the computer's screen as the finger crosses the
  * picture). [extend]: the picture is the phone's own virtual monitor.
+ * [zoom]: two fingers apart/together zoom the picture (else they only scroll).
  */
 private suspend fun androidx.compose.ui.input.pointer.PointerInputScope.remoteTouch(
-    queue: Channel<JSONObject>, mode: Settings.PointerMode, extend: Boolean,
+    queue: Channel<JSONObject>, mode: Settings.PointerMode, extend: Boolean, zoom: Zoom?,
 ) {
-    fun abs(x: Float, y: Float) = JSONObject()
-        .put("konnektaAbsX", (x / size.width).coerceIn(0f, 1f).toDouble())
-        .put("konnektaAbsY", (y / size.height).coerceIn(0f, 1f).toDouble())
+    fun absShare(u: Float, v: Float) = JSONObject()
+        .put("konnektaAbsX", u.coerceIn(0f, 1f).toDouble())
+        .put("konnektaAbsY", v.coerceIn(0f, 1f).toDouble())
         .apply { if (extend) put("konnektaScreen", "extend") }
+    // The computer's screen under (x, y) on the view, through the zoom.
+    fun abs(x: Float, y: Float): JSONObject {
+        val u = (x / size.width).coerceIn(0f, 1f)
+        val v = (y / size.height).coerceIn(0f, 1f)
+        val (pu, pv) = zoom?.toPicture(u, v) ?: (u to v)
+        zoom?.apply { px = pu; py = pv }
+        return absShare(pu, pv)
+    }
     val touchpad = mode == Settings.PointerMode.Touchpad
     val swipeMin = 45.dp.toPx()
+    val pinchMin = 24.dp.toPx()
+    val scrollMin = 12.dp.toPx()
     var lastTap = 0L
+    zoom?.direct = !touchpad
     awaitEachGesture {
         val down = awaitFirstDown()
+        zoom?.hold = !touchpad
         val start = down.uptimeMillis
         // Touchpad: a tap and then a press right after drags (button held).
         val dragHold = touchpad && start - lastTap < 300
@@ -302,11 +468,25 @@ private suspend fun androidx.compose.ui.input.pointer.PointerInputScope.remoteTo
         var moved = 0f
         var dragging = false
         val swipe = ThreeFingerSwipe(swipeMin)
+        // Two fingers with zoom on: pinching (true) or scrolling (false), once it is clear which.
+        var pinching: Boolean? = null
+        var span0 = -1f
+        var mid0 = Offset.Zero
+        var last = down.position
+        var lastTick = down.uptimeMillis
         // Touchpad speed: the whole picture is the whole computer screen.
         val remote = Streams.desktopSize.value
         val gain = remote?.let { (rw, _) -> (rw.toFloat() / size.width).coerceIn(0.5f, 6f) } ?: 1.5f
         while (true) {
-            val ev = awaitPointerEvent()
+            // Dragging "where you touch" while zoomed: tick so a finger held at an edge keeps panning.
+            val edgeDrag = zoom != null && !touchpad && dragging && maxPointers == 1 && zoom.zoom > 1f
+            val ev = if (edgeDrag) withTimeoutOrNull(16) { awaitPointerEvent() } else awaitPointerEvent()
+            val now = android.os.SystemClock.uptimeMillis()
+            if (edgeDrag && zoom.edgePan(last.x / size.width, last.y / size.height, (now - lastTick) / 1000f)) {
+                queue.trySend(abs(last.x, last.y))
+            }
+            lastTick = now
+            if (ev == null) continue
             val pressed = ev.changes.filter { it.pressed }
             maxPointers = maxOf(maxPointers, pressed.size)
             if (pressed.isEmpty()) break
@@ -320,9 +500,32 @@ private suspend fun androidx.compose.ui.input.pointer.PointerInputScope.remoteTo
                     // Three fingers: switch workspace (left/right) or overview (up/down).
                     swipe.add(pressed)?.let { queue.trySend(JSONObject().put("konnektaSwipe", it)) }
                 } else if (pressed.size >= 2) {
-                    // Raw distance: the computer turns it into wheel steps and keeps the remainder.
-                    val k = Settings.scrollSpeed.value
-                    queue.trySend(JSONObject().put("dx", dx * k).put("dy", dy * k).put("scroll", true))
+                    if (zoom != null && pinching != false) {
+                        val (a, b) = pressed
+                        val span = (a.position - b.position).getDistance()
+                        val prevSpan = (a.previousPosition - b.previousPosition).getDistance()
+                        val mid = (a.position + b.position) / 2f
+                        val prevMid = (a.previousPosition + b.previousPosition) / 2f
+                        if (pinching == null) {
+                            // Fingers apart/together first: zoom; moving together first: scroll.
+                            if (span0 < 0f) {
+                                span0 = prevSpan
+                                mid0 = prevMid
+                            }
+                            if (abs(span - span0) > pinchMin) pinching = true
+                            else if ((mid - mid0).getDistance() > scrollMin) pinching = false
+                        }
+                        if (pinching == true && prevSpan > 0f) zoom.pinch(
+                            span / prevSpan, prevMid.x / size.width, prevMid.y / size.height, mid.x / size.width, mid.y / size.height,
+                        )
+                    }
+                    if (zoom == null || pinching == false) {
+                        // Raw distance: the computer turns it into wheel steps and keeps the remainder.
+                        val k = Settings.scrollSpeed.value
+                        queue.trySend(JSONObject().put("dx", dx * k).put("dy", dy * k).put("scroll", true))
+                    }
+                } else if (maxPointers >= 2) {
+                    // One finger left after scrolling or zooming: not a pointer move.
                 } else if (touchpad) {
                     if (dragHold && !holding && moved > 6f) {
                         holding = true
@@ -330,7 +533,16 @@ private suspend fun androidx.compose.ui.input.pointer.PointerInputScope.remoteTo
                     }
                     if (moved > 3f) {
                         dragging = true
-                        queue.trySend(JSONObject().put("dx", (dx * gain).toDouble()).put("dy", (dy * gain).toDouble()))
+                        if (zoom != null && zoom.zoom > 1f && !zoom.tracked) {
+                            // The computer does not tell where its pointer is: the phone places
+                            // it, so it knows where it is and the view can follow it.
+                            zoom.movePointer(dx / size.width, dy / size.height)
+                            queue.trySend(absShare(zoom.px, zoom.py))
+                        } else {
+                            // Zoomed in, finer: crossing the view crosses what it shows.
+                            val g = gain / (zoom?.zoom ?: 1f)
+                            queue.trySend(JSONObject().put("dx", (dx * g).toDouble()).put("dy", (dy * g).toDouble()))
+                        }
                     }
                 } else if (moved > 12f) {
                     // Direct: the first move presses the button where the finger
@@ -341,9 +553,11 @@ private suspend fun androidx.compose.ui.input.pointer.PointerInputScope.remoteTo
                         holding = true
                     }
                     queue.trySend(abs(c.position.x, c.position.y))
+                    last = c.position
                 }
             }
         }
+        zoom?.hold = false
         val held = android.os.SystemClock.uptimeMillis() - start
         if (holding) queue.trySend(JSONObject().put("singlerelease", true))
         when {
@@ -374,6 +588,10 @@ fun ExtendScreen(current: JSONObject?, onBack: () -> Unit) {
     val size by Streams.desktopSize.collectAsState()
     val running = live.containsKey("extend/$id")
     val pointerMode by Settings.pointerMode.collectAsState()
+    val zoomOn by Settings.extendZoom.collectAsState()
+    val zoomState = remember { Zoom() }
+    val zoom = zoomState.takeIf { zoomOn }
+    LaunchedEffect(zoomState) { Streams.desktopCursor.collect { c -> c?.let { (x, y) -> zoomState.onCursor(x, y) } } }
     val queue = remember { Channel<JSONObject>(Channel.UNLIMITED) }
     var help by remember { mutableStateOf(true) }
     val connected = current.optBoolean("connected")
@@ -414,7 +632,7 @@ fun ExtendScreen(current: JSONObject?, onBack: () -> Unit) {
 
     Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
         val ratio = size?.let { (w, h) -> w.toFloat() / h } ?: (16f / 9f)
-        Box(Modifier.fillMaxSize().aspectRatio(ratio, matchHeightConstraintsFirst = true)) {
+        Box(Modifier.fillMaxSize().aspectRatio(ratio, matchHeightConstraintsFirst = true).clipToBounds()) {
             AndroidView(factory = { c ->
                 SurfaceView(c).apply {
                     holder.addCallback(object : SurfaceHolder.Callback {
@@ -423,8 +641,9 @@ fun ExtendScreen(current: JSONObject?, onBack: () -> Unit) {
                         override fun surfaceDestroyed(h: SurfaceHolder) { Streams.desktopSurface = null }
                     })
                 }
-            }, Modifier.fillMaxSize())
-            Box(Modifier.fillMaxSize().pointerInput(id, pointerMode) { remoteTouch(queue, pointerMode, extend = true) })
+            }, Modifier.zoomed(zoom))
+            Box(Modifier.fillMaxSize().pointerInput(id, pointerMode, zoom) { remoteTouch(queue, pointerMode, extend = true, zoom) })
+            zoom?.let { ZoomReset(it) }
         }
         if (size == null) Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(if (running) "Il monitor è pronto, attendo l'immagine…" else "Chiedo a ${current.optString("name")} un nuovo monitor…", color = Color.White)
@@ -433,7 +652,7 @@ fun ExtendScreen(current: JSONObject?, onBack: () -> Unit) {
         }
         if (help && size != null) Surface(color = Color.Black.copy(alpha = .6f), shape = RoundedCornerShape(12.dp),
             modifier = Modifier.align(Alignment.BottomCenter).padding(12.dp)) {
-            Text(pointerHint(pointerMode) + " Indietro per chiudere.", Modifier.padding(10.dp), color = Color.White,
+            Text(pointerHint(pointerMode, zoomOn) + " Indietro per chiudere.", Modifier.padding(10.dp), color = Color.White,
                 style = MaterialTheme.typography.bodySmall)
         }
         Surface(onClick = onBack, shape = RoundedCornerShape(12.dp), color = Color.Black.copy(alpha = .35f),

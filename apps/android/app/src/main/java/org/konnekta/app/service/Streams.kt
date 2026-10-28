@@ -111,6 +111,13 @@ object Streams {
     /** Size of the computer's screen as decoded (for the touch mapping). */
     val desktopSize = MutableStateFlow<Pair<Int, Int>?>(null)
 
+    /**
+     * Where the computer's pointer is on the screen shown, as shares of it
+     * (outside 0..1 on another monitor); null until the computer tells
+     * (Hyprland does, while the screen streams).
+     */
+    val desktopCursor = MutableStateFlow<Pair<Float, Float>?>(null)
+
     private val workers = mutableMapOf<String, Worker>()
     /** Devices whose phone audio rides on the phone-screen capture. */
     private val sharedAudio = java.util.Collections.synchronizedSet(mutableSetOf<String>())
@@ -178,7 +185,10 @@ object Streams {
         synchronized(workers) { workers.remove(key) }?.stop()
         desktopDecoders.remove(key)
         live.update { it - key }
-        if (plugin == "desktop" || plugin == "extend") desktopSize.value = null
+        if (plugin == "desktop" || plugin == "extend") {
+            desktopSize.value = null
+            desktopCursor.value = null
+        }
         if (l != null) onChanged?.invoke()
         if (notifyPeer && l != null) Thread { send(deviceId, plugin, JSONObject().put("action", "stop").put("session", l.session)) }.start()
     }
@@ -726,6 +736,12 @@ object Streams {
                     if (rebuild && sps != null && pps != null) {
                         rebuild = false
                         desktopSurface?.takeIf { it.isValid }?.let(::build) ?: release()
+                    }
+                    if (n > 0 && meta[0].toInt() == Frame.CONTROL) {
+                        runCatching { JSONObject(String(buf, 0, n)).getJSONArray("cursor") }.getOrNull()?.let {
+                            desktopCursor.value = it.getDouble(0).toFloat() to it.getDouble(1).toFloat()
+                        }
+                        continue
                     }
                     if (n == 0 || meta[0].toInt() != Frame.VIDEO) continue
                     val flags = meta[1].toInt()
