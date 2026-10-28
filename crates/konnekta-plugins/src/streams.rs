@@ -92,6 +92,36 @@ fn now_us() -> u64 {
         .unwrap_or_default()
 }
 
+/// The pointer reports of a screen stream, stopped when dropped.
+struct CursorReports(tokio::task::JoinHandle<()>);
+
+impl Drop for CursorReports {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// Send `{"cursor": [x, y]}` (shares of monitor `name`) each time the
+/// pointer moves, checked 25 times a second. Dropped rather than queued
+/// when the pictures fill the link: the next one is newer anyway.
+async fn report_cursor(sender: Arc<FrameSender>, name: String) {
+    let mut last = None;
+    while !sender.is_closed() {
+        let n = name.clone();
+        let at = tokio::task::spawn_blocking(move || konnekta_platform::display::cursor_on(&n))
+            .await
+            .ok()
+            .flatten();
+        if let Some((x, y)) = at
+            && at != last
+            && sender.push(Frame::control(&json!({ "cursor": [x, y] })))
+        {
+            last = at;
+        }
+        tokio::time::sleep(Duration::from_millis(40)).await;
+    }
+}
+
 impl StreamPlugin {
     fn make(kind: Kind, info: PluginInfo) -> Arc<Self> {
         Arc::new_cyclic(|me| Self {
@@ -438,7 +468,7 @@ impl StreamPlugin {
     /// clean. Quality is fixed for the session (constant-quality encoding
     /// keeps a still screen almost free).
     async fn produce_desktop(ch: SecureChannel, params: StreamParams, extend: bool) -> Result<()> {
-        let sender = FrameSender::new(ch, 2);
+        let sender = Arc::new(FrameSender::new(ch, 2));
         let level = DEFAULT_LADDER
             .iter()
             .rposition(|q| params.height == 0 || q.height <= params.height)
@@ -482,6 +512,12 @@ impl StreamPlugin {
             }
         };
         sender.send(Frame::control(&json!({ "quality": q }))).await;
+        // Where the pointer is on the monitor shown, whenever it moves: a
+        // zoomed-in phone keeps it in view. Ends with the stream.
+        let _cursor = output
+            .clone()
+            .filter(|_| konnekta_platform::display::can_report_cursor())
+            .map(|name| CursorReports(tokio::spawn(report_cursor(sender.clone(), name))));
         let (prog, args) = screen_capture_command(q, output.as_deref())?;
         tracing::info!(program = %prog, height = q.height, fps = q.fps, "screen capture");
         let mut proc = ProcessPipeline::spawn(&prog, &args, false, true)?;

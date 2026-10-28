@@ -22,6 +22,7 @@ import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Slideshow
 import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.ZoomIn
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -125,6 +126,24 @@ fun SettingsScreen(onBack: () -> Unit) {
                     Settings.ScreenOrientation.Portrait -> "Il desktop remoto resta in verticale."
                     Settings.ScreenOrientation.Auto -> "Il desktop remoto segue la rotazione del telefono."
                 },
+        )
+        val desktopZoom by Settings.desktopZoom.collectAsState()
+        ActionCard(
+            Icons.Filled.ZoomIn, "Zoom con due dita sul desktop remoto",
+            if (desktopZoom) "Allarga o stringi due dita per ingrandire lo schermo del computer"
+            else "Spento: due dita servono solo a scorrere",
+            trailing = { Switch(desktopZoom, { Settings.setDesktopZoom(ctx, it) }) },
+        ) { Settings.setDesktopZoom(ctx, !desktopZoom) }
+        val extendZoom by Settings.extendZoom.collectAsState()
+        ActionCard(
+            Icons.Filled.ZoomIn, "Zoom con due dita sullo schermo secondario",
+            if (extendZoom) "Allarga o stringi due dita per ingrandire il monitor"
+            else "Spento: due dita servono solo a scorrere",
+            trailing = { Switch(extendZoom, { Settings.setExtendZoom(ctx, it) }) },
+        ) { Settings.setExtendZoom(ctx, !extendZoom) }
+        if (desktopZoom || extendZoom) Hint(
+            "Più ingrandisci, più la vista segue da vicino il puntatore. Due dita che si spostano senza allargarsi " +
+                "scorrono come sempre; il pulsante in alto a destra torna a 1×.",
         )
         val desktopAudio by Settings.desktopAudio.collectAsState()
         Choice(

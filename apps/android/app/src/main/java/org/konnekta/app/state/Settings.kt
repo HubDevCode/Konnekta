@@ -57,6 +57,23 @@ object Settings {
         prefs(ctx).putFloat("extendScale", extendScale.value).apply()
     }
 
+    /**
+     * Pinch with two fingers to zoom the picture, separately for the remote
+     * desktop and the second screen; zoomed in, the view follows the pointer.
+     */
+    val desktopZoom = MutableStateFlow(true)
+    val extendZoom = MutableStateFlow(true)
+
+    fun setDesktopZoom(ctx: Context, on: Boolean) {
+        desktopZoom.value = on
+        prefs(ctx).putBoolean("desktopZoom", on).apply()
+    }
+
+    fun setExtendZoom(ctx: Context, on: Boolean) {
+        extendZoom.value = on
+        prefs(ctx).putBoolean("extendZoom", on).apply()
+    }
+
     fun setDesktopAudio(ctx: Context, on: Boolean) {
         desktopAudio.value = on
         prefs(ctx).putBoolean("desktopAudio", on).apply()
@@ -135,6 +152,8 @@ object Settings {
         desktopAudio.value = p.getBoolean("desktopAudio", false)
         extendAudio.value = runCatching { ScreenAudio.valueOf(p.getString("extendAudio", null)!!) }.getOrDefault(ScreenAudio.None)
         extendScale.value = p.getFloat("extendScale", 1f).coerceIn(EXTEND_SCALE_MIN, 1f)
+        desktopZoom.value = p.getBoolean("desktopZoom", true)
+        extendZoom.value = p.getBoolean("extendZoom", true)
     }
 
     fun setBluetooth(ctx: Context, on: Boolean) {

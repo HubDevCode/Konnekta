@@ -166,6 +166,46 @@ pub fn move_cursor(x: i32, y: i32) -> Result<()> {
     Ok(())
 }
 
+/// Where the pointer is, in layout coordinates. Hyprland only (through its
+/// socket, cheap enough to ask many times a second): Sway does not tell.
+#[cfg(unix)]
+pub fn cursor_position() -> Option<(f64, f64)> {
+    use std::io::{Read, Write};
+    if compositor()? != Compositor::Hyprland {
+        return None;
+    }
+    let path = std::path::Path::new(&std::env::var_os("XDG_RUNTIME_DIR")?)
+        .join("hypr")
+        .join(std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE")?)
+        .join(".socket.sock");
+    let mut s = std::os::unix::net::UnixStream::connect(path).ok()?;
+    s.set_read_timeout(Some(std::time::Duration::from_millis(200)))
+        .ok()?;
+    s.write_all(b"j/cursorpos").ok()?;
+    let mut out = String::new();
+    s.read_to_string(&mut out).ok()?;
+    let v: serde_json::Value = serde_json::from_str(out.trim()).ok()?;
+    Some((v["x"].as_f64()?, v["y"].as_f64()?))
+}
+
+#[cfg(not(unix))]
+pub fn cursor_position() -> Option<(f64, f64)> {
+    None
+}
+
+/// Whether [`cursor_position`] can answer here.
+pub fn can_report_cursor() -> bool {
+    compositor() == Some(Compositor::Hyprland)
+}
+
+/// The pointer as a share of the monitor `name` (outside 0..=1 when it is
+/// on another monitor).
+pub fn cursor_on(name: &str) -> Option<(f64, f64)> {
+    let r = monitor_region(name)?;
+    let (x, y) = cursor_position()?;
+    Some(((x - r.x) / r.w.max(1.0), (y - r.y) / r.h.max(1.0)))
+}
+
 /// Whether the pointer can be placed through the compositor.
 pub fn can_move_cursor() -> bool {
     compositor().is_some()
