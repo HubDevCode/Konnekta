@@ -234,18 +234,22 @@ mod imp {
         let err = err
             .lines()
             .map(str::trim)
-            .filter(|l| !l.is_empty() && !l.starts_with("Sorry, try again") && !l.starts_with("[sudo]"))
+            .filter(|l| {
+                !l.is_empty() && !l.starts_with("Sorry, try again") && !l.starts_with("[sudo]")
+            })
             .collect::<Vec<_>>()
             .join(" ");
-        Err(if err.contains("incorrect password") || err.contains("no password") {
-            "Password errata".into()
-        } else if err.contains("sudoers") {
-            "Il tuo utente non può usare sudo".into()
-        } else if err.is_empty() {
-            "configurazione non riuscita".into()
-        } else {
-            err
-        })
+        Err(
+            if err.contains("incorrect password") || err.contains("no password") {
+                "Password errata".into()
+            } else if err.contains("sudoers") {
+                "Il tuo utente non può usare sudo".into()
+            } else if err.is_empty() {
+                "configurazione non riuscita".into()
+            } else {
+                err
+            },
+        )
     }
 
     pub fn confirm(password: &str) -> Result<(), String> {
