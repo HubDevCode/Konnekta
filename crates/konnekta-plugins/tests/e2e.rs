@@ -659,6 +659,12 @@ async fn phone_browses_computer_read_only() {
     std::fs::create_dir_all(dl.join("Viaggi")).unwrap();
     std::fs::write(dl.join("Viaggi/biglietto.pdf"), b"%PDF-1.7 ticket").unwrap();
     std::fs::write(dl.join(".segreto"), b"no").unwrap();
+    let cfg: serde_json::Value = desk
+        .k
+        .plugin_action(None, "browse", "getConfig", json!({}))
+        .await
+        .unwrap();
+    assert_eq!(cfg["shareHome"], true, "on by default");
     let send = |body: serde_json::Value| {
         let h = phone.device_handle(&did).unwrap();
         async move {
@@ -683,11 +689,16 @@ async fn phone_browses_computer_read_only() {
         .set_permission(&pid, Permission::BrowseFiles, true)
         .unwrap();
 
-    // Off by default.
+    // Sharing turned off on the computer: refused even with permission.
+    desk.k
+        .plugin_action(None, "browse", "setConfig", json!({ "shareHome": false }))
+        .await
+        .unwrap();
     send(json!({ "action": "roots" })).await;
     let r = bridge_packet(&mut pev, "browse").await;
     assert_eq!(r["body"]["action"], "error");
 
+    // On by default: the permission alone decides.
     desk.k
         .plugin_action(None, "browse", "setConfig", json!({ "shareHome": true }))
         .await

@@ -105,6 +105,13 @@ impl Webcam {
     }
 
     /// Write one picture of the fixed size, opening the device if needed.
+    ///
+    /// The writer is taken out while a picture goes in and put back only
+    /// once the whole picture is written: a write cut short (its task
+    /// aborted when the phone stops the camera) would leave half a picture
+    /// in ffmpeg, which would then read every following picture shifted
+    /// and show a green screen until Konnekta restarts. Cut short, the
+    /// writer is dropped instead and the next picture opens a fresh one.
     async fn write(&self, picture: &[u8]) -> Result<()> {
         let mut w = self.writer.lock().await;
         if w.is_none() {
@@ -138,14 +145,10 @@ impl Webcam {
             *w = Some(ProcessPipeline::spawn("ffmpeg", &args, true, false)?);
             tracing::info!(device = %dev, "Konnekta Camera on");
         }
-        let stdin = w
-            .as_mut()
-            .and_then(|p| p.stdin.as_mut())
-            .context("camera closed")?;
-        if let Err(e) = stdin.write_all(picture).await {
-            *w = None;
-            return Err(e.into());
-        }
+        let mut pipe = w.take().context("camera closed")?;
+        let stdin = pipe.stdin.as_mut().context("camera closed")?;
+        stdin.write_all(picture).await?;
+        *w = Some(pipe);
         Ok(())
     }
 
