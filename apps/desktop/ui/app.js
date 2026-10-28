@@ -253,6 +253,7 @@ function onPluginEvent({ deviceId, plugin, kind, data }) {
         toast(`Ricevuto ${data.name}`, '', data.path ? [['Apri', () => openPath(data.path)], ['Mostra nella cartella', () => openPath(data.path, true)]] : []);
       }
       if (data.state === 'failed') toast(`Trasferimento non riuscito: ${data.name} — ${data.error}`, 'err');
+      settleSent(data);
       if (['transfers', 'send'].includes(S.view) || (S.view === 'devices' && S.tab === 'actions')) render();
       return;
     }
@@ -801,32 +802,88 @@ function nearbyTile({ ic, name, tags, onclick, extra, busy }) {
 
 const lastOctet = (ip) => ip ? `#${String(ip).split('.').pop()}` : null;
 
+/**
+ * Selection items on their way to a Konnekta device: { item, deviceId,
+ * path } of the transfer that carries each. Arrived: the item leaves the
+ * selection. Failed or cancelled: it stays, to send again.
+ */
+const sentWatch = [];
+
+/** Take what arrived out of the selection. */
+function unselect(items) {
+  if (!items.length) return;
+  S.sel = S.sel.filter((x) => !items.includes(x));
+  if (S.view === 'send') render();
+}
+
+/** A Konnekta transfer changed: settle the selection item it carries. */
+function settleSent(t) {
+  if (t.direction !== 'outgoing') return;
+  const i = sentWatch.findIndex((w) => w.deviceId === t.deviceId && w.path === t.path);
+  if (i < 0) return;
+  const [w] = t.state === 'completed' || t.state === 'failed' || t.state === 'cancelled' ? sentWatch.splice(i, 1) : [];
+  if (t.state === 'completed') unselect([w.item]);
+}
+
 async function sendToKonnekta(d) {
-  for (const x of S.sel) {
-    if (x.kind === 'file') continue;
-    if (x.kind === 'folder') await act('share', 'sendFolder', { path: x.path }, d.id);
-    if (x.kind === 'clipboard') await act('clipboard', 'send', null, d.id);
-    if (x.kind === 'text') {
-      const t = x.text.trim();
-      await (/^https?:\/\/\S+$/.test(t) ? act('share', 'sendUrl', { url: t }, d.id) : act('share', 'sendText', { text: x.text }, d.id));
+  // Texts, links and the clipboard arrive with the packet; files and
+  // folders when their transfer completes.
+  const arrived = [];
+  try {
+    for (const x of S.sel) {
+      if (x.kind === 'folder') {
+        const r = await act('share', 'sendFolder', { path: x.path }, d.id);
+        if (r?.path) {
+          sentWatch.push({ item: x, deviceId: d.id, path: r.path });
+          // A tiny folder may be there before its path came back.
+          const t = [...S.transfers.values()].find((t) => t.direction === 'outgoing' && t.deviceId === d.id && t.path === r.path);
+          if (t) settleSent(t);
+        }
+      }
+      if (x.kind === 'clipboard') {
+        await act('clipboard', 'send', null, d.id);
+        arrived.push(x);
+      }
+      if (x.kind === 'text') {
+        const t = x.text.trim();
+        await (/^https?:\/\/\S+$/.test(t) ? act('share', 'sendUrl', { url: t }, d.id) : act('share', 'sendText', { text: x.text }, d.id));
+        arrived.push(x);
+      }
     }
+    const files = S.sel.filter((x) => x.kind === 'file');
+    if (files.length) {
+      const watch = files.map((x) => ({ item: x, deviceId: d.id, path: x.path }));
+      sentWatch.push(...watch);
+      try {
+        await act('share', 'sendFiles', { paths: files.map((x) => x.path) }, d.id);
+      } catch (e) {
+        for (const w of watch) sentWatch.splice(sentWatch.indexOf(w), 1);
+        throw e;
+      }
+    }
+  } finally {
+    unselect(arrived);
   }
-  const paths = S.sel.filter((x) => x.kind === 'file').map((x) => x.path);
-  if (paths.length) await act('share', 'sendFiles', { paths }, d.id);
 }
 
 async function sendToLocalSend(p, pin) {
-  const paths = S.sel.filter((x) => x.kind === 'file' || x.kind === 'folder').map((x) => x.path);
-  const texts = [];
-  for (const x of S.sel) {
-    if (x.kind === 'text') texts.push(x.text);
-    if (x.kind === 'clipboard') {
-      try { texts.push(await navigator.clipboard.readText()); } catch { throw new Error('Non riesco a leggere gli appunti: incolla il testo con "Testo"'); }
+  // LocalSend sends a message on its own, then the files; each send returns once it arrived.
+  const arrived = [];
+  const done = (r, items) => { if (r?.state === 'completed') arrived.push(...items); };
+  try {
+    for (const x of S.sel) {
+      let text = null;
+      if (x.kind === 'text') text = x.text;
+      if (x.kind === 'clipboard') {
+        try { text = await navigator.clipboard.readText(); } catch { throw new Error('Non riesco a leggere gli appunti: incolla il testo con "Testo"'); }
+      }
+      if (text) done(await lsAct('send', { peerId: p.id, text, pin }), [x]);
     }
+    const files = S.sel.filter((x) => x.kind === 'file' || x.kind === 'folder');
+    if (files.length) done(await lsAct('send', { peerId: p.id, paths: files.map((x) => x.path), pin }), files);
+  } finally {
+    unselect(arrived);
   }
-  // LocalSend sends a message on its own, then the files.
-  for (const text of texts) if (text) await lsAct('send', { peerId: p.id, text, pin });
-  if (paths.length) await lsAct('send', { peerId: p.id, paths, pin });
 }
 
 async function sendTo(target) {
