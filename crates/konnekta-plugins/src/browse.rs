@@ -1,6 +1,7 @@
 //! "Browse PC": a paired phone reads selected folders of this computer.
 //!
-//! Read-only and off by default (`shareHome`). Served folders: home,
+//! Read-only; a phone needs the "Browse computer files" permission, and
+//! `shareHome` (on by default) turns it off for every phone. Served folders: home,
 //! download folder, Documents, Pictures, Music, Videos. Rules:
 //! * a path must stay inside its folder after resolving symlinks and `..`;
 //! * names starting with a dot are hidden and refused (`~/.ssh`, `~/.config`...);
@@ -30,9 +31,14 @@ const MAX_LIST: usize = 5000;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
-#[derive(Default)]
 pub struct BrowseConfig {
     pub share_home: bool,
+}
+
+impl Default for BrowseConfig {
+    fn default() -> Self {
+        Self { share_home: true }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
