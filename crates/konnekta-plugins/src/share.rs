@@ -219,7 +219,9 @@ impl SharePlugin {
             .join("archives")
     }
 
-    async fn send_folder(self: &Arc<Self>, dev: DeviceHandle, path: PathBuf) -> Result<()> {
+    /// Pack the folder and send it; returns the archive, the path its
+    /// transfer goes by.
+    async fn send_folder(self: &Arc<Self>, dev: DeviceHandle, path: PathBuf) -> Result<PathBuf> {
         if !tokio::fs::metadata(&path).await?.is_dir() {
             bail!("{} is not a folder", path.display());
         }
@@ -227,19 +229,20 @@ impl SharePlugin {
         let archive =
             tokio::task::spawn_blocking(move || archive_folder(&path, &out_dir)).await??;
         let me = self.clone();
+        let sent = archive.clone();
         tokio::spawn(async move {
             if let Err(e) = me.send_file(&dev, archive.clone(), 1, 0).await {
                 tracing::warn!("folder send failed: {e:#}");
             }
             let _ = tokio::fs::remove_file(&archive).await;
         });
-        Ok(())
+        Ok(sent)
     }
 
     async fn deliver(self: &Arc<Self>, dev: DeviceHandle, content: OutboxContent) -> Result<()> {
         match content {
             OutboxContent::Files { paths } => self.send_files(dev, paths).await,
-            OutboxContent::Folder { path } => self.send_folder(dev, path).await,
+            OutboxContent::Folder { path } => self.send_folder(dev, path).await.map(drop),
             OutboxContent::Text { text } => self.send_text(&dev, text).await,
             OutboxContent::Url { url } => self.send_url(&dev, url).await,
         }
@@ -738,10 +741,10 @@ impl Plugin for SharePlugin {
                     .and_then(Value::as_str)
                     .context("missing path")?;
                 let shared = self.me.upgrade().context("plugin dropped")?;
-                shared
+                let archive = shared
                     .send_folder(crate::need_dev(dev)?.clone(), PathBuf::from(path))
                     .await?;
-                Ok(Value::Null)
+                Ok(json!({ "path": archive }))
             }
             // Deliver now if the device is connected, otherwise keep it in
             // the outbox until it comes back.
