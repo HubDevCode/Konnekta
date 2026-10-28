@@ -45,6 +45,18 @@ object Settings {
 
     val extendAudio = MutableStateFlow(ScreenAudio.None)
 
+    /**
+     * Resolution of the second screen, as a share of the phone's own (same
+     * shape): lower makes everything on it bigger, 1 is pixel for pixel.
+     */
+    val extendScale = MutableStateFlow(1f)
+    const val EXTEND_SCALE_MIN = 0.5f
+
+    fun setExtendScale(ctx: Context, v: Float) {
+        extendScale.value = v.coerceIn(EXTEND_SCALE_MIN, 1f)
+        prefs(ctx).putFloat("extendScale", extendScale.value).apply()
+    }
+
     fun setDesktopAudio(ctx: Context, on: Boolean) {
         desktopAudio.value = on
         prefs(ctx).putBoolean("desktopAudio", on).apply()
@@ -122,6 +134,7 @@ object Settings {
             .getOrDefault(ScreenOrientation.Auto)
         desktopAudio.value = p.getBoolean("desktopAudio", false)
         extendAudio.value = runCatching { ScreenAudio.valueOf(p.getString("extendAudio", null)!!) }.getOrDefault(ScreenAudio.None)
+        extendScale.value = p.getFloat("extendScale", 1f).coerceIn(EXTEND_SCALE_MIN, 1f)
     }
 
     fun setBluetooth(ctx: Context, on: Boolean) {
