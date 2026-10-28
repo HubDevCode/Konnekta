@@ -5,6 +5,8 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod approve;
+
 use konnekta_core::{Config, Konnekta};
 use serde_json::Value;
 use tauri::image::Image;
@@ -657,6 +659,10 @@ async fn start_core() -> anyhow::Result<Konnekta> {
 }
 
 fn main() {
+    // Installed as the PAM helper, or run as root by pkexec for its setup.
+    if let Some(code) = approve::early_main() {
+        std::process::exit(code);
+    }
     // WebKitGTK's DMA-BUF renderer kills the window with a Wayland protocol
     // error on some drivers (seen on NVIDIA + Hyprland). The user can still
     // opt back in by setting the variable.
@@ -769,7 +775,11 @@ fn main() {
             desktop_prefs_get,
             desktop_prefs_set,
             check_update,
-            install_update
+            install_update,
+            approve::approve_status,
+            approve::approve_enroll,
+            approve::approve_confirm,
+            approve::approve_disable
         ])
         .run(tauri::generate_context!())
         .expect("error while running Konnekta");

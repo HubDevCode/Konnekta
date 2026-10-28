@@ -2744,10 +2744,12 @@ name = "konnekta-desktop"
 version = "2.5.5"
 dependencies = [
  "anyhow",
+ "konnekta-approve",
  "konnekta-core",
  "konnekta-media",
  "konnekta-platform",
  "konnekta-plugins",
+ "libc",
  "serde",
  "serde_json",
  "tauri",

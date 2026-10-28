@@ -1246,8 +1246,87 @@ function commandBlock(cmds) {
     btn('Copia', () => run(navigator.clipboard.writeText(text), 'Comandi copiati'), 'small'));
 }
 
+// Fingerprint approval of sudo: the phone makes its key, the user compares
+// the code and types the password once; Konnekta sets up the rest.
+function passwordModal(title, intro, okLabel, onOk) {
+  const pw = h('input', { type: 'password', placeholder: 'Password del computer', autocomplete: 'current-password' });
+  const err = h('p', { class: 'small', style: 'color:var(--danger)' });
+  let busy = false;
+  // Returning false keeps the window open: a wrong password can be typed again.
+  const go = async () => {
+    if (busy) return false;
+    busy = true;
+    err.textContent = 'Attendi…';
+    try {
+      await onOk(pw.value);
+      render();
+      return true;
+    } catch (e) {
+      err.textContent = String(e);
+      pw.value = '';
+      pw.focus();
+      return false;
+    } finally {
+      busy = false;
+    }
+  };
+  const close = modal(title, h('div', {}, intro,
+    h('label', { class: 'field', style: 'margin-top:12px' }, 'Password (la stessa che usi con sudo)', pw), err),
+  [['Annulla'], [okLabel, go, 'primary']]);
+  pw.addEventListener('keydown', async (e) => { if (e.key === 'Enter' && (await go())) close(); });
+  pw.focus();
+}
+
+async function enrollPhone(d) {
+  const close = modal('Conferma sul telefono', h('p', {}, `Su ${d.name} appare la richiesta: confermala con l'impronta.`));
+  let r;
+  try {
+    r = await invoke('approve_enroll', { deviceId: d.id });
+  } catch (e) {
+    close();
+    toast(String(e), 'err');
+    return;
+  }
+  close();
+  passwordModal('Controlla il codice', h('div', {},
+    h('p', {}, `Il telefono ${r.device} mostra un codice: deve essere uguale a questo.`),
+    h('div', { class: 'mono', style: 'font-size:20px;margin:12px 0' }, fmtKey(r.code)),
+    h('p', { class: 'small muted' }, 'Se è uguale, scrivi la password del computer: serve una volta sola per attivare l\'approvazione.')),
+  'È uguale, attiva', async (password) => {
+    await invoke('approve_confirm', { password });
+    toast('Fatto: ora sudo chiede prima al telefono');
+  });
+}
+
+async function approveCard() {
+  const st = await invoke('approve_status').catch(() => null);
+  if (!st?.available) return null;
+  const on = st.helper && st.sudo && st.device;
+  const phones = S.devices.filter((d) => d.paired && d.connected && hasCap(d, 'konnekta.approve.request'));
+  let pick = phones[0]?.id;
+  const body = on
+    ? [h('p', { class: 'small' }, `sudo chiede prima a ${st.device}: confermi con l'impronta. La password resta sempre disponibile.`),
+      h('div', { class: 'row' }, btn('Disattiva', () => passwordModal('Disattivare?', h('p', {}, 'sudo tornerà a chiedere solo la password. Il telefono potrebbe chiedere l\'impronta un\'ultima volta.'),
+        'Disattiva', async (password) => {
+          await invoke('approve_disable', { password });
+          toast('Approvazione disattivata');
+        }), 'danger'))]
+    : [h('p', { class: 'small muted' }, 'Quando usi sudo il telefono chiede l\'impronta al posto della password (che resta sempre disponibile).'),
+      phones.length
+        ? h('div', { class: 'row' },
+          phones.length > 1 ? h('select', { onchange: (e) => { pick = e.target.value; } }, phones.map((d) => h('option', { value: d.id }, d.name))) : null,
+          btn(phones.length > 1 ? 'Attiva' : `Attiva con ${phones[0].name}`, () => enrollPhone(phones.find((d) => d.id === pick)), 'primary'))
+        : h('p', { class: 'small' }, 'Connetti un telefono con l\'app Konnekta per attivarla.')];
+  return h('div', { class: 'card', style: 'margin-bottom:14px' },
+    h('div', { class: 'row' }, icon('lock'),
+      h('div', { class: 'grow', style: 'font-weight:600' }, 'Approva sudo con l\'impronta'),
+      h('span', { class: `badge ${on ? 'ok' : 'warn'}` }, on ? 'attiva' : 'non attiva')),
+    body);
+}
+
 async function renderSetup() {
   const r = await invoke('setup_check');
+  const approve = await approveCard();
   const distro = { arch: 'Arch Linux', debian: 'Debian / Ubuntu', fedora: 'Fedora', opensuse: 'openSUSE' }[r.distro];
   const missing = (r.features || []).filter((f) => !f.ok);
   return h('div', {}, h('h1', {}, 'Configurazione'),
@@ -1260,6 +1339,7 @@ async function renderSetup() {
       h('h2', { style: 'margin-top:0' }, 'Tutti i comandi'),
       h('p', { class: 'small muted' }, 'Eseguili come utente normale: sudo chiede la password. Poi premi Ricontrolla; non serve riavviare Konnekta.'),
       commandBlock(r.allCommands)) : null,
+    approve,
     h('div', { class: 'card' }, (r.features || []).map((f) => {
       const [ic, title, sub] = SETUP_FEATURES[f.id] || ['extension', f.id, ''];
       const bad = f.requirements.filter((q) => q.status !== 'ok');

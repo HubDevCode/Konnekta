@@ -26,3 +26,5 @@ pub mod keyfile;
 pub mod message;
 #[cfg(unix)]
 pub mod pam;
+#[cfg(unix)]
+pub mod setup;
