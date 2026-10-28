@@ -397,11 +397,7 @@ fun ExtendScreen(current: JSONObject?, onBack: () -> Unit) {
     }
     LaunchedEffect(id, connected) {
         if (connected && !Streams.live.value.containsKey("extend/$id")) {
-            // The real size of the screen, in the chosen orientation: the monitor matches it pixel for pixel.
-            val b = if (android.os.Build.VERSION.SDK_INT >= 30) (ctx as? Activity)?.windowManager?.maximumWindowMetrics?.bounds else null
-            val (long, short) = b?.let { maxOf(it.width(), it.height()) to minOf(it.width(), it.height()) }
-                ?: ctx.resources.displayMetrics.let { maxOf(it.widthPixels, it.heightPixels) to minOf(it.widthPixels, it.heightPixels) }
-            val (w, h) = if (portrait) short to long else long to short
+            val (w, h) = extendSize(ctx, portrait, Settings.extendScale.value)
             Streams.request(id, "extend", JSONObject().put("width", w).put("height", h).put("fps", 60))
         }
     }
@@ -446,6 +442,19 @@ fun ExtendScreen(current: JSONObject?, onBack: () -> Unit) {
                 Modifier.padding(6.dp), tint = Color.White.copy(alpha = .8f))
         }
     }
+}
+
+/**
+ * Size of the second screen's monitor: the phone's real screen in the chosen
+ * orientation, times [scale] (same shape, even numbers). At 1 it matches the
+ * phone pixel for pixel; lower shows everything bigger.
+ */
+fun extendSize(ctx: android.content.Context, portrait: Boolean, scale: Float): Pair<Int, Int> {
+    val b = if (android.os.Build.VERSION.SDK_INT >= 30) (ctx as? Activity)?.windowManager?.maximumWindowMetrics?.bounds else null
+    val (long, short) = b?.let { maxOf(it.width(), it.height()) to minOf(it.width(), it.height()) }
+        ?: ctx.resources.displayMetrics.let { maxOf(it.widthPixels, it.heightPixels) to minOf(it.widthPixels, it.heightPixels) }
+    val (w, h) = if (portrait) short to long else long to short
+    return ((w * scale).toInt() and 1.inv()) to ((h * scale).toInt() and 1.inv())
 }
 
 /** A press this long is a right click. */

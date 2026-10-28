@@ -14,6 +14,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.AspectRatio
 import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.GridView
@@ -105,6 +106,7 @@ fun SettingsScreen(onBack: () -> Unit) {
             listOf(Settings.ScreenOrientation.Landscape to "Orizzontale", Settings.ScreenOrientation.Portrait to "Verticale"),
             extendO,
         ) { Settings.setExtendOrientation(ctx, it) }
+        ExtendResolution(extendO == Settings.ScreenOrientation.Portrait)
         val desktopO by Settings.desktopOrientation.collectAsState()
         Choice(
             "Desktop remoto",
@@ -116,7 +118,7 @@ fun SettingsScreen(onBack: () -> Unit) {
             desktopO,
         ) { Settings.setDesktopOrientation(ctx, it) }
         Hint(
-            (if (extendO == Settings.ScreenOrientation.Portrait) "Schermo secondario verticale: il computer crea un monitor alto e stretto, della risoluzione del telefono in verticale. "
+            (if (extendO == Settings.ScreenOrientation.Portrait) "Schermo secondario verticale: il computer crea un monitor alto e stretto, con il telefono in verticale. "
             else "Schermo secondario orizzontale: lo schermo del telefono gira e il monitor è largo. ") +
                 when (desktopO) {
                     Settings.ScreenOrientation.Landscape -> "Il desktop remoto gira lo schermo in orizzontale, a tutto schermo."
@@ -216,6 +218,39 @@ private fun <T> Choice(title: String, options: List<Pair<T, String>>, selected: 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 6.dp)) {
             options.forEach { (v, label) -> FilterChip(selected = v == selected, onClick = { pick(v) }, label = { Text(label) }) }
         }
+    }
+}
+
+/**
+ * Resolution of the second screen: a share of the phone's own, always in the
+ * phone's shape. Lower resolution, bigger text and windows on the phone.
+ */
+@Composable
+private fun ExtendResolution(portrait: Boolean) {
+    val ctx = LocalContext.current
+    val scale by Settings.extendScale.collectAsState()
+    Box14 {
+        var v by remember(scale) { mutableFloatStateOf(scale) }
+        val (w, h) = extendSize(ctx, portrait, v)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Filled.AspectRatio, null, tint = MaterialTheme.colorScheme.primary)
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text("Risoluzione dello schermo secondario", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "$w × $h · " + when {
+                        v >= .99f -> "come il telefono, tutto più piccolo e nitido"
+                        v <= Settings.EXTEND_SCALE_MIN + .01f -> "tutto molto più grande"
+                        else -> "tutto più grande"
+                    },
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        // Steps of 5%, from half the phone's resolution to all of it.
+        Slider(v, { v = it }, valueRange = Settings.EXTEND_SCALE_MIN..1f, steps = 9,
+            onValueChangeFinished = { Settings.setExtendScale(ctx, v) })
+        Hint("Vale dalla prossima volta che apri lo schermo secondario.")
     }
 }
 
