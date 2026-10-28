@@ -26,6 +26,27 @@ AppImage, .deb e .rpm per Linux, MSI e setup per Windows, .app per macOS, la CLI
 L'app Android controlla a ogni avvio se c'è una versione nuova e propone di installarla
 (**Computer → Informazioni**).
 
+## Novità della 2.5.6
+
+**Desktop remoto e schermo secondario**
+- **Zoom con due dita**: allarga o stringi due dita per ingrandire fino a 5×, muovile per spostare la vista; due dita
+  che si spostano senza allargarsi scorrono come prima. Si accende o spegne a parte per il desktop remoto e per lo
+  schermo secondario (**Impostazioni**); il pulsante in alto a destra torna a 1×.
+- Ingrandito, la **vista segue il puntatore**, tanto più da vicino quanto più è zoomato: il computer (Hyprland)
+  dice al telefono dove si trova il puntatore, anche quando lo muovi dal computer. Con il touchpad, da ingrandito
+  il puntatore si muove più fine.
+- **Risoluzione dello schermo secondario** in Impostazioni: dal 50% al 100% di quella del telefono, per testo e
+  finestre più grandi.
+
+**Invia (computer)**
+- Ciò che è arrivato a destinazione esce da sola dalla **Selezione**; se l'invio non riesce resta lì, pronto da
+  inviare di nuovo.
+
+**Altro**
+- **Approva sudo con l'impronta** si attiva dall'app del computer con un pulsante (Configurazione).
+- Webcam: niente più immagine verde dopo aver spento e riacceso la fotocamera.
+- **Sfoglia il PC** funziona subito: decide il permesso «Sfoglia i file del computer».
+
 ## Novità della 2.5.5
 
 **Pagina Invia rifatta (telefono e computer)**
@@ -113,7 +134,7 @@ L'app Android controlla a ogni avvio se c'è una versione nuova e propone di ins
 | Appunti bidirezionali (senza cicli), immagini, cronologia, snippet salvati | Clipboard | KDE Connect, Flux | immagini anche con Flux |
 | File: invio/ricezione, cartelle (archivio), cartella scelta, stato, ripresa, SHA-256, coda offline | Files | KDE Connect, Flux | ripresa e integrità tra dispositivi Konnekta |
 | **Invia tramite Konnekta** dal menu dei file del computer | Files | — | Dolphin, Nautilus, Nemo, Caja, «Apri con»; Windows «Invia a» e tasto destro |
-| **LocalSend**: pagina Invia/Ricevi, invio e ricezione di file e testi con le app LocalSend (protocollo v2, HTTPS) | Files | LocalSend | spento di default, si attiva nelle impostazioni; ogni invio va accettato salvo la ricezione rapida |
+| **LocalSend**: pagina Invia/Ricevi, invio e ricezione di file e testi con le app LocalSend (protocollo v2, HTTPS) | Files | LocalSend | spento di default, si attiva nelle impostazioni; ogni invio va accettato salvo la ricezione rapida; sul computer ciò che arriva esce dalla selezione, ciò che non arriva resta |
 | **Chat** per dispositivo: testi, link, appunti, file | — | — | solo in memoria |
 | **Sfoglia PC** dal telefono (sola lettura) | BrowseFiles (sensibile) | — | cartelle consentite, file nascosti esclusi, sessione con Stop |
 | Controllo multimediale in entrambe le direzioni, volume, metadati | MediaControl | KDE Connect, Flux | Linux: MPRIS · macOS: Music/Spotify · Windows: tasti multimediali |
@@ -128,14 +149,14 @@ L'app Android controlla a ogni avvio se c'è una versione nuova e propone di ins
 | **Mobile Deck**: griglia, pagine, categorie, profili, macro, stato dinamico | Deck (sensibile) | — | estendibile con azioni di qualunque plugin |
 | **Microfono del telefono** come microfono del PC | Microphone (sensibile) | — | dispositivo virtuale "Konnekta Microphone" |
 | **Webcam wireless** | Camera (sensibile) | — | v4l2loopback su Linux ("Konnekta Camera" sempre presente mentre Konnekta è aperto), OBS Virtual Camera su Windows/macOS; obiettivo, risoluzione e fps cambiano dal vivo, continua a schermo spento |
-| **Desktop remoto** (vedi e controlla il PC) | Desktop + RemoteInput | — | H.264 a bassa latenza fino a 60 fps; il dito muove il puntatore dove tocchi o come un touchpad; orizzontale, verticale o automatico; audio del PC facoltativo |
-| **Schermo secondario**: il telefono diventa un altro monitor del PC | Desktop + RemoteInput | — | Hyprland o Sway; orizzontale o verticale; audio duplicato, uscita a sé «Konnekta-Schermo» o nessuno |
+| **Desktop remoto** (vedi e controlla il PC) | Desktop + RemoteInput | — | H.264 a bassa latenza fino a 60 fps; il dito muove il puntatore dove tocchi o come un touchpad; orizzontale, verticale o automatico; audio del PC facoltativo; zoom con due dita (fino a 5×) che segue il puntatore |
+| **Schermo secondario**: il telefono diventa un altro monitor del PC | Desktop + RemoteInput | — | Hyprland o Sway; orizzontale o verticale; risoluzione dal 50% al 100% del telefono; audio duplicato, uscita a sé «Konnekta-Schermo» o nessuno; zoom con due dita che segue il puntatore |
 | **Schermo del telefono** sul PC | Desktop | — | Android |
 | **Audio del PC** sul telefono | SystemAudio (sensibile) | — | |
 | **Non disturbare** sincronizzato con priorità configurabile | DoNotDisturb | Flux | |
 | **Screenshot automatici** → cartella + appunti, senza duplicati | Screenshots | — | |
 | **Aggiornamento dell'app Android** inviato dal computer | Files | — | l'installer di Android chiede sempre conferma |
-| **Approva `sudo` con l'impronta** del telefono | Approve (sensibile) | — | Linux; la password resta sempre disponibile |
+| **Approva `sudo` con l'impronta** del telefono | Approve (sensibile) | — | Linux; si attiva con un pulsante nell'app del computer (Configurazione); la password resta sempre disponibile |
 | **Hyprland**: tema, workspace e dispatcher nel Deck, modulo Waybar | — | — | Linux |
 
 ## Collegamento via cavo USB
