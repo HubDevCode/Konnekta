@@ -23,5 +23,9 @@ anyhow.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
+[target.'cfg(target_os = "linux")'.dependencies]
+konnekta-approve.workspace = true
+libc = "0.2"
+
 [features]
 custom-protocol = ["tauri/custom-protocol"]

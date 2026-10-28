@@ -197,7 +197,7 @@ class ApproveActivity : FragmentActivity() {
     }
 }
 
-/** The enrollment code stays on screen until the user has typed it. */
+/** The enrollment code stays on screen until the user has checked it on the computer. */
 object EnrollCode {
     val code = MutableStateFlow<String?>(null)
     fun show(c: String) {
@@ -210,9 +210,9 @@ private fun CodeScreen(code: String, onDone: () -> Unit) {
     Surface(Modifier.fillMaxSize()) {
         Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Spacer(Modifier.height(32.dp))
-            Text("Scrivi questo codice nel terminale del computer", style = MaterialTheme.typography.titleLarge)
+            Text("Controlla questo codice sul computer", style = MaterialTheme.typography.titleLarge)
             Text(code, style = MaterialTheme.typography.displaySmall)
-            Text("Scrivilo solo nel terminale dove hai lanciato `konnekta approve enroll`.", style = MaterialTheme.typography.bodySmall)
+            Text("Nell'app Konnekta del computer deve comparire lo stesso codice: se è uguale, conferma lì. Se hai usato il terminale (`konnekta approve enroll`), scrivilo lì.", style = MaterialTheme.typography.bodySmall)
             Button(onClick = onDone) { Text("Fatto") }
         }
     }
@@ -228,7 +228,7 @@ private fun ApproveScreen(r: PendingApprovals.Request, onApprove: () -> Unit, on
             if (r.kind == "enroll") {
                 Text("Usare questo telefono per approvare sudo?", style = MaterialTheme.typography.headlineSmall)
                 Text("Utente ${b.optString("user")} sul computer ${b.optString("host")} (${r.deviceName}).")
-                Text("Dopo l'impronta il telefono mostra un codice: scrivilo nel terminale del computer.")
+                Text("Dopo l'impronta il telefono mostra un codice da confrontare con quello del computer.")
             } else {
                 Text("Approvare ${b.optString("service")}?", style = MaterialTheme.typography.headlineSmall)
                 Text("Utente: ${b.optString("user")}")

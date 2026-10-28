@@ -99,6 +99,17 @@ scrive il file. `sudo konnekta approve enable sudo` aggiunge la riga PAM, con un
 sicurezza in `/etc/konnekta/pam-backup/`, e rifiuta un helper che non sia di root in una cartella
 di root.
 
+**Dall'app desktop** (Configurazione → Attiva) gli stessi passi sono uno solo. L'app verifica la
+firma della registrazione e **mostra** il codice da confrontare con quello del telefono; poi
+`pkexec` esegue l'app come root (`--approve-install <utente>`, chiave sullo standard input), che
+controlla che l'utente sia quello che ha chiesto (`PKEXEC_UID`), installa l'helper in
+`/usr/lib/konnekta/`, scrive la chiave e aggiunge la riga PAM a `sudo` (e `sudo-i` se c'è).
+L'helper installato è `konnekta-approve` se si trova accanto all'app, altrimenti una copia
+dell'app stessa, che avviata con quel nome fa solo da helper PAM. Qui il codice è mostrato, non
+scritto: il controllo vale contro un telefono sbagliato, non contro codice malevolo già in
+esecuzione come l'utente, che potrebbe disegnare la finestra al posto dell'app. Come per la
+registrazione da terminale, va fatta in una sessione di cui ti fidi.
+
 | Attaccante | Può | Non può |
 |---|---|---|
 | Rete | bloccare o ritardare: PAM chiede la password | leggere o modificare i messaggi (TLS con pinning), creare una firma valida |

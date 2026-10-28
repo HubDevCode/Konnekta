@@ -249,6 +249,10 @@ konnekta waybar                     # stato per un modulo Waybar
 
 ### Approvare `sudo` con l'impronta (Linux)
 
+Dall'app desktop: **Configurazione → Approva sudo con l'impronta → Attiva**. Confermi con
+l'impronta sul telefono, controlli che il codice sia uguale e il sistema chiede la password una
+volta sola (serve un agente polkit, presente in ogni desktop). Da terminale:
+
 ```bash
 cargo build --release -p konnekta-approve
 sudo packaging/install-approve.sh          # installa l'helper in /usr/lib/konnekta

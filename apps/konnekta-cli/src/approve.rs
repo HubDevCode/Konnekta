@@ -1,6 +1,6 @@
 //! `konnekta approve`: set up fingerprint approval of `sudo` / polkit.
 //!
-//! * `sudo konnekta approve enroll <phone>` — the phone makes a key that
+//! * `sudo konnekta approve enroll [phone]` — the phone makes a key that
 //!   needs the fingerprint, signs the enrollment, and the user types the
 //!   code the phone shows; then root writes `/etc/konnekta/approve/<user>.pub`.
 //! * `sudo konnekta approve enable sudo` — adds the PAM line.
@@ -12,17 +12,18 @@
 use anyhow::{Context, Result, bail};
 use clap::Subcommand;
 use konnekta_approve::client::socket_path;
-use konnekta_approve::helper::{hostname, now_secs, user_uid};
+use konnekta_approve::helper::{hostname, user_uid};
 use konnekta_approve::{enroll, keyfile, pam};
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 
-pub const DEFAULT_HELPER: &str = "/usr/lib/konnekta/konnekta-approve";
+pub const DEFAULT_HELPER: &str = pam::HELPER;
 
 #[derive(Subcommand)]
 pub enum ApproveCmd {
     /// Register the phone that approves sudo / polkit for you (run with sudo).
-    Enroll { device: String },
+    /// Without a name, the only connected phone.
+    Enroll { device: Option<String> },
     /// Forget the phone key (run with sudo).
     Remove,
     /// Show the enrolled phone and the PAM services that use it.
@@ -68,7 +69,7 @@ fn service_ok(service: &str) -> Result<()> {
 
 pub fn run(cmd: ApproveCmd) -> Result<()> {
     match cmd {
-        ApproveCmd::Enroll { device } => enroll(&device),
+        ApproveCmd::Enroll { device } => enroll(device.as_deref().unwrap_or_default()),
         ApproveCmd::Remove => {
             need_root()?;
             let (user, _) = sudo_user()?;
@@ -128,39 +129,17 @@ fn polkit_agent_is_setuid() -> Result<()> {
     bail!("polkit-agent-helper-1 non trovato")
 }
 
-/// Rewrite `/etc/pam.d/<service>` atomically, keeping a backup.
+/// Rewrite `/etc/pam.d/<service>`, keeping a backup.
 fn edit_pam(service: &str, f: impl FnOnce(&str) -> Option<String>) -> Result<()> {
-    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     let path = Path::new(pam::PAM_DIR).join(service);
-    let text = std::fs::read_to_string(&path)
-        .with_context(|| format!("{} non trovato", path.display()))?;
-    let Some(new) = f(&text) else {
-        println!("Nessuna modifica necessaria in {}.", path.display());
-        return Ok(());
-    };
-    let backup_dir = Path::new("/etc/konnekta/pam-backup");
-    std::fs::create_dir_all(backup_dir)?;
-    std::fs::set_permissions(backup_dir, std::fs::Permissions::from_mode(0o755))?;
-    let backup = backup_dir.join(format!("{service}.{}", now_secs()));
-    std::fs::write(&backup, &text)?;
-    let tmp = Path::new(pam::PAM_DIR).join(format!(".{service}.konnekta.tmp"));
-    let _ = std::fs::remove_file(&tmp);
-    {
-        let mut out = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o644)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(&tmp)?;
-        out.write_all(new.as_bytes())?;
-        out.sync_all()?;
+    match pam::edit(service, f).with_context(|| format!("{} non trovato", path.display()))? {
+        Some(backup) => println!(
+            "Modificato {} (copia di sicurezza in {}).",
+            path.display(),
+            backup.display()
+        ),
+        None => println!("Nessuna modifica necessaria in {}.", path.display()),
     }
-    std::fs::rename(&tmp, &path)?;
-    println!(
-        "Modificato {} (copia di sicurezza in {}).",
-        path.display(),
-        backup.display()
-    );
     Ok(())
 }
 
@@ -183,12 +162,9 @@ fn status() -> Result<()> {
         Err(_) => println!("Nessun telefono registrato per {user}."),
     }
     for s in pam::SERVICES {
-        let on = std::fs::read_to_string(Path::new(pam::PAM_DIR).join(s))
-            .map(|t| pam::add_line(&t, Path::new("/x")).is_none())
-            .unwrap_or(false);
         println!(
             "  {s:<9} {}",
-            if on {
+            if pam::enabled(s) {
                 "approvabile dal telefono"
             } else {
                 "solo password"
