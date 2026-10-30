@@ -34,9 +34,10 @@ L'app Android controlla a ogni avvio se c'è una versione nuova e propone di ins
   ```bash
   ./Konnekta_2.5.7_amd64.AppImage --log
   ```
-- **Linux, l'AppImage non parte** (`libfuse.so.2`, «Cannot mount AppImage», «please check your FUSE setup»): manca
-  FUSE 2. Si installa (`sys-fs/fuse:0` su Gentoo, `fuse2` su Arch, `libfuse2` su Debian/Ubuntu, `libfuse2t64` su Ubuntu 24.04) oppure si avvia senza:
-  `./Konnekta_2.5.7_amd64.AppImage --appimage-extract-and-run`. Provato su Gentoo.
+- **Linux, l'AppImage non parte** («No suitable fusermount binary found», «Cannot mount AppImage», «please check
+  your FUSE setup»): manca FUSE. Basta FUSE 3 (`sys-fs/fuse` su Gentoo, `fuse3` su Arch/Debian/Ubuntu) con il modulo
+  `fuse` nel kernel; oppure si avvia senza FUSE: `./Konnekta_2.5.7_amd64.AppImage --appimage-extract-and-run`.
+  Provato su Gentoo.
 
 ## Novità della 2.5.6
 
