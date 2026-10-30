@@ -26,6 +26,18 @@ AppImage, .deb e .rpm per Linux, MSI e setup per Windows, .app per macOS, la CLI
 L'app Android controlla a ogni avvio se c'è una versione nuova e propone di installarla
 (**Computer → Informazioni**).
 
+## Novità della 2.5.7
+
+**Log per capire i problemi (computer)**
+- Avviando Konnekta dal terminale con **`--log`** (anche `-log`) stampa tutto quello che fa: versione, sessione
+  grafica, ogni passo del programma e gli eventuali crash con il punto esatto. Basta copiare l'output e mandarlo.
+  ```bash
+  ./Konnekta_2.5.7_amd64.AppImage --log
+  ```
+- **Linux, l'AppImage non parte** (`libfuse.so.2`, «Cannot mount AppImage», «please check your FUSE setup»): manca
+  FUSE 2. Si installa (`sys-fs/fuse:0` su Gentoo, `fuse2` su Arch, `libfuse2` su Debian/Ubuntu, `libfuse2t64` su Ubuntu 24.04) oppure si avvia senza:
+  `./Konnekta_2.5.7_amd64.AppImage --appimage-extract-and-run`. Provato su Gentoo.
+
 ## Novità della 2.5.6
 
 **Desktop remoto e schermo secondario**
