@@ -671,11 +671,43 @@ fn main() {
         // SAFETY: still single-threaded, before any runtime or GTK starts.
         unsafe { std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1") };
     }
+    // `--log` (or `-log`): everything Konnekta does goes to the terminal, so a
+    // user whose app fails to start can copy the output and send it. RUST_LOG,
+    // when set, still wins.
+    let verbose = std::env::args()
+        .skip(1)
+        .any(|a| a == "--log" || a == "-log");
+    let default_filter = if verbose {
+        "info,konnekta=debug"
+    } else {
+        "info"
+    };
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| default_filter.into()),
         )
         .init();
+    if verbose {
+        let env = |k: &str| std::env::var(k).unwrap_or_default();
+        tracing::info!(
+            version = env!("CARGO_PKG_VERSION"),
+            os = std::env::consts::OS,
+            arch = std::env::consts::ARCH,
+            appimage = env("APPIMAGE"),
+            session = env("XDG_SESSION_TYPE"),
+            desktop = env("XDG_CURRENT_DESKTOP"),
+            wayland = env("WAYLAND_DISPLAY"),
+            display = env("DISPLAY"),
+            "starting with --log"
+        );
+        std::panic::set_hook(Box::new(|info| {
+            tracing::error!(
+                "panic: {info}\n{}",
+                std::backtrace::Backtrace::force_capture()
+            );
+        }));
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
             // "Invia tramite Konnekta" while Konnekta runs: the files come here.
