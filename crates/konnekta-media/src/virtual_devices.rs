@@ -42,7 +42,7 @@ impl VirtualMic {
                 .unwrap_or_else(std::env::temp_dir);
             let path = dir.join(format!("konnekta-mic-{}", std::process::id()));
             let _ = std::fs::remove_file(&path);
-            let st = tokio::process::Command::new("mkfifo")
+            let st = konnekta_platform::host::command_async("mkfifo")
                 .arg("-m")
                 .arg("600")
                 .arg(&path)
@@ -51,7 +51,7 @@ impl VirtualMic {
             if !st.success() {
                 bail!("mkfifo failed");
             }
-            let out = tokio::process::Command::new("pactl")
+            let out = konnekta_platform::host::command_async("pactl")
                 .args([
                     "load-module",
                     "module-pipe-source",
@@ -125,7 +125,7 @@ impl Drop for VirtualMic {
     fn drop(&mut self) {
         #[cfg(target_os = "linux")]
         if let MicImpl::Pipe { module, path, .. } = &self.inner {
-            let _ = std::process::Command::new("pactl")
+            let _ = konnekta_platform::host::command("pactl")
                 .args(["unload-module", module])
                 .status();
             let _ = std::fs::remove_file(path);
@@ -157,7 +157,7 @@ impl Speakers {
     pub async fn create(channels: u8) -> Result<Self> {
         #[cfg(target_os = "linux")]
         {
-            let mut child = tokio::process::Command::new("pacat")
+            let mut child = konnekta_platform::host::command_async("pacat")
                 .args([
                     "--playback",
                     "--raw",
@@ -388,7 +388,7 @@ impl ScreenSink {
         #[cfg(target_os = "linux")]
         {
             // Ours left by a crash would make the name ambiguous: only that one goes.
-            if let Ok(list) = tokio::process::Command::new("pactl")
+            if let Ok(list) = konnekta_platform::host::command_async("pactl")
                 .args(["list", "short", "modules"])
                 .output()
                 .await
@@ -397,14 +397,14 @@ impl ScreenSink {
                     if line.contains(&format!("sink_name={SCREEN_SINK}"))
                         && let Some(id) = line.split_whitespace().next()
                     {
-                        let _ = tokio::process::Command::new("pactl")
+                        let _ = konnekta_platform::host::command_async("pactl")
                             .args(["unload-module", id])
                             .output()
                             .await;
                     }
                 }
             }
-            let out = tokio::process::Command::new("pactl")
+            let out = konnekta_platform::host::command_async("pactl")
                 .args([
                     "load-module",
                     "module-null-sink",
@@ -437,7 +437,7 @@ impl ScreenSink {
 impl Drop for ScreenSink {
     fn drop(&mut self) {
         #[cfg(target_os = "linux")]
-        let _ = std::process::Command::new("pactl")
+        let _ = konnekta_platform::host::command("pactl")
             .args(["unload-module", &self.module])
             .status();
     }

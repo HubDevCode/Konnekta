@@ -96,14 +96,47 @@ impl NotchAccumulator {
     }
 }
 
+/// Mouse and keyboard of this computer.
+///
+/// On Wayland, the compositor's own virtual pointer and keyboard (enigo)
+/// where it has them: Hyprland, Sway and the other wlroots desktops.
+/// `ydotool` only for the others (GNOME, KDE), and only when its daemon
+/// answers: an installed `ydotool` without `ydotoold` takes every event and
+/// does nothing (it even exits with 0). `KONNEKTA_INPUT=enigo|ydotool`
+/// forces one.
 #[cfg(feature = "desktop")]
 pub fn native() -> Arc<dyn InputBackend> {
     #[cfg(target_os = "linux")]
-    if std::env::var_os("WAYLAND_DISPLAY").is_some()
-        && crate::cmd::exists("ydotool")
-        && std::env::var("KONNEKTA_INPUT").as_deref() != Ok("enigo")
-    {
-        return Arc::new(ydotool::Ydotool);
+    if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+        let forced = std::env::var("KONNEKTA_INPUT").ok();
+        let use_ydotool = match forced.as_deref() {
+            Some("ydotool") => true,
+            Some("enigo") => false,
+            _ if crate::wlr_scroll::virtual_input_available() => false,
+            _ if !crate::cmd::exists("ydotool") => false,
+            _ => match ydotool::daemon_socket() {
+                Some(_) => true,
+                None => {
+                    tracing::warn!(
+                        "ydotool is installed but ydotoold is not running: mouse and keyboard \
+                         from the phone fall back to the compositor (start it with \
+                         `systemctl --user enable --now ydotool`)"
+                    );
+                    false
+                }
+            },
+        };
+        tracing::info!(
+            "mouse and keyboard through {}",
+            if use_ydotool {
+                "ydotool"
+            } else {
+                "the Wayland virtual input"
+            }
+        );
+        if use_ydotool {
+            return Arc::new(ydotool::Ydotool);
+        }
     }
     Arc::new(enigo_backend::EnigoInput::spawn())
 }
@@ -330,6 +363,25 @@ mod ydotool {
 
     pub struct Ydotool;
 
+    /// The socket of a running `ydotoold` (`$YDOTOOL_SOCKET`, else the
+    /// default places), checked by connecting: a socket file left by a daemon
+    /// that stopped refuses the connection.
+    pub fn daemon_socket() -> Option<std::path::PathBuf> {
+        let mut places: Vec<std::path::PathBuf> = Vec::new();
+        if let Some(p) = std::env::var_os("YDOTOOL_SOCKET") {
+            places.push(p.into());
+        }
+        if let Some(d) = std::env::var_os("XDG_RUNTIME_DIR") {
+            places.push(std::path::Path::new(&d).join(".ydotool_socket"));
+        }
+        places.push("/tmp/.ydotool_socket".into());
+        places.into_iter().find(|p| {
+            std::os::unix::net::UnixDatagram::unbound()
+                .and_then(|s| s.connect(p))
+                .is_ok()
+        })
+    }
+
     fn keycode(k: Key) -> Option<u16> {
         // Linux input-event-codes.h
         Some(match k {
@@ -461,6 +513,16 @@ mod ydotool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// On Hyprland or Sway: `cargo test -p konnekta-platform -- --ignored input_live`.
+    /// Reports where events would go and whether a ydotoold answers.
+    #[cfg(all(feature = "desktop", target_os = "linux"))]
+    #[test]
+    #[ignore]
+    fn input_live_backend_choice() {
+        assert!(crate::wlr_scroll::virtual_input_available());
+        println!("ydotoold: {:?}", ydotool::daemon_socket());
+    }
 
     #[test]
     fn notches_keep_the_remainder() {

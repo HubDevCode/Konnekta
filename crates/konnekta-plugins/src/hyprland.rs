@@ -6,6 +6,8 @@
 //!   (argv, no shell). Deck buttons use them through a `plugin` action, e.g.
 //!   `{ "type": "plugin", "plugin": "hyprland", "action": "dispatch",
 //!      "args": { "dispatcher": "workspace", "args": "3" } }`.
+//!   On Hyprland 0.57+ with a Lua configuration the common dispatchers are
+//!   sent as their Lua equivalent (see [`lua_dispatcher`]).
 
 use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
@@ -53,10 +55,12 @@ pub fn css_color(argb: &str) -> Option<String> {
     })
 }
 
-/// Colours of a gradient option (`"ee33ccff ee00ff99 45deg"`).
+/// Colours of a gradient option (`"ee33ccff ee00ff99 45deg"`): `custom`
+/// up to Hyprland 0.56, `gradient` from 0.57.
 pub fn gradient(option: &Value) -> Vec<String> {
     let s = option
         .get("custom")
+        .or_else(|| option.get("gradient"))
         .and_then(Value::as_str)
         .unwrap_or_default();
     s.split_whitespace().filter_map(css_color).collect()
@@ -123,6 +127,69 @@ pub fn valid_dispatcher(d: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
 }
 
+/// The Lua dispatcher (Hyprland 0.57+ with a Lua configuration) that does
+/// what the classic `dispatcher args` does, for the common ones.
+pub fn lua_dispatcher(dispatcher: &str, args: &str) -> Option<String> {
+    use konnekta_platform::display::lua_string as q;
+    let a = args.trim();
+    // Workspaces are numbers or names (`e+1`, `special:magic`, `name:web`).
+    let ws = || match a.parse::<i64>() {
+        Ok(n) => n.to_string(),
+        Err(_) => q(a),
+    };
+    let none = a.is_empty();
+    Some(match dispatcher {
+        "workspace" if !none => format!("hl.dsp.focus({{ workspace = {} }})", ws()),
+        "movetoworkspace" if !none => format!("hl.dsp.window.move({{ workspace = {} }})", ws()),
+        "togglespecialworkspace" => format!(
+            "hl.dsp.workspace.toggle_special({})",
+            if none { String::new() } else { q(a) }
+        ),
+        "movefocus" => {
+            let dir = match a {
+                "l" | "left" => "left",
+                "r" | "right" => "right",
+                "u" | "up" => "up",
+                "d" | "down" => "down",
+                _ => return None,
+            };
+            format!("hl.dsp.focus({{ direction = \"{dir}\" }})")
+        }
+        "exec" if !none => format!("hl.dsp.exec_cmd({})", q(a)),
+        "killactive" if none => "hl.dsp.window.close()".into(),
+        "forcekillactive" if none => "hl.dsp.window.kill()".into(),
+        "togglefloating" if none => "hl.dsp.window.float({ action = \"toggle\" })".into(),
+        "fullscreen" if none => "hl.dsp.window.fullscreen()".into(),
+        "pseudo" if none => "hl.dsp.window.pseudo()".into(),
+        "pin" if none => "hl.dsp.window.pin()".into(),
+        "centerwindow" if none => "hl.dsp.window.center()".into(),
+        "exit" if none => "hl.dsp.exit()".into(),
+        "movecursor" => {
+            let mut it = a.split_whitespace().map(str::parse::<i64>);
+            let (Some(Ok(x)), Some(Ok(y)), None) = (it.next(), it.next(), it.next()) else {
+                return None;
+            };
+            format!("hl.dsp.cursor.move({{ x = {x}, y = {y} }})")
+        }
+        _ => return None,
+    })
+    .map(|d| format!("hl.dispatch({d})"))
+}
+
+/// Run a dispatcher, in the syntax this Hyprland takes.
+pub(crate) async fn dispatch(dispatcher: &str, args: &str) -> Result<()> {
+    let classic = if args.is_empty() {
+        format!("dispatch {dispatcher}")
+    } else {
+        format!("dispatch {dispatcher} {args}")
+    };
+    let lua = lua_dispatcher(dispatcher, args);
+    tokio::task::spawn_blocking(move || {
+        konnekta_platform::display::hyprland_call(&classic, lua.as_deref())
+    })
+    .await?
+}
+
 pub fn running() -> bool {
     std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some()
 }
@@ -130,7 +197,7 @@ pub fn running() -> bool {
 pub(crate) async fn hyprctl(args: &[&str]) -> Result<String> {
     let out = tokio::time::timeout(
         HYPRCTL_TIMEOUT,
-        tokio::process::Command::new("hyprctl")
+        konnekta_platform::host::command_async("hyprctl")
             .args(args)
             .kill_on_drop(true)
             .output(),
@@ -244,14 +311,7 @@ impl Plugin for HyprlandPlugin {
                 if a.len() > 500 || a.contains(['\n', '\r']) {
                     bail!("invalid arguments");
                 }
-                let mut argv = vec!["dispatch", d];
-                if !a.is_empty() {
-                    argv.push(a);
-                }
-                let out = hyprctl(&argv).await?;
-                if out.trim() != "ok" {
-                    bail!("hyprctl: {}", out.trim());
-                }
+                dispatch(d, a.trim()).await?;
                 Ok(Value::Null)
             }
             _ => bail!("unknown action {action}"),
@@ -294,6 +354,43 @@ mod tests {
         let w = workspaces(&v, Some(3));
         assert_eq!(w.iter().map(|w| w.id).collect::<Vec<_>>(), [1, 3]);
         assert!(w[1].active && !w[0].active);
+    }
+
+    #[test]
+    fn gradient_of_hyprland_0_57() {
+        let v = json!({ "option": "general:col.active_border", "gradient": "ee33ccff ee00ff99 45deg", "set": true });
+        assert_eq!(gradient(&v).len(), 2);
+    }
+
+    #[test]
+    fn classic_dispatchers_in_lua() {
+        let l = |d, a| lua_dispatcher(d, a);
+        assert_eq!(
+            l("workspace", "3").as_deref(),
+            Some("hl.dispatch(hl.dsp.focus({ workspace = 3 }))")
+        );
+        assert_eq!(
+            l("workspace", "e+1").as_deref(),
+            Some(r#"hl.dispatch(hl.dsp.focus({ workspace = "e+1" }))"#)
+        );
+        assert_eq!(
+            l("movetoworkspace", "special:magic").as_deref(),
+            Some(r#"hl.dispatch(hl.dsp.window.move({ workspace = "special:magic" }))"#)
+        );
+        assert_eq!(
+            l("exec", r#"notify-send "hi""#).as_deref(),
+            Some(r#"hl.dispatch(hl.dsp.exec_cmd("notify-send \"hi\""))"#)
+        );
+        assert_eq!(
+            l("movecursor", "10 20").as_deref(),
+            Some("hl.dispatch(hl.dsp.cursor.move({ x = 10, y = 20 }))")
+        );
+        assert_eq!(l("movecursor", "10"), None);
+        assert_eq!(
+            l("killactive", "").as_deref(),
+            Some("hl.dispatch(hl.dsp.window.close())")
+        );
+        assert_eq!(l("someplugin", "x"), None);
     }
 
     #[test]

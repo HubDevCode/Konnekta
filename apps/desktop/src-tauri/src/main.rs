@@ -279,7 +279,7 @@ fn apply_send_to(on: bool) {
                 let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755));
             }
         }
-        let _ = std::process::Command::new("update-desktop-database")
+        let _ = konnekta_platform::host::command("update-desktop-database")
             .arg(data.join("applications"))
             .output();
     }
@@ -289,7 +289,7 @@ fn apply_send_to(on: bool) {
         const NO_WINDOW: u32 = 0x0800_0000;
         let exe = exe.display().to_string();
         let run = |program: &str, args: &[&str]| {
-            let _ = std::process::Command::new(program)
+            let _ = konnekta_platform::host::command(program)
                 .args(args)
                 .creation_flags(NO_WINDOW)
                 .output();
@@ -425,10 +425,10 @@ fn apply_desktop_entries(p: &DesktopPrefs) {
             let _ = std::fs::create_dir_all(data.join("applications"));
             let _ = std::fs::write(&launcher, entry(&icon_path, "", ""));
             // Make menus pick up the refreshed icon and entry.
-            let _ = std::process::Command::new("update-desktop-database")
+            let _ = konnekta_platform::host::command("update-desktop-database")
                 .arg(data.join("applications"))
                 .output();
-            let _ = std::process::Command::new("gtk-update-icon-cache")
+            let _ = konnekta_platform::host::command("gtk-update-icon-cache")
                 .args(["-q", "-t", "-f"])
                 .arg(data.join("icons/hicolor"))
                 .output();
@@ -478,7 +478,7 @@ fn desktop_prefs_set(app: AppHandle, prefs: DesktopPrefs) -> Result<(), String> 
 const RELEASES_API: &str = "https://api.github.com/repos/HubDevCode/Konnekta/releases/latest";
 
 fn curl(args: &[&str]) -> Result<Vec<u8>, String> {
-    let out = std::process::Command::new("curl")
+    let out = konnekta_platform::host::command("curl")
         .args([
             "-fsSL",
             "--max-time",
@@ -591,7 +591,7 @@ async fn install_update(app: AppHandle) -> Result<(), String> {
         {
             let setup = std::env::temp_dir().join(&name);
             std::fs::write(&setup, &bytes).map_err(|e| e.to_string())?;
-            std::process::Command::new(&setup)
+            konnekta_platform::host::command(&setup)
                 .spawn()
                 .map_err(|e| e.to_string())?;
         }
@@ -603,7 +603,7 @@ async fn install_update(app: AppHandle) -> Result<(), String> {
             std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))
                 .map_err(|e| e.to_string())?;
             std::fs::rename(&tmp, &exe).map_err(|e| e.to_string())?;
-            std::process::Command::new("sh")
+            konnekta_platform::host::command("sh")
                 .arg("-c")
                 .arg("sleep 1; exec \"$0\"")
                 .arg(&exe)
@@ -618,17 +618,18 @@ async fn install_update(app: AppHandle) -> Result<(), String> {
 }
 
 fn sha256_hex(data: &[u8]) -> Result<String, String> {
-    use std::process::Command;
     let file = std::env::temp_dir().join("konnekta-update.bin");
     std::fs::write(&file, data).map_err(|e| e.to_string())?;
     let out = if cfg!(target_os = "windows") {
-        Command::new("certutil")
+        konnekta_platform::host::command("certutil")
             .args(["-hashfile"])
             .arg(&file)
             .arg("SHA256")
             .output()
     } else {
-        Command::new("sha256sum").arg(&file).output()
+        konnekta_platform::host::command("sha256sum")
+            .arg(&file)
+            .output()
     };
     let _ = std::fs::remove_file(&file);
     let out = out.map_err(|e| format!("verifica checksum impossibile: {e}"))?;
@@ -786,10 +787,10 @@ fn main() {
                     _ => {}
                 })
                 .build(app)?;
-            if !prefs.tray {
-                if let Some(t) = app.tray_by_id("konnekta") {
-                    let _ = t.set_visible(false);
-                }
+            if !prefs.tray
+                && let Some(t) = app.tray_by_id("konnekta")
+            {
+                let _ = t.set_visible(false);
             }
             Ok(())
         })

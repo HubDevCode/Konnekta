@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 konnekta-proto.workspace = true
 konnekta-crypto.workspace = true
+konnekta-platform.workspace = true
 tokio.workspace = true
 tokio-rustls.workspace = true
 rustls-pki-types.workspace = true
@@ -34,3 +35,4 @@ futures-util = "0.3"
 tempfile.workspace = true
 tracing-subscriber.workspace = true
 konnekta-crypto.workspace = true
+konnekta-platform.workspace = true

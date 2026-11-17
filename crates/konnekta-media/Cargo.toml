@@ -7,6 +7,7 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+konnekta-platform.workspace = true
 bytes.workspace = true
 serde.workspace = true
 serde_json.workspace = true

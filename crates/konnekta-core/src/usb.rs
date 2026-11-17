@@ -25,7 +25,7 @@ pub(crate) fn same_host(a: IpAddr, b: IpAddr) -> bool {
 /// The adb program: `PATH`, then the usual Android SDK folders.
 pub fn find_adb() -> Option<PathBuf> {
     let exe = if cfg!(windows) { "adb.exe" } else { "adb" };
-    let mut dirs: Vec<PathBuf> = std::env::var_os("PATH")
+    let mut dirs: Vec<PathBuf> = konnekta_platform::host::path()
         .map(|p| std::env::split_paths(&p).collect())
         .unwrap_or_default();
     for var in ["ANDROID_HOME", "ANDROID_SDK_ROOT"] {
@@ -44,7 +44,7 @@ pub fn find_adb() -> Option<PathBuf> {
 
 async fn adb(args: &[&str]) -> Result<String> {
     let path = find_adb().context("adb not found")?;
-    let mut cmd = tokio::process::Command::new(path);
+    let mut cmd = konnekta_platform::host::command_async(path);
     cmd.args(args)
         .stdin(std::process::Stdio::null())
         .kill_on_drop(true);

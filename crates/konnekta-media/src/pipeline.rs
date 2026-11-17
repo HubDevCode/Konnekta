@@ -7,7 +7,7 @@ use crate::abr::Quality;
 use anyhow::{Context, Result, bail};
 use bytes::{Bytes, BytesMut};
 use std::process::Stdio;
-use tokio::process::{Child, ChildStdin, ChildStdout, Command};
+use tokio::process::{Child, ChildStdin, ChildStdout};
 
 pub struct ProcessPipeline {
     pub child: Child,
@@ -17,7 +17,7 @@ pub struct ProcessPipeline {
 
 impl ProcessPipeline {
     pub fn spawn(program: &str, args: &[String], stdin: bool, stdout: bool) -> Result<Self> {
-        let mut cmd = Command::new(program);
+        let mut cmd = konnekta_platform::host::command_async(program);
         cmd.args(args)
             .stdin(if stdin { Stdio::piped() } else { Stdio::null() })
             .stdout(if stdout {
@@ -48,7 +48,7 @@ fn nvenc() -> bool {
             return false;
         }
         let gpu = cfg!(windows) || std::path::Path::new("/dev/nvidia0").exists();
-        gpu && std::process::Command::new("ffmpeg")
+        gpu && konnekta_platform::host::command("ffmpeg")
             .args(["-hide_banner", "-encoders"])
             .output()
             .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains("h264_nvenc"))
@@ -259,11 +259,8 @@ fn gpu_screen_recorder(_: Quality, _: Option<&str>) -> Option<(String, Vec<Strin
 /// focused one.
 #[cfg(target_os = "linux")]
 fn hyprland_monitor(name: Option<&str>) -> Option<(String, u32, u32)> {
-    let out = std::process::Command::new("hyprctl")
-        .args(["monitors", "-j"])
-        .output()
-        .ok()?;
-    let ms: Vec<serde_json::Value> = serde_json::from_slice(&out.stdout).ok()?;
+    let out = konnekta_platform::display::hyprland_request("j/monitors").ok()?;
+    let ms: Vec<serde_json::Value> = serde_json::from_str(&out).ok()?;
     let m = match name {
         Some(n) => ms.iter().find(|m| m["name"].as_str() == Some(n))?,
         None => ms
@@ -314,7 +311,7 @@ pub fn system_audio_command(device: Option<&str>) -> Result<(String, Vec<String>
 }
 
 pub fn which(program: &str) -> bool {
-    let Some(path) = std::env::var_os("PATH") else {
+    let Some(path) = konnekta_platform::host::path() else {
         return false;
     };
     std::env::split_paths(&path)

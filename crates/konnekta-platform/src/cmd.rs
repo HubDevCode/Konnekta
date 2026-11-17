@@ -4,10 +4,10 @@ use anyhow::{Context, Result, bail};
 use std::process::Stdio;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
-use tokio::process::Command;
 
+/// Whether `program` is installed (the AppImage's own folders do not count).
 pub fn exists(program: &str) -> bool {
-    let Some(path) = std::env::var_os("PATH") else {
+    let Some(path) = crate::host::path() else {
         return false;
     };
     std::env::split_paths(&path).any(|dir| {
@@ -20,7 +20,7 @@ pub fn exists(program: &str) -> bool {
 pub async fn output(program: &str, args: &[&str]) -> Result<String> {
     let out = tokio::time::timeout(
         Duration::from_secs(5),
-        Command::new(program)
+        crate::host::command_async(program)
             .args(args)
             .stdin(Stdio::null())
             .kill_on_drop(true)
@@ -42,7 +42,7 @@ pub async fn output(program: &str, args: &[&str]) -> Result<String> {
 
 /// Run a program feeding `input` on stdin.
 pub async fn with_stdin(program: &str, args: &[&str], input: &[u8]) -> Result<()> {
-    let mut child = Command::new(program)
+    let mut child = crate::host::command_async(program)
         .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())

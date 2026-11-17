@@ -71,7 +71,7 @@ impl ClipboardBackend for WlClipboard {
         {
             return Ok(None);
         }
-        let out = tokio::process::Command::new("wl-paste")
+        let out = crate::host::command_async("wl-paste")
             .args(["--no-newline", "--type", "image/png"])
             .kill_on_drop(true)
             .output()

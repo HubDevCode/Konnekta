@@ -231,7 +231,7 @@ fn program(env: &Env, id: &'static str, purpose: &'static str) -> Requirement {
 fn v4l2loopback(env: &Env) -> Requirement {
     let loaded = crate::virtual_devices::find_v4l2loopback().is_some();
     let installed = loaded
-        || std::process::Command::new("modinfo")
+        || konnekta_platform::host::command("modinfo")
             .args(["-n", "v4l2loopback"])
             .output()
             .map(|o| o.status.success())

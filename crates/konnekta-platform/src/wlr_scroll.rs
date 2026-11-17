@@ -64,6 +64,41 @@ impl Dispatch<ZwlrVirtualPointerV1, ()> for State {
     }
 }
 
+/// Globals the compositor offers, by interface name.
+#[derive(Default)]
+struct Globals(Vec<String>);
+
+impl Dispatch<wl_registry::WlRegistry, ()> for Globals {
+    fn event(
+        state: &mut Self,
+        _: &wl_registry::WlRegistry,
+        event: wl_registry::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let wl_registry::Event::Global { interface, .. } = event {
+            state.0.push(interface);
+        }
+    }
+}
+
+/// Whether the compositor takes a virtual pointer and keyboard
+/// (`zwlr_virtual_pointer_v1` + `zwp_virtual_keyboard_v1`: Hyprland, Sway,
+/// river, Wayfire…), the way enigo injects input on Wayland.
+pub fn virtual_input_available() -> bool {
+    let check = || -> Result<bool> {
+        let conn = Connection::connect_to_env()?;
+        let mut queue = conn.new_event_queue();
+        conn.display().get_registry(&queue.handle(), ());
+        let mut g = Globals::default();
+        queue.roundtrip(&mut g)?;
+        let has = |i: &str| g.0.iter().any(|x| x == i);
+        Ok(has("zwlr_virtual_pointer_manager_v1") && has("zwp_virtual_keyboard_manager_v1"))
+    };
+    check().unwrap_or(false)
+}
+
 pub struct WlrScroll {
     conn: Connection,
     _queue: EventQueue<State>,
@@ -118,5 +153,6 @@ mod tests {
     fn wlr_connects() {
         let mut w = super::WlrScroll::connect().unwrap();
         w.scroll(0.0, 0.0).unwrap();
+        assert!(super::virtual_input_available());
     }
 }

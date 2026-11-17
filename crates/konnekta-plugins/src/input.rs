@@ -275,7 +275,10 @@ fn desktop_kind() -> &'static str {
 impl InputPlugin {
     async fn swipe(&self, dir: &str) -> Result<()> {
         match swipe_action(dir, desktop_kind()) {
-            SwipeAction::Run("hyprctl", args) => crate::hyprland::hyprctl(&args).await.map(drop),
+            SwipeAction::Run("hyprctl", args) => match args.as_slice() {
+                ["dispatch", d, a] => crate::hyprland::dispatch(d, a).await,
+                _ => crate::hyprland::hyprctl(&args).await.map(drop),
+            },
             SwipeAction::Run(prog, args) => {
                 konnekta_platform::cmd::output(prog, &args).await.map(drop)
             }

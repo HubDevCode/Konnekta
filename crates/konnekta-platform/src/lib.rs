@@ -9,6 +9,7 @@ pub mod clipboard;
 pub mod cmd;
 pub mod display;
 pub mod dnd;
+pub mod host;
 pub mod input;
 pub mod keys;
 pub mod launcher;

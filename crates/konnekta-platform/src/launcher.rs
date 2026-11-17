@@ -11,6 +11,8 @@ use std::process::Stdio;
 use std::time::Duration;
 use tokio::process::Command;
 
+use crate::host::command_async as program;
+
 const MAX_OUTPUT: usize = 64 * 1024;
 
 #[derive(Debug, Clone, Serialize)]
@@ -36,16 +38,42 @@ pub struct NativeLauncher;
 fn shell(command: &str) -> Command {
     #[cfg(windows)]
     {
-        let mut c = Command::new("cmd");
+        let mut c = program("cmd");
         c.args(["/C", command]);
         c
     }
     #[cfg(not(windows))]
     {
-        let mut c = Command::new("sh");
+        let mut c = program("sh");
         c.args(["-c", command]);
         c
     }
+}
+
+/// Open with the default handler, the handler getting the system's
+/// environment (from the AppImage, `xdg-open` and the browser it starts
+/// would load the AppImage's libraries).
+#[cfg(feature = "desktop")]
+fn open_detached(target: &str) -> std::io::Result<()> {
+    if !crate::host::in_appimage() {
+        return open::that_detached(target);
+    }
+    let mut last = std::io::Error::other("no program to open it");
+    for mut c in open::commands(target) {
+        crate::host::clean(&mut c)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        match c.spawn() {
+            Ok(mut child) => {
+                // Reaped in the background: xdg-open may wait for the program.
+                std::thread::spawn(move || child.wait());
+                return Ok(());
+            }
+            Err(e) => last = e,
+        }
+    }
+    Err(last)
 }
 
 fn truncate(b: &[u8]) -> String {
@@ -86,7 +114,7 @@ impl LauncherBackend for NativeLauncher {
         #[cfg(feature = "desktop")]
         {
             let t = target.to_owned();
-            tokio::task::spawn_blocking(move || open::that_detached(t)).await??;
+            tokio::task::spawn_blocking(move || open_detached(&t)).await??;
             Ok(())
         }
         #[cfg(not(feature = "desktop"))]
@@ -101,34 +129,34 @@ impl LauncherBackend for NativeLauncher {
         #[cfg(target_os = "macos")]
         {
             if app.ends_with(".app") || !app.contains('/') {
-                cmd = Command::new("open");
+                cmd = program("open");
                 cmd.args(["-a", app]);
                 if !args.is_empty() {
                     cmd.arg("--args").args(args);
                 }
             } else {
-                cmd = Command::new(app);
+                cmd = program(app);
                 cmd.args(args);
             }
         }
         #[cfg(target_os = "linux")]
         {
             if app.ends_with(".desktop") {
-                cmd = Command::new("gtk-launch");
+                cmd = program("gtk-launch");
                 cmd.arg(app.trim_end_matches(".desktop")).args(args);
             } else {
-                cmd = Command::new(app);
+                cmd = program(app);
                 cmd.args(args);
             }
         }
         #[cfg(windows)]
         {
-            cmd = Command::new("cmd");
+            cmd = program("cmd");
             cmd.args(["/C", "start", "", app]).args(args);
         }
         #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
         {
-            cmd = Command::new(app);
+            cmd = program(app);
             cmd.args(args);
         }
         cmd.stdin(Stdio::null())

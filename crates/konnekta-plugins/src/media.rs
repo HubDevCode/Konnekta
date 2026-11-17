@@ -77,7 +77,7 @@ async fn load_art(url: &str) -> Option<Vec<u8>> {
     if url.starts_with("https://") || url.starts_with("http://") {
         let out = tokio::time::timeout(
             Duration::from_secs(8),
-            tokio::process::Command::new("curl")
+            konnekta_platform::host::command_async("curl")
                 .args([
                     "-sfL",
                     "--max-time",

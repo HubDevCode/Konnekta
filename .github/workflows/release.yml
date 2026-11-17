@@ -24,11 +24,12 @@ jobs:
         run: |
           echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
           echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-      # The release text is the README's "Novità della <version>" section.
+      # The release text is the README's "Novità della <version>" section
+      # (### under "## Novità" at the end of the README, ## in older ones).
       - name: Release notes
         run: |
-          awk -v h="## Novità della ${{ steps.tag.outputs.version }}" \
-            '$0 == h { on = 1; next } on && /^## / { exit } on { print }' README.md > notes.md
+          awk -v v="Novità della ${{ steps.tag.outputs.version }}" \
+            '/^##+ / { h = $0; sub(/^#+ /, "", h); if (on) exit; if (h == v) { on = 1; next } } on { print }' README.md > notes.md
           [ -s notes.md ] || echo "Konnekta ${{ steps.tag.outputs.version }}" > notes.md
       - id: release
         uses: softprops/action-gh-release@v2

@@ -105,7 +105,7 @@ mod imp {
     use serde_json::{Value, json};
     use std::io::Write;
     use std::path::{Path, PathBuf};
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
     use std::sync::Mutex;
 
     const INSTALL: &str = "--approve-install";
@@ -212,7 +212,7 @@ mod imp {
     /// stdin. Once approval is on, sudo may ask the phone first.
     fn sudo(password: &str, args: &[&str]) -> Result<(), String> {
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-        let mut child = Command::new("sudo")
+        let mut child = konnekta_platform::host::command("sudo")
             .args(["-S", "-p", ""])
             .arg(exe)
             .args(args)

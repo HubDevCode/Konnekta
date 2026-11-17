@@ -5,10 +5,15 @@
 //! (`hyprctl output create headless`) and Sway (`swaymsg create_output`).
 //! They behave as any monitor, so the system's display settings arrange,
 //! scale or rotate them, and they go away when the phone stops.
+//!
+//! Hyprland is driven through its request socket (what `hyprctl` talks to),
+//! in the classic syntax or, from Hyprland 0.57 with a Lua configuration,
+//! in Lua (`dispatch` and `keyword` answer errors there): see
+//! [`hyprland_call`].
 
 use anyhow::{Context, Result, bail};
-use std::process::Command;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU8, Ordering};
 
 /// A monitor in layout (logical) coordinates.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -50,12 +55,12 @@ fn compositor() -> Option<Compositor> {
     }
 }
 
+/// Run a program of the system (Sway's `swaymsg`); its standard output.
 fn run(program: &str, args: &[&str]) -> Result<String> {
-    let out = Command::new(program)
+    let out = crate::host::command(program)
         .args(args)
         .output()
         .with_context(|| format!("{program} not found"))?;
-    let text = String::from_utf8_lossy(&out.stdout).into_owned();
     if !out.status.success() {
         bail!(
             "{program} {}: {}",
@@ -63,16 +68,99 @@ fn run(program: &str, args: &[&str]) -> Result<String> {
             String::from_utf8_lossy(&out.stderr).trim()
         );
     }
-    // hyprctl answers errors on stdout with a zero exit code.
-    if program == "hyprctl" && !args.contains(&"-j") && text.trim() != "ok" && !text.is_empty() {
-        bail!("hyprctl {}: {}", args.join(" "), text.trim());
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// A request to Hyprland's socket, as `hyprctl` sends it (`j/monitors`,
+/// `dispatch …`, `eval …`); the answer.
+#[cfg(unix)]
+pub fn hyprland_request(msg: &str) -> Result<String> {
+    use std::io::{Read, Write};
+    let path = std::path::Path::new(
+        &std::env::var_os("XDG_RUNTIME_DIR").context("XDG_RUNTIME_DIR not set")?,
+    )
+    .join("hypr")
+    .join(std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").context("Hyprland is not running")?)
+    .join(".socket.sock");
+    let mut s = std::os::unix::net::UnixStream::connect(&path)
+        .with_context(|| format!("cannot reach Hyprland ({})", path.display()))?;
+    let limit = Some(std::time::Duration::from_secs(3));
+    s.set_read_timeout(limit)?;
+    s.set_write_timeout(limit)?;
+    s.write_all(msg.as_bytes())?;
+    let mut out = String::new();
+    s.read_to_string(&mut out)?;
+    Ok(out)
+}
+
+#[cfg(not(unix))]
+pub fn hyprland_request(_: &str) -> Result<String> {
+    bail!("Hyprland is not available here")
+}
+
+const SYNTAX_UNKNOWN: u8 = 0;
+const SYNTAX_CLASSIC: u8 = 1;
+const SYNTAX_LUA: u8 = 2;
+/// Which syntax this Hyprland took last.
+static HYPRLAND_SYNTAX: AtomicU8 = AtomicU8::new(SYNTAX_UNKNOWN);
+
+fn first_line(s: &str) -> &str {
+    s.trim().lines().next().unwrap_or_default()
+}
+
+/// A Hyprland request in the classic syntax (`dispatch movecursor 10 10`,
+/// `keyword monitor …`) or, where Hyprland runs a Lua configuration (0.57
+/// and later, where those answer `unknown request` or a Lua error), the Lua
+/// code that does the same (`hl.dispatch(hl.dsp.cursor.move({ x = 10, y = 10 }))`).
+/// The syntax that worked is tried first next time.
+pub fn hyprland_call(classic: &str, lua: Option<&str>) -> Result<()> {
+    let ok = |r: &str| r.trim() == "ok";
+    let mode = HYPRLAND_SYNTAX.load(Ordering::Relaxed);
+    let mut classic_err = None;
+    if mode != SYNTAX_LUA || lua.is_none() {
+        let r = hyprland_request(classic)?;
+        if ok(&r) {
+            HYPRLAND_SYNTAX.store(SYNTAX_CLASSIC, Ordering::Relaxed);
+            return Ok(());
+        }
+        classic_err = Some(format!("{classic}: {}", first_line(&r)));
     }
-    Ok(text)
+    if let Some(code) = lua {
+        let r = hyprland_request(&format!("eval {code}"))?;
+        if ok(&r) {
+            if mode != SYNTAX_LUA {
+                tracing::info!("Hyprland takes Lua requests (Lua configuration)");
+            }
+            HYPRLAND_SYNTAX.store(SYNTAX_LUA, Ordering::Relaxed);
+            return Ok(());
+        }
+        // In Lua mode the classic answer is only noise.
+        bail!("Hyprland: {code}: {}", first_line(&r));
+    }
+    bail!("Hyprland: {}", classic_err.unwrap_or_default())
+}
+
+/// A Lua string literal of `s`, for [`hyprland_call`].
+pub fn lua_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            c if (c as u32) < 0x20 || c == '\u{7f}' => out.push_str(&format!("\\{:03}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 fn monitors_json() -> Vec<serde_json::Value> {
     let out = match compositor() {
-        Some(Compositor::Hyprland) => run("hyprctl", &["monitors", "-j"]),
+        Some(Compositor::Hyprland) => hyprland_request("j/monitors"),
         Some(Compositor::Sway) => run("swaymsg", &["-t", "get_outputs", "-r"]),
         None => return Vec::new(),
     };
@@ -149,12 +237,12 @@ pub fn focused_monitor() -> Option<String> {
 /// Move the pointer to a point of the layout (any monitor).
 pub fn move_cursor(x: i32, y: i32) -> Result<()> {
     match compositor() {
-        Some(Compositor::Hyprland) => {
-            run(
-                "hyprctl",
-                &["dispatch", "movecursor", &x.to_string(), &y.to_string()],
-            )?;
-        }
+        Some(Compositor::Hyprland) => hyprland_call(
+            &format!("dispatch movecursor {x} {y}"),
+            Some(&format!(
+                "hl.dispatch(hl.dsp.cursor.move({{ x = {x}, y = {y} }}))"
+            )),
+        )?,
         Some(Compositor::Sway) => {
             run(
                 "swaymsg",
@@ -170,20 +258,10 @@ pub fn move_cursor(x: i32, y: i32) -> Result<()> {
 /// socket, cheap enough to ask many times a second): Sway does not tell.
 #[cfg(unix)]
 pub fn cursor_position() -> Option<(f64, f64)> {
-    use std::io::{Read, Write};
     if compositor()? != Compositor::Hyprland {
         return None;
     }
-    let path = std::path::Path::new(&std::env::var_os("XDG_RUNTIME_DIR")?)
-        .join("hypr")
-        .join(std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE")?)
-        .join(".socket.sock");
-    let mut s = std::os::unix::net::UnixStream::connect(path).ok()?;
-    s.set_read_timeout(Some(std::time::Duration::from_millis(200)))
-        .ok()?;
-    s.write_all(b"j/cursorpos").ok()?;
-    let mut out = String::new();
-    s.read_to_string(&mut out).ok()?;
+    let out = hyprland_request("j/cursorpos").ok()?;
     let v: serde_json::Value = serde_json::from_str(out.trim()).ok()?;
     Some((v["x"].as_f64()?, v["y"].as_f64()?))
 }
@@ -259,16 +337,29 @@ impl VirtualMonitor {
             Compositor::Hyprland => {
                 let name = format!("{VIRTUAL_PREFIX}1");
                 // A monitor left by a crash.
-                let _ = run("hyprctl", &["output", "remove", &name]);
-                run("hyprctl", &["output", "create", "headless", &name])?;
-                run(
-                    "hyprctl",
-                    &[
-                        "keyword",
-                        "monitor",
-                        &format!("{name},{w}x{h}@{refresh},auto-right,1"),
-                    ],
-                )?;
+                let _ = hyprland_request(&format!("output remove {name}"));
+                let r = hyprland_request(&format!("output create headless {name}"))?;
+                if r.trim() != "ok" {
+                    bail!(
+                        "Hyprland: output create headless {name}: {}",
+                        first_line(&r)
+                    );
+                }
+                let mode = format!("{w}x{h}@{refresh}");
+                let set = hyprland_call(
+                    &format!("keyword monitor {name},{mode},auto-right,1"),
+                    Some(&format!(
+                        "hl.monitor({{ output = {}, mode = {}, position = \"auto-right\", scale = 1 }})",
+                        lua_string(&name),
+                        lua_string(&mode)
+                    )),
+                );
+                if let Err(e) = set {
+                    // Not left behind holding a workspace.
+                    let _ = hyprland_request(&format!("output remove {name}"));
+                    return Err(e);
+                }
+                wait_for_size(&name, w, h);
                 name
             }
             Compositor::Sway => {
@@ -316,6 +407,28 @@ impl VirtualMonitor {
     }
 }
 
+/// Hyprland applies a monitor's mode a moment later: the capture starts
+/// once the monitor has its size (a capture started before would stop when
+/// the size changes).
+fn wait_for_size(name: &str, w: u32, h: u32) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        let sized = monitors_json().iter().any(|m| {
+            m["name"].as_str() == Some(name)
+                && m["width"].as_u64() == Some(u64::from(w))
+                && m["height"].as_u64() == Some(u64::from(h))
+        });
+        if sized {
+            return;
+        }
+        if std::time::Instant::now() > deadline {
+            tracing::warn!(monitor = %name, "virtual monitor still without its {w}x{h} mode");
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
 impl Drop for VirtualMonitor {
     fn drop(&mut self) {
         let mut ext = EXTEND.lock().unwrap();
@@ -323,7 +436,11 @@ impl Drop for VirtualMonitor {
             *ext = None;
         }
         let r = match self.compositor {
-            Compositor::Hyprland => run("hyprctl", &["output", "remove", &self.name]),
+            Compositor::Hyprland => hyprland_request(&format!("output remove {}", self.name))
+                .and_then(|r| match r.trim() {
+                    "ok" => Ok(String::new()),
+                    other => bail!("{other}"),
+                }),
             Compositor::Sway => run("swaymsg", &["output", &self.name, "unplug"]),
         };
         if let Err(e) = r {
@@ -347,5 +464,39 @@ mod tests {
         assert_eq!(r.at(0.0, 0.0), (2048, 0));
         assert_eq!(r.at(1.0, 1.0), (3647, 719));
         assert_eq!(r.at(2.0, -1.0), (3647, 0));
+    }
+
+    #[test]
+    fn lua_strings_are_escaped() {
+        assert_eq!(lua_string("KONNEKTA-1"), r#""KONNEKTA-1""#);
+        assert_eq!(lua_string(r#"a"b\c"#), r#""a\"b\\c""#);
+        assert_eq!(lua_string("x\ny\u{1}"), r#""x\ny\001""#);
+    }
+
+    /// Needs a Hyprland session: `cargo test -p konnekta-platform -- --ignored hyprland_live`.
+    #[test]
+    #[ignore]
+    fn hyprland_live_cursor() {
+        let (x0, y0) = cursor_position().expect("Hyprland cursor");
+        move_cursor(x0 as i32 + 40, y0 as i32 + 30).unwrap();
+        let (x, y) = cursor_position().unwrap();
+        move_cursor(x0 as i32, y0 as i32).unwrap();
+        assert_eq!((x as i32, y as i32), (x0 as i32 + 40, y0 as i32 + 30));
+    }
+
+    /// Needs a Hyprland session (adds and removes a monitor for a moment).
+    #[test]
+    #[ignore]
+    fn hyprland_live_virtual_monitor() {
+        let m = VirtualMonitor::create(1080, 2400, 60).unwrap();
+        let name = m.name.clone();
+        let r = monitor_region(&name).expect("the new monitor");
+        assert_eq!((r.w as u32, r.h as u32), (1080, 2400));
+        drop(m);
+        assert!(
+            !monitors_json()
+                .iter()
+                .any(|x| x["name"].as_str() == Some(name.as_str()))
+        );
     }
 }
