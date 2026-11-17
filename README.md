@@ -26,6 +26,23 @@ AppImage, .deb e .rpm per Linux, MSI e setup per Windows, .app per macOS, la CLI
 L'app Android controlla a ogni avvio se c'è una versione nuova e propone di installarla
 (**Computer → Informazioni**).
 
+## Schermate
+
+Le schermate dell'app desktop (con dati di esempio).
+
+**Controllo** — il telefono scelto in alto: batteria, collegamento, azioni rapide, microfono, webcam, schermo e audio,
+la musica del telefono con copertina e volume.
+
+<p align="center"><img src="docs/img/controllo.png" alt="Pagina Controllo dell'app desktop" width="900"></p>
+
+**Invia** — scegli o trascina file e cartelle, poi tocca il dispositivo: telefoni Konnekta e app LocalSend vicine.
+
+<p align="center"><img src="docs/img/invia.png" alt="Pagina Invia dell'app desktop" width="700"></p>
+
+**Trasferimenti** — avanzamento, file ricevuti da aprire con un clic, Riprova per quelli interrotti.
+
+<p align="center"><img src="docs/img/trasferimenti.png" alt="Pagina Trasferimenti dell'app desktop" width="900"></p>
+
 ## Funzioni
 
 | Funzione | Permesso | Anche con | Note |
