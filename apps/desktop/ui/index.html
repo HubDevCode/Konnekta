@@ -7,30 +7,42 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <aside class="sidebar">
-    <div class="brand">
-      <svg viewBox="18 18 72 72" aria-hidden="true"><rect x="18" y="18" width="72" height="72" rx="16" fill="#1E1E2E"/><path fill="#89B4FA" d="M30,36h34v24h-34zM34,40v16h26v-16zM40,64h14v4h-14z"/><path fill="#A6E3A1" d="M68,46h12v26h-12zM71,49v18h6v-18zM64,52h4v4h-4z"/></svg>
-      <div>
-        <div class="brand-name">Konnekta</div>
-        <div class="brand-sub" id="me-name">—</div>
+  <!-- The app mark (same as the phone app icon); cloned wherever it is shown. -->
+  <template id="logo">
+    <svg viewBox="18 18 72 72" aria-hidden="true"><rect x="18" y="18" width="72" height="72" rx="16" fill="#1E1E2E"/><path fill="#89B4FA" d="M30,36h34v24h-34zM34,40v16h26v-16zM40,64h14v4h-14z"/><path fill="#A6E3A1" d="M68,46h12v26h-12zM71,49v18h6v-18zM64,52h4v4h-4z"/></svg>
+  </template>
+
+  <div class="app" id="app">
+    <!-- Navigation rail: expanded or compact, like the phone's NavigationRail. -->
+    <aside class="rail" id="rail">
+      <div class="rail-head">
+        <button class="icon-btn rail-toggle" id="rail-toggle" title="Comprimi la barra laterale (Ctrl+B)"></button>
+        <div class="brand" id="brand">
+          <span class="brand-mark"></span>
+          <span class="brand-name">Konnekta</span>
+        </div>
       </div>
+      <nav id="nav" aria-label="Sezioni"></nav>
+      <button class="rail-foot" id="rail-foot" title="Questo computer"></button>
+    </aside>
+
+    <div class="content">
+      <header class="topbar" id="topbar"></header>
+      <main id="main" tabindex="-1"></main>
     </div>
-    <nav id="nav">
-      <button data-view="devices" data-icon="devices" class="active">Dispositivi</button>
-      <button data-view="send" data-icon="send">Invia</button>
-      <button data-view="transfers" data-icon="swap">Trasferimenti</button>
-      <button data-view="commands" data-icon="terminal">Comandi</button>
-      <button data-view="deck" data-icon="dashboard">Mobile Deck</button>
-      <button data-view="plugins" data-icon="extension">Plugin</button>
-      <button data-view="setup" data-icon="build">Configurazione</button>
-      <button data-view="settings" data-icon="settings">Impostazioni</button>
-      <button data-view="security" data-icon="lock">Sicurezza</button>
-    </nav>
-    <div class="sidebar-foot" id="status">Avvio…</div>
-  </aside>
-  <main id="main"></main>
+  </div>
+
+  <div class="drop" id="drop" aria-hidden="true">
+    <div class="drop-inner">
+      <div class="drop-ic"></div>
+      <div class="drop-title">Rilascia per inviare</div>
+      <div class="drop-sub">I file vanno nella Selezione di Invia: poi scegli il dispositivo.</div>
+    </div>
+  </div>
+  <div id="menu-root"></div>
+  <div id="palette-root"></div>
   <div id="modal-root"></div>
-  <div id="toasts"></div>
+  <div id="toasts" aria-live="polite"></div>
   <script src="app.js"></script>
 </body>
 </html>

@@ -297,7 +297,8 @@ impl Plugin for MediaPlugin {
                 let b: MprisBody = p.body_as()?;
                 let key = b.player.clone().unwrap_or_default();
                 dev.emit("media", "remoteStatus", Value::Object(p.body.clone()));
-                if b.player_list.is_none() {
+                // Cover pictures (`albumArtData`) are not a player state.
+                if b.player_list.is_none() && !p.body.contains_key("albumArtData") {
                     self.remote
                         .lock()
                         .unwrap()
@@ -340,6 +341,19 @@ impl Plugin for MediaPlugin {
                         },
                     ))
                     .await?;
+                Ok(Value::Null)
+            }
+            // The current cover of the phone (it answers with `albumArtData`).
+            "remoteArt" => {
+                let mut p = Packet::new(
+                    types::MEDIA_REQUEST,
+                    MprisRequestBody {
+                        player,
+                        ..Default::default()
+                    },
+                );
+                p.body.insert("requestAlbumArt".into(), Value::Bool(true));
+                crate::need_dev(dev)?.send(p).await?;
                 Ok(Value::Null)
             }
             "remoteControl" => {

@@ -184,6 +184,14 @@ fn take_send() -> Vec<SendItem> {
     std::mem::take(&mut *PENDING_SEND.lock().unwrap())
 }
 
+/// Files dropped on the window: the ones that exist, and which are folders.
+#[tauri::command]
+fn inspect_paths(paths: Vec<String>) -> Vec<SendItem> {
+    let mut args = vec!["--send".to_owned()];
+    args.extend(paths.into_iter().filter(|p| !p.starts_with("--")));
+    send_args(&args, std::path::Path::new("/"))
+}
+
 /// The program the system menus should start: the AppImage itself rather
 /// than its temporary mount, else this executable.
 fn launcher_exe() -> Option<std::path::PathBuf> {
@@ -804,6 +812,7 @@ fn main() {
             pick_folder,
             open_path,
             take_send,
+            inspect_paths,
             desktop_prefs_get,
             desktop_prefs_set,
             check_update,
