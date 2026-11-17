@@ -26,120 +26,6 @@ AppImage, .deb e .rpm per Linux, MSI e setup per Windows, .app per macOS, la CLI
 L'app Android controlla a ogni avvio se c'è una versione nuova e propone di installarla
 (**Computer → Informazioni**).
 
-## Novità della 2.5.7
-
-**Log per capire i problemi (computer)**
-- Avviando Konnekta dal terminale con **`--log`** (anche `-log`) stampa tutto quello che fa: versione, sessione
-  grafica, ogni passo del programma e gli eventuali crash con il punto esatto. Basta copiare l'output e mandarlo.
-  ```bash
-  ./Konnekta_2.5.7_amd64.AppImage --log
-  ```
-- **Linux, l'AppImage non parte** («No suitable fusermount binary found», «Cannot mount AppImage», «please check
-  your FUSE setup»): manca FUSE. Basta FUSE 3 (`sys-fs/fuse` su Gentoo, `fuse3` su Arch/Debian/Ubuntu) con il modulo
-  `fuse` nel kernel; oppure si avvia senza FUSE: `./Konnekta_2.5.7_amd64.AppImage --appimage-extract-and-run`.
-  Provato su Gentoo.
-
-## Novità della 2.5.6
-
-**Desktop remoto e schermo secondario**
-- **Zoom con due dita**: allarga o stringi due dita per ingrandire fino a 5×, muovile per spostare la vista; due dita
-  che si spostano senza allargarsi scorrono come prima. Si accende o spegne a parte per il desktop remoto e per lo
-  schermo secondario (**Impostazioni**); il pulsante in alto a destra torna a 1×.
-- Ingrandito, la **vista segue il puntatore**, tanto più da vicino quanto più è zoomato: il computer (Hyprland)
-  dice al telefono dove si trova il puntatore, anche quando lo muovi dal computer. Con il touchpad, da ingrandito
-  il puntatore si muove più fine.
-- **Risoluzione dello schermo secondario** in Impostazioni: dal 50% al 100% di quella del telefono, per testo e
-  finestre più grandi.
-
-**Invia (computer)**
-- Ciò che è arrivato a destinazione esce da sola dalla **Selezione**; se l'invio non riesce resta lì, pronto da
-  inviare di nuovo.
-
-**Altro**
-- **Approva sudo con l'impronta** si attiva dall'app del computer con un pulsante (Configurazione).
-- Webcam: niente più immagine verde dopo aver spento e riacceso la fotocamera.
-- **Sfoglia il PC** funziona subito: decide il permesso «Sfoglia i file del computer».
-
-## Novità della 2.5.5
-
-**Pagina Invia rifatta (telefono e computer)**
-- Nuova pagina **Invia** sul modello di LocalSend, con due schede: **Invia** e **Ricevi**.
-- *Invia*: pulsanti grandi per **File, Media, Testo e Appunti** (sul computer **File, Cartella, Testo e Appunti**);
-  ciò che scegli compare in una scheda con le anteprime, si toglie con la X o si aggiunge altro; poi tocchi il
-  dispositivo nella lista **Dispositivi vicini** (computer Konnekta e dispositivi LocalSend, con icona ed etichette:
-  Konnekta/LocalSend, Wi-Fi/cavo/Bluetooth, `#IP`, modello) e l'invio parte, con avanzamento e Annulla.
-- *Ricevi*: logo con l'anello che indica "pronto a ricevere", nome del dispositivo, stato di Konnekta e di LocalSend,
-  scelta della ricezione rapida e lista **Ricevuti** con apertura dei file al tocco.
-- **Ping** sempre a portata di mano: campanella in alto a destra sul telefono, su ogni computer della lista sul desktop.
-- "Prendi file dal computer" resta nella sezione *Altro*. Sul desktop c'è la nuova voce **Invia** nella barra laterale.
-- Sul telefono non c'è più "Personalizza Invia": la pagina ha una struttura fissa, come LocalSend.
-
-**Compatibilità LocalSend** (spenta di default)
-- Konnekta parla anche il protocollo **LocalSend v2**: trova le app LocalSend sulla stessa rete (multicast e ricerca
-  indirizzo per indirizzo quando il multicast è bloccato), invia e riceve **file, cartelle e testi**, in **HTTPS**,
-  con **PIN** facoltativo e invio a un indirizzo IP scritto a mano.
-- Si attiva in **Impostazioni → LocalSend** (telefono e computer) o con "Attiva" nella pagina Invia. Sul computer si
-  scelgono anche nome visibile, PIN, porta, HTTPS e cartella dei file ricevuti.
-- I dispositivi LocalSend **non vengono associati**: ogni invio va accettato (finestra e notifica Accetta/Rifiuta),
-  salvo la **ricezione rapida**, e non possono usare nient'altro di Konnekta. I file ricevuti sul telefono vanno in
-  *Download/Konnekta*. Se l'app LocalSend è aperta sullo stesso dispositivo la porta 53317 è occupata e la pagina lo dice.
-
-**Invia tramite Konnekta dal sistema (computer)**
-- Nel menu dei file compare **«Invia tramite Konnekta»**: Dolphin e Nemo (tasto destro), Nautilus e Caja (*Script*),
-  l'elenco «Apri con»; su Windows «Invia a» e il menu del tasto destro. Konnekta si apre sulla pagina Invia con i file
-  già scelti: basta toccare il dispositivo. Con Konnekta già aperto, i file passano alla finestra esistente.
-- Si toglie in **Impostazioni → Programma sul computer**. Le voci puntano al file AppImage, non alla sua cartella
-  temporanea.
-
-**File ricevuti: "Apri" funziona**
-- Telefono: su Android 9 il file non si apriva (URI `file://`), ora passa dal FileProvider; si apre subito con l'app
-  predefinita e, se il file è stato spostato o non c'è un'app adatta, un messaggio lo dice. Anche la notifica apre il file.
-- Computer: la notifica "File ricevuto" ha **Apri** e **Mostra nella cartella** (anche con un clic sulla notifica),
-  così come i messaggi, la pagina Trasferimenti e la lista Ricevuti.
-- Linux: i **pulsanti delle notifiche** (Apri link, Rispondi, Stop, rispondi alla chiamata…) non facevano nulla; ora
-  rispondono tutti.
-
-**Schermo secondario e desktop remoto**
-- **Molto più reattivi**: l'encoder x264 tratteneva un fotogramma per ogni thread (21 fotogrammi, circa 0,7 s, su un
-  processore a 20 core); ora consegna ogni fotogramma appena codificato. Con NVENC `delay=0`, coda di rete più corta,
-  **60 fps** anche per il desktop remoto, decoder del telefono in bassa latenza (anche con le opzioni di Qualcomm,
-  Exynos, MediaTek, HiSilicon e Amlogic). Vale via Wi-Fi e via cavo.
-- **Orientamento** (telefono → Impostazioni → Desktop remoto e schermo secondario): schermo secondario **orizzontale**
-  (lo schermo gira) o **verticale** (il computer crea un monitor verticale della risoluzione del telefono); desktop
-  remoto **orizzontale**, **verticale** o **automatico** (segue la rotazione).
-- **Audio**: col desktop remoto l'audio del computer anche sul telefono (a scelta); con lo schermo secondario
-  **duplica** l'audio del computer, usa un'**uscita a sé** «Konnekta-Schermo» (Linux: le app mandate lì suonano solo
-  sul telefono, come un monitor con le casse) oppure **nessuno**. In tempo reale: l'audio in ritardo viene scartato,
-  non accumulato; vale anche per "Audio del computer" in Controllo.
-
-**Bluetooth**
-- **Collegamento immediato**: anche il telefono chiama il computer (all'apertura dell'app, quando torna in primo piano,
-  quando si accende il Bluetooth e poi ogni pochi secondi finché un computer associato non è collegato). Prima solo il
-  computer chiamava, un tentativo fallito bloccava 30 s e il successivo arrivava dopo oltre un minuto.
-- **Touchpad e puntatore in tempo reale**: i movimenti che si accumulano vengono uniti in uno e via Bluetooth partono
-  al massimo ogni 25 ms, così il computer riceve sempre l'ultima posizione invece di una coda che cresceva (il
-  puntatore restava indietro di secondi). Clic, tasti e gesti non vengono mai ritardati.
-
-**Altre correzioni**
-- App desktop: cambiando pagina si riparte dall'inizio (prima restava la posizione di scorrimento della pagina precedente).
-- Telefono, pagina **Computer**: tolta l'icona delle impostazioni in alto a destra (resta il pulsante in basso).
-
-## Novità della 2.5.0
-
-- **Scelta del collegamento**: icone di Wi-Fi, Bluetooth e cavo sotto ogni computer; tenendolo premuto
-  si sceglie quale usare, la scelta è ricordata su entrambi i lati e, se non è disponibile, Konnekta
-  passa da solo alla migliore disponibile.
-- **Schermo secondario**: il telefono diventa un altro monitor del PC (Hyprland e Sway).
-- **Puntatore "dove tocchi" o "come un touchpad"**, per desktop remoto e schermo secondario.
-- **Webcam** riscritta: obiettivo, risoluzione e fps cambiano dal vivo, continua fuori dall'app e a
-  schermo spento; "Konnekta Camera" resta sempre presente sul PC mentre Konnekta è aperto.
-- **Bluetooth** più stabile (non si riconnette più ogni pochi secondi); audio e video sono disattivati
-  via Bluetooth perché la banda non basta.
-- Un tocco su una funzione senza permesso spiega quale permesso manca.
-- Il lettore musicale del PC torna nel centro di controllo del telefono.
-- App desktop: dispositivi divisi in **salvati** e **rilevati**, con le tecnologie disponibili.
-- Pagina **Informazioni** con controllo degli aggiornamenti sul telefono.
-
 ## Funzioni
 
 | Funzione | Permesso | Anche con | Note |
@@ -337,3 +223,139 @@ Classi CSS: `connected`, `low` (batteria ≤ 15%), `disconnected`, `none`, `off`
 ## Licenza
 
 Tutti i diritti riservati. Il codice è visibile, ma copiarlo, modificarlo, ricompilarlo, ridistribuirlo o usarlo in contesti commerciali o istituzionali richiede il permesso scritto dell'autore. Vedi [LICENSE](LICENSE).
+
+## Novità
+
+Le novità di ogni versione, dalla più recente.
+
+### Novità della 2.6.0
+
+**App desktop rifatta**
+- Nuova **barra laterale** a gruppi (Controllo, Invia, Notifiche, Dispositivi · Automazioni · Sistema) che si può
+  **comprimere** alle sole icone (**Ctrl+B**; nelle finestre strette lo fa da sola). **Ctrl+1…9** apre le pagine.
+- **Ricerca di pagine e azioni** con **Ctrl+K**: invia file o appunti, ping, fai squillare il telefono, play/pausa,
+  cambia dispositivo, tema, aggiornamenti.
+- Nuova pagina **Controllo** per il dispositivo scelto in alto (batteria, collegamento, azioni rapide, musica) e nuova
+  pagina **Notifiche** del telefono: rispondi, usa le azioni o ignorale, anche tutte insieme.
+- **Tema chiaro, scuro o come il sistema** (Impostazioni → Aspetto).
+- **Trascina i file sulla finestra** per inviarli: finiscono nella Selezione di Invia, poi scegli il dispositivo.
+
+**Musica del telefono dal computer**
+- Si vede la **copertina** del brano; il telefono la manda solo quando cambia.
+- **Volume** del telefono con cursore, pulsanti, rotella del mouse e silenzia; il computer vede subito i cambi fatti
+  con i tasti del telefono o da altre app, anche quando nessun lettore è aperto. Il volume si imposta in modo
+  affidabile anche sui telefoni che lo ignoravano (e sui lettori Cast).
+
+### Novità della 2.5.7
+
+**Log per capire i problemi (computer)**
+- Avviando Konnekta dal terminale con **`--log`** (anche `-log`) stampa tutto quello che fa: versione, sessione
+  grafica, ogni passo del programma e gli eventuali crash con il punto esatto. Basta copiare l'output e mandarlo.
+  ```bash
+  ./Konnekta_2.5.7_amd64.AppImage --log
+  ```
+- **Linux, l'AppImage non parte** («No suitable fusermount binary found», «Cannot mount AppImage», «please check
+  your FUSE setup»): manca FUSE. Basta FUSE 3 (`sys-fs/fuse` su Gentoo, `fuse3` su Arch/Debian/Ubuntu) con il modulo
+  `fuse` nel kernel; oppure si avvia senza FUSE: `./Konnekta_2.5.7_amd64.AppImage --appimage-extract-and-run`.
+  Provato su Gentoo.
+
+### Novità della 2.5.6
+
+**Desktop remoto e schermo secondario**
+- **Zoom con due dita**: allarga o stringi due dita per ingrandire fino a 5×, muovile per spostare la vista; due dita
+  che si spostano senza allargarsi scorrono come prima. Si accende o spegne a parte per il desktop remoto e per lo
+  schermo secondario (**Impostazioni**); il pulsante in alto a destra torna a 1×.
+- Ingrandito, la **vista segue il puntatore**, tanto più da vicino quanto più è zoomato: il computer (Hyprland)
+  dice al telefono dove si trova il puntatore, anche quando lo muovi dal computer. Con il touchpad, da ingrandito
+  il puntatore si muove più fine.
+- **Risoluzione dello schermo secondario** in Impostazioni: dal 50% al 100% di quella del telefono, per testo e
+  finestre più grandi.
+
+**Invia (computer)**
+- Ciò che è arrivato a destinazione esce da sola dalla **Selezione**; se l'invio non riesce resta lì, pronto da
+  inviare di nuovo.
+
+**Altro**
+- **Approva sudo con l'impronta** si attiva dall'app del computer con un pulsante (Configurazione).
+- Webcam: niente più immagine verde dopo aver spento e riacceso la fotocamera.
+- **Sfoglia il PC** funziona subito: decide il permesso «Sfoglia i file del computer».
+
+### Novità della 2.5.5
+
+**Pagina Invia rifatta (telefono e computer)**
+- Nuova pagina **Invia** sul modello di LocalSend, con due schede: **Invia** e **Ricevi**.
+- *Invia*: pulsanti grandi per **File, Media, Testo e Appunti** (sul computer **File, Cartella, Testo e Appunti**);
+  ciò che scegli compare in una scheda con le anteprime, si toglie con la X o si aggiunge altro; poi tocchi il
+  dispositivo nella lista **Dispositivi vicini** (computer Konnekta e dispositivi LocalSend, con icona ed etichette:
+  Konnekta/LocalSend, Wi-Fi/cavo/Bluetooth, `#IP`, modello) e l'invio parte, con avanzamento e Annulla.
+- *Ricevi*: logo con l'anello che indica "pronto a ricevere", nome del dispositivo, stato di Konnekta e di LocalSend,
+  scelta della ricezione rapida e lista **Ricevuti** con apertura dei file al tocco.
+- **Ping** sempre a portata di mano: campanella in alto a destra sul telefono, su ogni computer della lista sul desktop.
+- "Prendi file dal computer" resta nella sezione *Altro*. Sul desktop c'è la nuova voce **Invia** nella barra laterale.
+- Sul telefono non c'è più "Personalizza Invia": la pagina ha una struttura fissa, come LocalSend.
+
+**Compatibilità LocalSend** (spenta di default)
+- Konnekta parla anche il protocollo **LocalSend v2**: trova le app LocalSend sulla stessa rete (multicast e ricerca
+  indirizzo per indirizzo quando il multicast è bloccato), invia e riceve **file, cartelle e testi**, in **HTTPS**,
+  con **PIN** facoltativo e invio a un indirizzo IP scritto a mano.
+- Si attiva in **Impostazioni → LocalSend** (telefono e computer) o con "Attiva" nella pagina Invia. Sul computer si
+  scelgono anche nome visibile, PIN, porta, HTTPS e cartella dei file ricevuti.
+- I dispositivi LocalSend **non vengono associati**: ogni invio va accettato (finestra e notifica Accetta/Rifiuta),
+  salvo la **ricezione rapida**, e non possono usare nient'altro di Konnekta. I file ricevuti sul telefono vanno in
+  *Download/Konnekta*. Se l'app LocalSend è aperta sullo stesso dispositivo la porta 53317 è occupata e la pagina lo dice.
+
+**Invia tramite Konnekta dal sistema (computer)**
+- Nel menu dei file compare **«Invia tramite Konnekta»**: Dolphin e Nemo (tasto destro), Nautilus e Caja (*Script*),
+  l'elenco «Apri con»; su Windows «Invia a» e il menu del tasto destro. Konnekta si apre sulla pagina Invia con i file
+  già scelti: basta toccare il dispositivo. Con Konnekta già aperto, i file passano alla finestra esistente.
+- Si toglie in **Impostazioni → Programma sul computer**. Le voci puntano al file AppImage, non alla sua cartella
+  temporanea.
+
+**File ricevuti: "Apri" funziona**
+- Telefono: su Android 9 il file non si apriva (URI `file://`), ora passa dal FileProvider; si apre subito con l'app
+  predefinita e, se il file è stato spostato o non c'è un'app adatta, un messaggio lo dice. Anche la notifica apre il file.
+- Computer: la notifica "File ricevuto" ha **Apri** e **Mostra nella cartella** (anche con un clic sulla notifica),
+  così come i messaggi, la pagina Trasferimenti e la lista Ricevuti.
+- Linux: i **pulsanti delle notifiche** (Apri link, Rispondi, Stop, rispondi alla chiamata…) non facevano nulla; ora
+  rispondono tutti.
+
+**Schermo secondario e desktop remoto**
+- **Molto più reattivi**: l'encoder x264 tratteneva un fotogramma per ogni thread (21 fotogrammi, circa 0,7 s, su un
+  processore a 20 core); ora consegna ogni fotogramma appena codificato. Con NVENC `delay=0`, coda di rete più corta,
+  **60 fps** anche per il desktop remoto, decoder del telefono in bassa latenza (anche con le opzioni di Qualcomm,
+  Exynos, MediaTek, HiSilicon e Amlogic). Vale via Wi-Fi e via cavo.
+- **Orientamento** (telefono → Impostazioni → Desktop remoto e schermo secondario): schermo secondario **orizzontale**
+  (lo schermo gira) o **verticale** (il computer crea un monitor verticale della risoluzione del telefono); desktop
+  remoto **orizzontale**, **verticale** o **automatico** (segue la rotazione).
+- **Audio**: col desktop remoto l'audio del computer anche sul telefono (a scelta); con lo schermo secondario
+  **duplica** l'audio del computer, usa un'**uscita a sé** «Konnekta-Schermo» (Linux: le app mandate lì suonano solo
+  sul telefono, come un monitor con le casse) oppure **nessuno**. In tempo reale: l'audio in ritardo viene scartato,
+  non accumulato; vale anche per "Audio del computer" in Controllo.
+
+**Bluetooth**
+- **Collegamento immediato**: anche il telefono chiama il computer (all'apertura dell'app, quando torna in primo piano,
+  quando si accende il Bluetooth e poi ogni pochi secondi finché un computer associato non è collegato). Prima solo il
+  computer chiamava, un tentativo fallito bloccava 30 s e il successivo arrivava dopo oltre un minuto.
+- **Touchpad e puntatore in tempo reale**: i movimenti che si accumulano vengono uniti in uno e via Bluetooth partono
+  al massimo ogni 25 ms, così il computer riceve sempre l'ultima posizione invece di una coda che cresceva (il
+  puntatore restava indietro di secondi). Clic, tasti e gesti non vengono mai ritardati.
+
+**Altre correzioni**
+- App desktop: cambiando pagina si riparte dall'inizio (prima restava la posizione di scorrimento della pagina precedente).
+- Telefono, pagina **Computer**: tolta l'icona delle impostazioni in alto a destra (resta il pulsante in basso).
+
+### Novità della 2.5.0
+
+- **Scelta del collegamento**: icone di Wi-Fi, Bluetooth e cavo sotto ogni computer; tenendolo premuto
+  si sceglie quale usare, la scelta è ricordata su entrambi i lati e, se non è disponibile, Konnekta
+  passa da solo alla migliore disponibile.
+- **Schermo secondario**: il telefono diventa un altro monitor del PC (Hyprland e Sway).
+- **Puntatore "dove tocchi" o "come un touchpad"**, per desktop remoto e schermo secondario.
+- **Webcam** riscritta: obiettivo, risoluzione e fps cambiano dal vivo, continua fuori dall'app e a
+  schermo spento; "Konnekta Camera" resta sempre presente sul PC mentre Konnekta è aperto.
+- **Bluetooth** più stabile (non si riconnette più ogni pochi secondi); audio e video sono disattivati
+  via Bluetooth perché la banda non basta.
+- Un tocco su una funzione senza permesso spiega quale permesso manca.
+- Il lettore musicale del PC torna nel centro di controllo del telefono.
+- App desktop: dispositivi divisi in **salvati** e **rilevati**, con le tecnologie disponibili.
+- Pagina **Informazioni** con controllo degli aggiornamenti sul telefono.
