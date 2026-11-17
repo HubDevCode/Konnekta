@@ -245,6 +245,23 @@ Tutti i diritti riservati. Il codice è visibile, ma copiarlo, modificarlo, rico
 
 Le novità di ogni versione, dalla più recente.
 
+### Novità della 2.6.1
+
+**Funzioni dal telefono di nuovo funzionanti (computer Linux)**
+- **Mouse, touchpad, tastiera, desktop remoto e presentazione**: su Hyprland, Sway e gli altri desktop wlroots
+  Konnekta usa sempre l'input virtuale del compositor. Prima, se era installato `ydotool`, passava a quello anche
+  quando il suo demone `ydotoold` era spento, e ogni movimento e ogni tasto andavano persi senza errori. Su GNOME e
+  KDE `ydotool` si usa solo se `ydotoold` risponde.
+- **Hyprland 0.57 con configurazione Lua**: schermo secondario, puntatore del desktop remoto, swipe a tre dita tra i
+  workspace e pulsanti Hyprland del Mobile Deck parlano anche la nuova sintassi Lua (`hyprctl keyword` e
+  `hyprctl dispatch` non funzionano più). Lo schermo secondario non lascia più un monitor «KONNEKTA-1» fantasma che
+  occupa un workspace quando qualcosa va storto, e parte solo quando il monitor ha la sua risoluzione.
+- **AppImage**: i programmi del sistema avviati da Konnekta (playerctl per i comandi media, pactl per il volume,
+  wf-recorder, ffmpeg, comandi personalizzati, app del Mobile Deck, «Apri» sui file ricevuti…) partono con
+  l'ambiente del sistema e non più con le librerie dell'AppImage, che li facevano fallire
+  (`undefined symbol: g_once_init_leave_pointer`).
+- Colori del tema presi di nuovo da Hyprland 0.57.
+
 ### Novità della 2.6.0
 
 **App desktop rifatta**
