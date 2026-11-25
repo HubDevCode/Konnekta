@@ -333,24 +333,59 @@ fun PhoneFeatures() {
         KonnektaService.refreshFeatures(ctx)
     }
     fun has(vararg p: String) = p.all { ctx.checkSelfPermission(it) == android.content.pm.PackageManager.PERMISSION_GRANTED }
+    val ui = LocalUi.current
+    val activity = remember(ctx) { ctx.findActivity() }
+    val prefs = remember { ctx.getSharedPreferences("konnekta", android.content.Context.MODE_PRIVATE) }
+    /** Konnekta's page in the Android settings, where its permissions are turned on and off. */
+    fun appSettings() = runCatching {
+        ctx.startActivity(
+            android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                android.net.Uri.fromParts("package", ctx.packageName, null))
+                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+        )
+    }
+    /**
+     * Ask for runtime permissions. Once the user has refused for good, Android no longer shows the
+     * dialog (the request returns at once): send them to the settings page instead.
+     */
+    fun request(perms: Array<String>) {
+        val refused = activity != null && perms.any {
+            !has(it) && prefs.getBoolean("asked:$it", false) &&
+                !androidx.core.app.ActivityCompat.shouldShowRequestPermissionRationale(activity, it)
+        }
+        if (refused) {
+            ui.toast("Android non lo chiede più: attivalo in Autorizzazioni")
+            appSettings()
+            return
+        }
+        prefs.edit().apply { perms.forEach { putBoolean("asked:$it", true) } }.apply()
+        ask.launch(perms)
+    }
+    /** An app cannot drop its own permissions: the user turns them off in the settings. */
+    fun revoke() {
+        ui.toast("Per disattivarlo spegnilo in Autorizzazioni")
+        appSettings()
+    }
     @Suppress("UNUSED_EXPRESSION") tick
     val listener = NotificationForwarder.enabled(ctx)
     Column {
-        Feature(Icons.Filled.MusicNote, "Media del telefono", "Controlla dal computer la musica del telefono (usa l'inoltro notifiche)", listener) {
-            ctx.startActivity(NotificationForwarder.settingsIntent())
-        }
-        Feature(Icons.Filled.Call, "Chiamate", "Chi chiama, rispondi o rifiuta dal computer · sensibile", has(*Calls.PERMISSIONS)) { ask.launch(Calls.PERMISSIONS) }
-        Feature(Icons.Filled.Sms, "SMS", "Leggi e invia messaggi dal computer · sensibile", has(*Sms.PERMISSIONS)) { ask.launch(Sms.PERMISSIONS) }
-        Feature(Icons.Filled.Screenshot, "Screenshot sul computer", "Ogni screenshot del telefono arriva sul computer · sensibile", has(Screenshots.PERMISSION)) {
-            ask.launch(arrayOf(Screenshots.PERMISSION))
-        }
-        Feature(Icons.Filled.DoNotDisturbOn, "Non disturbare dal computer", "Il computer può attivarlo anche sul telefono", Dnd.hasAccess(ctx)) {
-            ctx.startActivity(Dnd.accessIntent())
-        }
+        // Special accesses: their settings page turns them both on and off.
+        Feature(Icons.Filled.MusicNote, "Media del telefono", "Controlla dal computer la musica del telefono (usa l'inoltro notifiche)", listener,
+            grant = { ctx.startActivity(NotificationForwarder.settingsIntent()) }, revoke = { ctx.startActivity(NotificationForwarder.settingsIntent()) })
+        Feature(Icons.Filled.Call, "Chiamate", "Chi chiama, rispondi o rifiuta dal computer · sensibile", has(*Calls.PERMISSIONS),
+            grant = { request(Calls.PERMISSIONS) }, revoke = ::revoke)
+        Feature(Icons.Filled.Sms, "SMS", "Leggi e invia messaggi dal computer · sensibile", has(*Sms.PERMISSIONS),
+            grant = { request(Sms.PERMISSIONS) }, revoke = ::revoke)
+        Feature(Icons.Filled.Screenshot, "Screenshot sul computer", "Ogni screenshot del telefono arriva sul computer · sensibile", has(Screenshots.PERMISSION),
+            grant = { request(arrayOf(Screenshots.PERMISSION)) }, revoke = ::revoke)
+        Feature(Icons.Filled.DoNotDisturbOn, "Non disturbare dal computer", "Il computer può attivarlo anche sul telefono", Dnd.hasAccess(ctx),
+            grant = { ctx.startActivity(Dnd.accessIntent()) }, revoke = { ctx.startActivity(Dnd.accessIntent()) })
         Feature(Icons.Filled.Mic, "Microfono", "Per usare il telefono come microfono del computer · sensibile",
-            has(android.Manifest.permission.RECORD_AUDIO)) { ask.launch(arrayOf(android.Manifest.permission.RECORD_AUDIO)) }
+            has(android.Manifest.permission.RECORD_AUDIO),
+            grant = { request(arrayOf(android.Manifest.permission.RECORD_AUDIO)) }, revoke = ::revoke)
         Feature(Icons.Filled.Videocam, "Fotocamera", "Per webcam, foto e scanner richiesti dal computer · sensibile",
-            has(android.Manifest.permission.CAMERA)) { ask.launch(arrayOf(android.Manifest.permission.CAMERA)) }
+            has(android.Manifest.permission.CAMERA),
+            grant = { request(arrayOf(android.Manifest.permission.CAMERA)) }, revoke = ::revoke)
     }
     // Restart the phone features only when a grant actually changed.
     val state = listOf(listener, has(*Calls.PERMISSIONS), has(*Sms.PERMISSIONS), has(Screenshots.PERMISSION), Dnd.hasAccess(ctx))
@@ -364,8 +399,17 @@ fun PhoneFeatures() {
 }
 
 @Composable
-private fun Feature(icon: androidx.compose.ui.graphics.vector.ImageVector, title: String, subtitle: String, on: Boolean, grant: () -> Unit) {
-    ActionCard(icon, title, subtitle, trailing = { Switch(on, { if (!on) grant() }) }) { if (!on) grant() }
+private fun Feature(
+    icon: androidx.compose.ui.graphics.vector.ImageVector, title: String, subtitle: String, on: Boolean,
+    grant: () -> Unit, revoke: () -> Unit,
+) {
+    ActionCard(icon, title, subtitle, trailing = { Switch(on, { if (on) revoke() else grant() }) }) { if (on) revoke() else grant() }
+}
+
+private tailrec fun android.content.Context.findActivity(): android.app.Activity? = when (this) {
+    is android.app.Activity -> this
+    is android.content.ContextWrapper -> baseContext.findActivity()
+    else -> null
 }
 
 /** What a paired computer may do with this phone: one switch per permission. */
