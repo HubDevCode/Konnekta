@@ -373,6 +373,12 @@ pub struct TelephonyBody {
     pub contact_name: Option<String>,
     #[serde(rename = "isCancel", default)]
     pub is_cancel: bool,
+    /// Konnekta extension: false when the phone OS cannot answer (Android < 8). Absent: unknown.
+    #[serde(rename = "canAnswer", default, skip_serializing_if = "Option::is_none")]
+    pub can_answer: Option<bool>,
+    /// Konnekta extension: false when the phone OS cannot reject or hang up (Android < 9).
+    #[serde(rename = "canEnd", default, skip_serializing_if = "Option::is_none")]
+    pub can_end: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

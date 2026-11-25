@@ -41,6 +41,9 @@ pub struct CallState {
     pub event: String,
     pub caller: String,
     pub active: bool,
+    /// The phone can answer / end this call from here (phones that do not say: as advertised).
+    pub can_answer: bool,
+    pub can_end: bool,
 }
 
 pub struct CallsPlugin {
@@ -129,11 +132,15 @@ impl Plugin for CallsPlugin {
             self.resume_media().await;
             return Ok(());
         }
+        let ctrl = dev.supports(types::CALL_ACTION);
         let state = CallState {
             event: b.event.clone(),
             caller: caller.clone(),
             active: b.event != "missedCall",
+            can_answer: ctrl && b.can_answer != Some(false),
+            can_end: ctrl && b.can_end != Some(false),
         };
+        let (can_answer, can_end) = (state.can_answer, state.can_end);
         dev.emit("calls", "call", serde_json::to_value(&state)?);
         match b.event.as_str() {
             "ringing" => {
@@ -143,9 +150,11 @@ impl Plugin for CallsPlugin {
                     .insert(dev.id().to_owned(), state);
                 self.pause_media().await;
                 let mut actions = vec![("mute".to_string(), "Mute".to_string())];
-                if dev.supports(types::CALL_ACTION) {
+                if can_end {
+                    actions.insert(0, ("reject".into(), "Reject".into()));
+                }
+                if can_answer {
                     actions.insert(0, ("accept".into(), "Answer".into()));
-                    actions.insert(1, ("reject".into(), "Reject".into()));
                 }
                 let core = self.core.get().cloned();
                 let dev_id = dev.id().to_owned();

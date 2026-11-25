@@ -45,6 +45,8 @@ class Calls(private val ctx: Context) {
 
     private fun granted(p: String) = ctx.checkSelfPermission(p) == PackageManager.PERMISSION_GRANTED
 
+    private fun canControl() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && granted(Manifest.permission.ANSWER_PHONE_CALLS)
+
     /**
      * The phone-state broadcast carries the caller's number (with
      * READ_CALL_LOG); the newer callbacks do not. It may arrive twice per
@@ -115,6 +117,9 @@ class Calls(private val ctx: Context) {
         val n = number
         io.execute {
             val body = JSONObject().put("event", event).put("isCancel", cancel)
+                // What the computer can do from here: answer from Android 8, end from 9, both with ANSWER_PHONE_CALLS.
+                .put("canAnswer", Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && canControl())
+                .put("canEnd", Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && canControl())
             n?.let { body.put("phoneNumber", it) }
             contactName(n)?.let { body.put("contactName", it) }
             for (d in connectedPaired()) runCatching { KonnektaApp.core?.sendPacket(d, Types.CALL, body) }

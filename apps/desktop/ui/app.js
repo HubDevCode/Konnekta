@@ -479,9 +479,9 @@ function onPluginEvent({ deviceId, plugin, kind, data }) {
       const before = S.calls[deviceId];
       S.calls[deviceId] = data;
       if (data.event === 'ringing' && before?.event !== 'ringing') {
-        const ctrl = hasCap(S.devices.find((d) => d.id === deviceId), 'konnekta.call.action');
         toast(`Chiamata in arrivo su ${devName(deviceId)}: ${data.caller || 'numero sconosciuto'}`, 'call', [
-          ...(ctrl ? [['Rispondi', () => run(act('calls', 'accept', null, deviceId))], ['Rifiuta', () => run(act('calls', 'reject', null, deviceId))]] : []),
+          ...(data.canAnswer ? [['Rispondi', () => run(act('calls', 'accept', null, deviceId))]] : []),
+          ...(data.canEnd ? [['Rifiuta', () => run(act('calls', 'reject', null, deviceId))]] : []),
           ['Silenzia', () => run(act('calls', 'mute', null, deviceId))]]);
       }
       break;
@@ -800,12 +800,13 @@ function callBanner(d) {
     h('div', { class: 'grow' },
       h('div', { class: 'call-title' }, ringing ? 'Chiamata in arrivo' : c.event === 'talking' ? 'In chiamata' : 'Chiamata persa'),
       h('div', { class: 'muted' }, c.caller || 'Numero sconosciuto'),
-      !ctrl ? h('div', { class: 'small muted' }, 'Questo telefono permette solo di silenziare la suoneria (iOS non consente ad altre app di rispondere o rifiutare le chiamate).') : null),
+      !ctrl ? h('div', { class: 'small muted' }, 'Questo telefono permette solo di silenziare la suoneria (iOS non consente ad altre app di rispondere o rifiutare le chiamate).')
+        : !c.canAnswer || !c.canEnd ? h('div', { class: 'small muted' }, `La versione di Android del telefono non permette ad altre app di ${!c.canAnswer && !c.canEnd ? 'rispondere o chiudere le chiamate (serve Android 8 per rispondere, 9 per chiudere)' : 'chiudere le chiamate (serve Android 9)'}.`) : null),
     h('div', { class: 'row' },
       btn('Silenzia suoneria', () => run(act('calls', 'mute', null, d.id)), 'text', 'volume_off'),
-      ctrl && ringing ? btn('Rifiuta', () => run(act('calls', 'reject', null, d.id)), 'danger', 'call_end') : null,
-      ctrl && ringing ? btn('Rispondi', () => run(act('calls', 'accept', null, d.id)), 'primary', 'call') : null,
-      ctrl && c.event === 'talking' ? btn('Riaggancia', () => run(act('calls', 'hangup', null, d.id)), 'danger-fill', 'call_end') : null));
+      c.canEnd && ringing ? btn('Rifiuta', () => run(act('calls', 'reject', null, d.id)), 'danger', 'call_end') : null,
+      c.canAnswer && ringing ? btn('Rispondi', () => run(act('calls', 'accept', null, d.id)), 'primary', 'call') : null,
+      c.canEnd && c.event === 'talking' ? btn('Riaggancia', () => run(act('calls', 'hangup', null, d.id)), 'danger-fill', 'call_end') : null));
 }
 
 /**
