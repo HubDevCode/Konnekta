@@ -650,6 +650,8 @@ class KonnektaService : Service() {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) isLooping = true
             play()
         }
+        // Ringtone loops only from Android 9: below it, start it again whenever it ends.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) main.postDelayed(keepRinging, 1000)
         val stop = PendingIntent.getService(
             this, 1, Intent(this, KonnektaService::class.java).setAction(ACTION_STOP_RING), PendingIntent.FLAG_IMMUTABLE,
         )
@@ -664,7 +666,16 @@ class KonnektaService : Service() {
         nm.notify(N_RING, n)
     }
 
+    private val keepRinging: Runnable = object : Runnable {
+        override fun run() {
+            val r = ringtone ?: return
+            if (!r.isPlaying) r.play()
+            main.postDelayed(this, 1000)
+        }
+    }
+
     private fun stopRing() {
+        main.removeCallbacks(keepRinging)
         Store.dismissKind("ring")
         ringtone?.stop()
         ringtone = null
