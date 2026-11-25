@@ -10,7 +10,9 @@
 // On the Linux host only the fallback is built, for its test.
 #![cfg_attr(not(target_os = "android"), allow(dead_code, unused_imports))]
 
-use libc::{c_char, c_int, c_short, c_uint, c_ulong, c_ushort, c_void, ifaddrs, sockaddr, sockaddr_in};
+use libc::{
+    c_char, c_int, c_short, c_uint, c_ulong, c_ushort, c_void, ifaddrs, sockaddr, sockaddr_in,
+};
 use std::mem::{size_of, zeroed};
 use std::ptr::null_mut;
 use std::sync::OnceLock;
@@ -32,7 +34,12 @@ fn system() -> Option<(GetFn, FreeFn)> {
         (!g.is_null() && !f.is_null()).then_some((g as usize, f as usize))
     }))?;
     // SAFETY: the symbols come from libc and have these C signatures.
-    unsafe { Some((std::mem::transmute::<usize, GetFn>(g), std::mem::transmute::<usize, FreeFn>(f))) }
+    unsafe {
+        Some((
+            std::mem::transmute::<usize, GetFn>(g),
+            std::mem::transmute::<usize, FreeFn>(f),
+        ))
+    }
 }
 
 const IFNAMSIZ: usize = 16;
@@ -98,13 +105,20 @@ unsafe fn fallback(out: *mut *mut ifaddrs) -> c_int {
             return -1;
         }
         let mut reqs: [IfReq; MAX_IFS] = zeroed();
-        let mut conf = IfConf { len: size_of::<[IfReq; MAX_IFS]>() as c_int, buf: reqs.as_mut_ptr().cast() };
+        let mut conf = IfConf {
+            len: size_of::<[IfReq; MAX_IFS]>() as c_int,
+            buf: reqs.as_mut_ptr().cast(),
+        };
         if libc::ioctl(fd, SIOCGIFCONF as _, &mut conf) < 0 {
             libc::close(fd);
             return -1;
         }
         let count = (conf.len.max(0) as usize / size_of::<IfReq>()).min(MAX_IFS);
-        let nodes = if count == 0 { null_mut() } else { libc::calloc(count, size_of::<Node>()) as *mut Node };
+        let nodes = if count == 0 {
+            null_mut()
+        } else {
+            libc::calloc(count, size_of::<Node>()) as *mut Node
+        };
         if count > 0 && nodes.is_null() {
             libc::close(fd);
             return -1;
@@ -119,7 +133,11 @@ unsafe fn fallback(out: *mut *mut ifaddrs) -> c_int {
             n.addr = as_in(&req.ifru.addr);
 
             let mut q = *req;
-            let flags = if libc::ioctl(fd, SIOCGIFFLAGS as _, &mut q) == 0 { q.ifru.flags as u16 as c_uint } else { 0 };
+            let flags = if libc::ioctl(fd, SIOCGIFFLAGS as _, &mut q) == 0 {
+                q.ifru.flags as u16 as c_uint
+            } else {
+                0
+            };
             let mut q = *req;
             let has_mask = libc::ioctl(fd, SIOCGIFNETMASK as _, &mut q) == 0;
             if has_mask {
@@ -127,7 +145,8 @@ unsafe fn fallback(out: *mut *mut ifaddrs) -> c_int {
                 n.mask.sin_family = libc::AF_INET as _;
             }
             let mut q = *req;
-            let has_brd = flags & libc::IFF_BROADCAST as c_uint != 0 && libc::ioctl(fd, SIOCGIFBRDADDR as _, &mut q) == 0;
+            let has_brd = flags & libc::IFF_BROADCAST as c_uint != 0
+                && libc::ioctl(fd, SIOCGIFBRDADDR as _, &mut q) == 0;
             if has_brd {
                 n.brd = as_in(&q.ifru.addr);
                 n.brd.sin_family = libc::AF_INET as _;
@@ -136,8 +155,16 @@ unsafe fn fallback(out: *mut *mut ifaddrs) -> c_int {
             n.ifa.ifa_name = n.name.as_mut_ptr();
             n.ifa.ifa_flags = flags;
             n.ifa.ifa_addr = (&mut n.addr as *mut sockaddr_in).cast();
-            n.ifa.ifa_netmask = if has_mask { (&mut n.mask as *mut sockaddr_in).cast() } else { null_mut() };
-            n.ifa.ifa_ifu = if has_brd { (&mut n.brd as *mut sockaddr_in).cast() } else { null_mut() };
+            n.ifa.ifa_netmask = if has_mask {
+                (&mut n.mask as *mut sockaddr_in).cast()
+            } else {
+                null_mut()
+            };
+            n.ifa.ifa_ifu = if has_brd {
+                (&mut n.brd as *mut sockaddr_in).cast()
+            } else {
+                null_mut()
+            };
             if used > 0 {
                 (*nodes.add(used - 1)).ifa.ifa_next = &mut n.ifa;
             }
@@ -180,8 +207,11 @@ pub unsafe extern "C" fn freeifaddrs(list: *mut ifaddrs) {
 mod tests {
     use super::*;
 
-    /// (name, address, netmask, broadcast) of the IPv4 entries of a list.
-    unsafe fn ipv4(list: *mut ifaddrs) -> Vec<(String, [u8; 4], Option<[u8; 4]>, Option<[u8; 4]>)> {
+    /// (name, address, netmask, broadcast) of an IPv4 entry.
+    type Ipv4Entry = (String, [u8; 4], Option<[u8; 4]>, Option<[u8; 4]>);
+
+    /// The IPv4 entries of a list.
+    unsafe fn ipv4(list: *mut ifaddrs) -> Vec<Ipv4Entry> {
         unsafe fn ip(a: *mut sockaddr) -> Option<[u8; 4]> {
             unsafe { (!a.is_null()).then(|| as_in(&*a).sin_addr.s_addr.to_ne_bytes()) }
         }
@@ -191,9 +221,15 @@ mod tests {
             while !p.is_null() {
                 let a = &*p;
                 if !a.ifa_addr.is_null() && (*a.ifa_addr).sa_family as c_int == libc::AF_INET {
-                    let brd = if a.ifa_flags & libc::IFF_BROADCAST as c_uint != 0 { ip(a.ifa_ifu) } else { None };
+                    let brd = if a.ifa_flags & libc::IFF_BROADCAST as c_uint != 0 {
+                        ip(a.ifa_ifu)
+                    } else {
+                        None
+                    };
                     v.push((
-                        std::ffi::CStr::from_ptr(a.ifa_name).to_string_lossy().into_owned(),
+                        std::ffi::CStr::from_ptr(a.ifa_name)
+                            .to_string_lossy()
+                            .into_owned(),
                         ip(a.ifa_addr).unwrap(),
                         ip(a.ifa_netmask),
                         brd,
