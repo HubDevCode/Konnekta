@@ -87,6 +87,7 @@ class NotificationForwarder : NotificationListenerService() {
         n.actions?.forEach { a ->
             if (a.remoteInputs?.isNotEmpty() == true) replyable = true else a.title?.let { actions.put(it.toString()) }
         }
+        if (!replyable && replyAction(n) != null) replyable = true
         return JSONObject()
             .put("id", sbn.key)
             .put("appName", appName(sbn.packageName))
@@ -116,12 +117,20 @@ class NotificationForwarder : NotificationListenerService() {
         }
     }
 
+    /**
+     * The action that takes a typed reply. Before Android 7 most apps put it only in the wearable
+     * extender (for watches), not in the notification's own actions.
+     */
+    private fun replyAction(n: Notification): Notification.Action? =
+        n.actions?.firstOrNull { it.remoteInputs?.isNotEmpty() == true }
+            ?: runCatching { Notification.WearableExtender(n).actions.firstOrNull { it.remoteInputs?.isNotEmpty() == true } }.getOrNull()
+
     private fun find(key: String): StatusBarNotification? =
         runCatching { activeNotifications }.getOrNull()?.firstOrNull { it.key == key }
 
     private fun reply(key: String, message: String) {
         val sbn = find(key) ?: return
-        val a = sbn.notification.actions?.firstOrNull { it.remoteInputs?.isNotEmpty() == true } ?: return
+        val a = replyAction(sbn.notification) ?: return
         val intent = Intent()
         val results = Bundle()
         for (ri in a.remoteInputs) results.putCharSequence(ri.resultKey, message)
