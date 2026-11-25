@@ -3,6 +3,7 @@ package org.konnekta.app.approve
 import android.os.Build
 import android.os.Bundle
 import android.util.Base64
+import android.view.WindowManager
 import androidx.activity.compose.setContent
 import androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_STRONG
 import androidx.biometric.BiometricPrompt
@@ -70,6 +71,12 @@ class ApproveActivity : FragmentActivity() {
         // Another app drawing over this screen must not trick the user.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) window.setHideOverlayWindows(true)
         window.decorView.filterTouchesWhenObscured = true
+        // showWhenLocked / turnScreenOn in the manifest count from Android 8.1: below it the request
+        // would wait behind the lock screen.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O_MR1) {
+            @Suppress("DEPRECATION")
+            window.addFlags(WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON)
+        }
         setContent {
             KonnektaTheme {
                 val req by PendingApprovals.current.collectAsState()
