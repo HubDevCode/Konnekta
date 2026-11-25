@@ -2,6 +2,7 @@ package org.konnekta.app.core
 
 import com.sun.jna.Library
 import com.sun.jna.Native
+import com.sun.jna.NativeLong
 import com.sun.jna.Pointer
 import org.json.JSONArray
 import org.json.JSONObject
@@ -9,14 +10,18 @@ import java.util.concurrent.locks.ReentrantReadWriteLock
 import kotlin.concurrent.read
 import kotlin.concurrent.write
 
-/** The C ABI of the Rust core, see crates/konnekta-ffi/include/konnekta.h. */
+/**
+ * The C ABI of the Rust core, see crates/konnekta-ffi/include/konnekta.h.
+ * `size_t` is [NativeLong] (4 bytes on 32-bit phones, 8 on 64-bit), never Long:
+ * a wrong width shifts every following argument on 32-bit ARM.
+ */
 @Suppress("FunctionName")
 internal interface KonnektaLib : Library {
     fun konnekta_start(configJson: String, dataDir: String): Pointer?
     fun konnekta_call(h: Pointer, method: String, paramsJson: String): Pointer?
     fun konnekta_next_event(h: Pointer, timeoutMs: Int): Pointer?
-    fun konnekta_stream_write(h: Pointer, channel: Long, kind: Byte, flags: Byte, ptsUs: Long, data: ByteArray, len: Long): Int
-    fun konnekta_stream_read(h: Pointer, channel: Long, buf: ByteArray, cap: Long, meta: ByteArray, ptsUs: LongArray, timeoutMs: Int): Long
+    fun konnekta_stream_write(h: Pointer, channel: Long, kind: Byte, flags: Byte, ptsUs: Long, data: ByteArray, len: NativeLong): Int
+    fun konnekta_stream_read(h: Pointer, channel: Long, buf: ByteArray, cap: NativeLong, meta: ByteArray, ptsUs: LongArray, timeoutMs: Int): Long
     fun konnekta_free_string(s: Pointer)
     fun konnekta_stop(h: Pointer)
 }
@@ -93,7 +98,7 @@ class Core private constructor(private val handle: Pointer) {
      */
     fun streamWrite(channel: Long, kind: Int, flags: Int, ptsUs: Long, data: ByteArray, len: Int = data.size): Int = lock.read {
         if (stopped) return -1
-        lib.konnekta_stream_write(handle, channel, kind.toByte(), flags.toByte(), ptsUs, data, len.toLong())
+        lib.konnekta_stream_write(handle, channel, kind.toByte(), flags.toByte(), ptsUs, data, NativeLong(len.toLong()))
     }
 
     /**
@@ -102,7 +107,7 @@ class Core private constructor(private val handle: Pointer) {
      */
     fun streamRead(channel: Long, buf: ByteArray, meta: ByteArray, pts: LongArray, timeoutMs: Int): Int = lock.read {
         if (stopped) return -1
-        lib.konnekta_stream_read(handle, channel, buf, buf.size.toLong(), meta, pts, timeoutMs).toInt()
+        lib.konnekta_stream_read(handle, channel, buf, NativeLong(buf.size.toLong()), meta, pts, timeoutMs).toInt()
     }
 
     fun stop() = lock.write {

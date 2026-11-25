@@ -2,6 +2,7 @@ package org.konnekta.app.service
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.os.Build
 import android.content.Context
 import android.content.pm.PackageManager
 import android.media.AudioManager
@@ -142,8 +143,8 @@ class Calls(private val ctx: Context) {
         val canAnswer = granted(Manifest.permission.ANSWER_PHONE_CALLS)
         runCatching {
             when (a) {
-                "accept" -> if (canAnswer) telecom.acceptRingingCall()
-                "reject", "hangup" -> if (canAnswer) telecom.endCall()
+                "accept" -> if (canAnswer && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) telecom.acceptRingingCall()
+                "reject", "hangup" -> if (canAnswer && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) telecom.endCall()
                 "mute" -> audio.isMicrophoneMute = true
                 "unmute" -> audio.isMicrophoneMute = false
                 "speaker" -> audio.isSpeakerphoneOn = !audio.isSpeakerphoneOn

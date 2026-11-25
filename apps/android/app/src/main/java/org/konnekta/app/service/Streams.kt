@@ -454,7 +454,7 @@ object Streams {
         private var running = true
         private val pace = Pace()
 
-        @SuppressLint("MissingPermission")
+        @SuppressLint("MissingPermission", "NewApi") // Android < 10 is refused by the check below
         private val rec: AudioRecord = run {
             check(android.os.Build.VERSION.SDK_INT >= 29) { "serve Android 10 o successivo" }
             val cfg = android.media.AudioPlaybackCaptureConfiguration.Builder(projection)
@@ -511,7 +511,7 @@ object Streams {
                 .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build())
                 .setAudioFormat(AudioFormat.Builder().setSampleRate(rate).setChannelMask(mask).setEncoding(AudioFormat.ENCODING_PCM_16BIT).build())
                 .setBufferSizeInBytes(maxOf(AudioTrack.getMinBufferSize(rate, mask, AudioFormat.ENCODING_PCM_16BIT) * 2, 9600))
-                .setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
+                .apply { if (android.os.Build.VERSION.SDK_INT >= 26) setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY) }
                 .setTransferMode(AudioTrack.MODE_STREAM)
                 .build()
             track.play()
@@ -523,7 +523,10 @@ object Streams {
                 // Real time: never more than this much sound waiting to play.
                 // Late audio (a network hiccup, or the two clocks drifting
                 // apart over a long session) is dropped to catch up.
-                val maxQueued = rate * 60L / 1000
+                // Never below the track's own buffer: the track starts playing
+                // only once it is full (Android 6 has no low-latency mode and
+                // its buffer is ~160 ms), so a smaller cap would keep it silent.
+                val maxQueued = maxOf(rate * 60L / 1000, track.bufferSizeInFrames.toLong())
                 var written = 0L
                 while (running) {
                     val n = core.streamRead(channel, buf, meta, pts, 500)

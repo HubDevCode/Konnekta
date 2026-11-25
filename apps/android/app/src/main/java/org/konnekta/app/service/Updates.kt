@@ -112,7 +112,8 @@ object Updates {
             c.readTimeout = 30_000
             c.setRequestProperty("User-Agent", "konnekta-android")
             c.instanceFollowRedirects = true
-            val total = c.contentLengthLong
+            val total = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) c.contentLengthLong
+                else c.getHeaderField("Content-Length")?.toLongOrNull() ?: -1L
             c.inputStream.use { inp ->
                 file.outputStream().use { out ->
                     val buf = ByteArray(64 * 1024)

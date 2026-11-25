@@ -10,7 +10,7 @@
 use anyhow::{Context, Result, bail};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 const ADB_TIMEOUT: Duration = Duration::from_secs(10);
@@ -121,19 +121,59 @@ pub async fn forward(serial: &Arc<str>, remote: u16) -> Result<(SocketAddr, Mapp
     ))
 }
 
+/// Phones whose adbd cannot pick the port of a reverse mapping (`tcp:0`
+/// support came with Android 7): a port is chosen here for them.
+static NO_REVERSE_TCP0: Mutex<Vec<Arc<str>>> = Mutex::new(Vec::new());
+
+/// Ports tried on the phone when its adbd cannot pick one: below Linux's
+/// ephemeral range, so they never clash with the phone's outgoing sockets.
+const REVERSE_PORTS: std::ops::RangeInclusive<u16> = 30000..=32767;
+const REVERSE_TRIES: u16 = 8;
+
 /// Make the local port `local` reachable from the phone: it connects to the
 /// returned port on its own 127.0.0.1.
 pub async fn reverse(serial: &Arc<str>, local: u16) -> Result<(u16, Mapping)> {
-    let out = adb(&["-s", serial, "reverse", "tcp:0", &format!("tcp:{local}")]).await?;
-    let port = reported_port(&out)?;
-    Ok((
-        port,
+    let target = format!("tcp:{local}");
+    let mapping = |port| {
         Mapping::Adb(AdbMapping {
             serial: serial.clone(),
             kind: "reverse",
             port,
-        }),
-    ))
+        })
+    };
+    let picks_port = !NO_REVERSE_TCP0.lock().unwrap().contains(serial);
+    if picks_port {
+        match adb(&["-s", serial, "reverse", "tcp:0", &target]).await {
+            Ok(out) if reported_port(&out).is_ok() => {
+                let port = reported_port(&out)?;
+                return Ok((port, mapping(port)));
+            }
+            res => {
+                // Android 6: adbd accepts tcp:0 and listens on some port, but
+                // never says which. Drop that listener and choose the port.
+                tracing::info!(%serial, error = ?res.err(), "adb reverse tcp:0 unsupported, choosing the port");
+                let _ = adb(&["-s", serial, "reverse", "--remove", "tcp:0"]).await;
+                NO_REVERSE_TCP0.lock().unwrap().push(serial.clone());
+            }
+        }
+    }
+    let span = REVERSE_PORTS.end() - REVERSE_PORTS.start() + 1;
+    let seed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    let first = (seed ^ u32::from(local)) % u32::from(span);
+    let mut last = None;
+    for i in 0..REVERSE_TRIES {
+        let port = REVERSE_PORTS.start() + ((first + u32::from(i) * 389) % u32::from(span)) as u16;
+        // --no-rebind: a port another mapping holds is skipped, not stolen.
+        let spec = format!("tcp:{port}");
+        match adb(&["-s", serial, "reverse", "--no-rebind", &spec, &target]).await {
+            Ok(_) => return Ok((port, mapping(port))),
+            Err(e) => last = Some(e),
+        }
+    }
+    Err(last.unwrap_or_else(|| anyhow::anyhow!("adb reverse failed")))
 }
 
 #[cfg(test)]

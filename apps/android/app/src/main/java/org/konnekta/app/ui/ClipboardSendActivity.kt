@@ -85,7 +85,8 @@ class ClipboardSendActivity : ComponentActivity() {
     }
 }
 
-/** Quick Settings tile "Invia appunti". */
+/** Quick Settings tile "Invia appunti" (Android 7+: older versions never bind it). */
+@androidx.annotation.RequiresApi(Build.VERSION_CODES.N)
 class ClipboardTileService : TileService() {
     override fun onStartListening() {
         super.onStartListening()

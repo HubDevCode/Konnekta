@@ -7,6 +7,10 @@
 //!
 //! See `include/konnekta.h`.
 
+// Android 6 lacks getifaddrs; the fallback is tested on the Linux host too.
+#[cfg(any(target_os = "android", all(test, target_os = "linux")))]
+mod ifaddrs_compat;
+
 use anyhow::{Context, Result};
 use konnekta_core::proto::Packet;
 use konnekta_core::{Config, Konnekta, SecureChannel};

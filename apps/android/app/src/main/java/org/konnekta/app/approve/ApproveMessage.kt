@@ -20,7 +20,12 @@ object ApproveMessage {
     private fun check(name: String, v: String, required: Boolean) {
         if (required && v.isEmpty()) throw InvalidField("$name is empty")
         if (v.toByteArray(Charsets.UTF_8).size > MAX_VALUE) throw InvalidField("$name is too long")
-        if (v.codePoints().anyMatch { isControl(it) }) throw InvalidField("$name has a control character")
+        var i = 0
+        while (i < v.length) {
+            val c = v.codePointAt(i)
+            if (isControl(c)) throw InvalidField("$name has a control character")
+            i += Character.charCount(c)
+        }
     }
 
     private fun hex64(s: String) = s.length == 64 && s.all { it in '0'..'9' || it in 'a'..'f' }

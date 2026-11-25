@@ -158,7 +158,8 @@ object PcMediaControls {
                 Intent(ctx, KonnektaService::class.java).setAction(ACTION).putExtra("device", e.deviceId).putExtra("action", action),
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT),
         ).build()
-        val n = Notification.Builder(ctx, KonnektaApp.CH_MEDIA)
+        val n = (if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) Notification.Builder(ctx, KonnektaApp.CH_MEDIA)
+            else @Suppress("DEPRECATION") Notification.Builder(ctx))
             .setSmallIcon(R.drawable.ic_stat)
             .setContentTitle(title)
             .setContentText(artist.ifEmpty { e.name })

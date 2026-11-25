@@ -30,11 +30,13 @@ class KonnektaApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        val nm = getSystemService(NotificationManager::class.java)
-        nm.createNotificationChannel(NotificationChannel(CH_SERVICE, "Connessione", NotificationManager.IMPORTANCE_MIN))
-        nm.createNotificationChannel(NotificationChannel(CH_ALERTS, "Avvisi dal computer", NotificationManager.IMPORTANCE_HIGH))
-        nm.createNotificationChannel(NotificationChannel(CH_APPROVE, "Approvazioni", NotificationManager.IMPORTANCE_HIGH))
-        nm.createNotificationChannel(NotificationChannel(CH_MEDIA, "Lettore del computer", NotificationManager.IMPORTANCE_LOW))
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            val nm = getSystemService(NotificationManager::class.java)
+            nm.createNotificationChannel(NotificationChannel(CH_SERVICE, "Connessione", NotificationManager.IMPORTANCE_MIN))
+            nm.createNotificationChannel(NotificationChannel(CH_ALERTS, "Avvisi dal computer", NotificationManager.IMPORTANCE_HIGH))
+            nm.createNotificationChannel(NotificationChannel(CH_APPROVE, "Approvazioni", NotificationManager.IMPORTANCE_HIGH))
+            nm.createNotificationChannel(NotificationChannel(CH_MEDIA, "Lettore del computer", NotificationManager.IMPORTANCE_LOW))
+        }
         // The service may start without the UI (boot, after an update).
         org.konnekta.app.state.Settings.load(this)
         org.konnekta.app.service.ClipboardSync.install(this)

@@ -2771,6 +2771,7 @@ dependencies = [
  "konnekta-core",
  "konnekta-media",
  "konnekta-plugins",
+ "libc",
  "serde_json",
  "tokio",
  "tracing",

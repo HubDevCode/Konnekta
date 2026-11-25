@@ -63,7 +63,7 @@ class KonnektaService : Service() {
         val pairPrompt = MutableStateFlow<JSONObject?>(null)
 
         fun start(context: Context) {
-            context.startForegroundService(Intent(context, KonnektaService::class.java))
+            androidx.core.content.ContextCompat.startForegroundService(context, Intent(context, KonnektaService::class.java))
         }
 
         const val ACTION_REFRESH = "org.konnekta.app.REFRESH"
@@ -86,7 +86,7 @@ class KonnektaService : Service() {
          * service may add the microphone / camera / screen capture types).
          */
         fun acceptStream(context: Context, r: StreamRequest, projection: Intent? = null, resultCode: Int = 0) {
-            context.startForegroundService(
+            androidx.core.content.ContextCompat.startForegroundService(context, 
                 Intent(context, KonnektaService::class.java).setAction(ACTION_ACCEPT_STREAM)
                     .putExtra("device", r.deviceId).putExtra("name", r.deviceName).putExtra("plugin", r.plugin)
                     .putExtra("session", r.session).putExtra("params", r.params.toString())

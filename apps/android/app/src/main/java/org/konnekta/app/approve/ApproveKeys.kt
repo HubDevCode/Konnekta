@@ -62,22 +62,28 @@ class ApproveKeys(context: Context) {
             .setAlgorithmParameterSpec(ECGenParameterSpec("secp256r1"))
             .setDigests(KeyProperties.DIGEST_SHA256)
             .setUserAuthenticationRequired(true)
-            .setInvalidatedByBiometricEnrollment(true)
             .apply {
+                // Android 6 always invalidates the key when a fingerprint is added.
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) setInvalidatedByBiometricEnrollment(true)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                     setUserAuthenticationParameters(0, KeyProperties.AUTH_BIOMETRIC_STRONG)
                 } else {
                     @Suppress("DEPRECATION")
                     setUserAuthenticationValidityDurationSeconds(-1)
                 }
-                if (strongBox) setIsStrongBoxBacked(true)
+                if (strongBox && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) setIsStrongBoxBacked(true)
             }
             .build()
         val gen = KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_EC, "AndroidKeyStore")
-        val pair = try {
-            gen.initialize(spec(strongBox = true))
-            gen.generateKeyPair()
-        } catch (e: StrongBoxUnavailableException) {
+        val pair = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            try {
+                gen.initialize(spec(strongBox = true))
+                gen.generateKeyPair()
+            } catch (e: StrongBoxUnavailableException) {
+                gen.initialize(spec(strongBox = false))
+                gen.generateKeyPair()
+            }
+        } else {
             gen.initialize(spec(strongBox = false))
             gen.generateKeyPair()
         }
