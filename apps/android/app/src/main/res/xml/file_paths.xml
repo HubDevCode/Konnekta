@@ -2,6 +2,8 @@
 <!-- Photos taken for a computer live in the cache until they are sent. -->
 <paths>
     <cache-path name="photo" path="photo/" />
-    <!-- Android 9: received files stay in the app's Download folder. -->
+    <!-- Android 6-9 without the storage permission: received files stay in the app's Download folder. -->
     <external-files-path name="downloads" path="Download/" />
+    <!-- Android 6-9 with it: the public Download/Konnekta. -->
+    <external-path name="public_downloads" path="Download/" />
 </paths>

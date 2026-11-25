@@ -5,6 +5,8 @@ import android.content.ClipData
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
@@ -52,10 +54,12 @@ object Files {
 
     private fun publish(ctx: Context, src: File, name: String): Uri {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-            // Android 9: app folder, no storage permission needed.
-            val dir = File(ctx.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), FOLDER).apply { mkdirs() }
+            // Android 6-9: the public Download/Konnekta with the storage permission, else the app's own folder.
+            val dir = legacyDir(ctx).apply { mkdirs() }
             val out = unique(dir, name)
             src.copyTo(out)
+            // Show it in Downloads and the gallery apps at once.
+            MediaScannerConnection.scanFile(ctx, arrayOf(out.absolutePath), arrayOf(mimeOf(name)), null)
             return Uri.fromFile(out)
         }
         val cr = ctx.contentResolver
@@ -115,6 +119,19 @@ object Files {
         }
     }
 
+    private fun canWritePublic(ctx: Context) =
+        ctx.checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+
+    @Suppress("DEPRECATION")
+    private fun legacyDir(ctx: Context): File =
+        if (canWritePublic(ctx)) File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), FOLDER)
+        else File(ctx.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), FOLDER)
+
+    /** Where received files end up, for the user. */
+    fun savedWhere(ctx: Context): String =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q || canWritePublic(ctx)) "Download/$FOLDER"
+        else "Android/data/${ctx.packageName}/files/Download/$FOLDER"
+
     /**
      * Move a file the core saved itself (LocalSend) into Download/Konnekta,
      * like the files from the computers. Returns the uri to open.
@@ -130,7 +147,7 @@ object Files {
     }
 
     /**
-     * A uri other apps can read: `file://` (Android 9, app folder) goes
+     * A uri other apps can read: `file://` (Android 6-9) goes
      * through our FileProvider, which Android requires since 7.
      */
     private fun shareable(ctx: Context, uri: Uri): Uri =

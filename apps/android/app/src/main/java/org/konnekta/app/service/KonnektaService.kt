@@ -481,7 +481,7 @@ class KonnektaService : Service() {
             try {
                 val (uri, fname) = Files.receive(this, core, payloadKey, filename)
                 val mime = Files.mimeOf(fname)
-                Store.item(deviceId, "file", fname, "Salvato in Download/${Files.FOLDER}", target = uri.toString(), mime = mime)
+                Store.item(deviceId, "file", fname, "Salvato in ${Files.savedWhere(this)}", target = uri.toString(), mime = mime)
                 notify(N_SHARE, "File da ${name(core, deviceId)}", fname, Files.viewIntent(this, uri, mime))
             } catch (e: Exception) {
                 Log.w(TAG, "receive failed", e)
@@ -522,7 +522,7 @@ class KonnektaService : Service() {
                     try {
                         val (uri, fname) = Files.importReceived(this, data.optString("path"))
                         val mime = data.optString("mime").ifBlank { Files.mimeOf(fname) }
-                        Store.itemFrom(from, "file", fname, "Da $from con LocalSend · Download/${Files.FOLDER}", target = uri.toString(), mime = mime)
+                        Store.itemFrom(from, "file", fname, "Da $from con LocalSend · ${Files.savedWhere(this)}", target = uri.toString(), mime = mime)
                         notify(N_SHARE, "File da $from", fname, Files.viewIntent(this, uri, mime))
                     } catch (e: Exception) {
                         Log.w(TAG, "LocalSend import failed", e)

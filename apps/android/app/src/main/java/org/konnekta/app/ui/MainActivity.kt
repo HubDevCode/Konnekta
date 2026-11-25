@@ -79,6 +79,7 @@ val LocalUi = staticCompositionLocalOf<Ui> { error("no Ui") }
 
 class MainActivity : ComponentActivity() {
     private val askNotifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
+    private val askStorage = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
     private val askBluetooth = registerForActivityResult(ActivityResultContracts.RequestPermission()) { KonnektaService.refreshFeatures(this) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -86,6 +87,12 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        // Android 6-9: received files go to the public Download/Konnekta only with this permission.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q &&
+            checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            askStorage.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
         }
         Store.load(this)
         if (org.konnekta.app.state.Settings.bluetooth.value && !org.konnekta.app.service.BluetoothBridge.allowed(this)) {

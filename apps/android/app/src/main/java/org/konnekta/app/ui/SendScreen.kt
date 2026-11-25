@@ -625,7 +625,7 @@ private fun Received() {
         }
     }
     if (shown.isEmpty()) {
-        Hint("I file che ricevi compaiono qui: toccali per aprirli. Li trovi anche in Download/${Files.FOLDER}.")
+        Hint("I file che ricevi compaiono qui: toccali per aprirli. Li trovi anche in ${Files.savedWhere(LocalContext.current)}.")
         return
     }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { shown.forEach { InboxCard(it) } }
@@ -778,6 +778,7 @@ fun sendUris(ctx: android.content.Context, ui: Ui, deviceId: String, uris: List<
 @Composable
 fun BrowseScreen(current: JSONObject?, onBack: () -> Unit) {
     val ui = LocalUi.current
+    val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val id = current?.optString("id") ?: return onBack()
     val roots by Store.browseRoots.collectAsState()
@@ -839,7 +840,7 @@ fun BrowseScreen(current: JSONObject?, onBack: () -> Unit) {
                     path = p
                 } else {
                     req(JSONObject().put("action", "get").put("root", root).put("path", p))
-                    ui.toast("Scarico ${e.optString("name")} in Download/${Files.FOLDER}")
+                    ui.toast("Scarico ${e.optString("name")} in ${Files.savedWhere(ctx)}")
                 }
             }
         }
