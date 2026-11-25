@@ -134,7 +134,7 @@ pub fn request_key(
         .map_err(|e| e.0)?;
     let id = r["id"].as_str().ok_or("no request id")?.to_owned();
     say(&format!(
-        "Conferma sul telefono {device_name} con l'impronta…"
+        "Conferma sul telefono {device_name} (impronta, o «Approva» se non ce l'ha)…"
     ));
     c.set_timeout(Duration::from_secs(TIMEOUT + 5));
     let a = c

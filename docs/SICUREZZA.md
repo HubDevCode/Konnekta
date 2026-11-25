@@ -75,7 +75,7 @@ root più facile che con la password.
 | `konnekta-approve` (`/usr/lib/konnekta/`) | root, avviato da `pam_exec` | crea la richiesta, verifica la firma, decide |
 | `/etc/konnekta/approve/<utente>.pub` | file di root | la chiave pubblica P-256 del telefono: il punto di fiducia |
 | daemon Konnekta | l'utente | trasporta solo i messaggi tra helper e telefono |
-| app del telefono | — | mostra la richiesta e firma con una chiave che esce solo dall'hardware sicuro (Android Keystore, Secure Enclave), dopo l'impronta |
+| app del telefono | — | mostra la richiesta e firma con una chiave che non esce mai dall'hardware sicuro (Android Keystore, Secure Enclave), dopo l'impronta (o, sui telefoni senza, dopo «Approva»: vedi sotto) |
 
 **Come funziona.** L'helper legge gli elementi PAM, rifiuta `sshd`, i servizi non elencati
 (`sudo`, `sudo-i`, `polkit-1`) e le richieste fatte da un altro utente. Legge e controlla il file
@@ -92,7 +92,7 @@ cartella fino a `/` è di root e non scrivibile da altri. Il file viene aperto c
 deve essere lo stesso file controllato. Al massimo 16 KiB, una sola chiave EC P-256.
 
 **Registrazione** (`sudo konnekta approve enroll <telefono>`). Il telefono crea una nuova chiave
-che richiede l'impronta e firma il messaggio `konnekta-approve-enroll-v1`. Il comando verifica la
+(con l'impronta obbligatoria, se il telefono ne ha una registrata) e firma il messaggio `konnekta-approve-enroll-v1`. Il comando verifica la
 firma con la nuova chiave e chiede di **scrivere il codice che il telefono mostra**: i primi 8
 byte dello SHA-256 della chiave, che non vengono mai stampati nel terminale. Solo allora root
 scrive il file. `sudo konnekta approve enable sudo` aggiunge la riga PAM, con una copia di
@@ -114,7 +114,18 @@ registrazione da terminale, va fatta in una sessione di cui ti fidi.
 |---|---|---|
 | Rete | bloccare o ritardare: PAM chiede la password | leggere o modificare i messaggi (TLS con pinning), creare una firma valida |
 | Codice che gira come l'utente | sostituire il daemon, fermare l'approvazione, mandare richieste vere al telefono | firmare, cambiare il file della chiave senza una registrazione o un `sudo` dell'utente, puntare l'helper a un'altra chiave, riusare una vecchia firma |
-| Chi ha il telefono bloccato o sbloccato | rifiutare le richieste | approvare senza l'impronta |
+| Chi ha il telefono bloccato o sbloccato | rifiutare le richieste | approvare senza l'impronta (telefoni con impronta) |
+
+**Telefoni senza impronta** (vecchi, senza sensore o senza impronte registrate). Il modo si
+sceglie alla registrazione e vale per quella chiave:
+- *con blocco schermo* (PIN, sequenza, password): la chiave firma solo nei 30 secondi dopo lo
+  sblocco del telefono; se è bloccato, «Approva» chiede di confermare il blocco schermo.
+  Chi conosce il PIN, o ha in mano il telefono appena sbloccato, può approvare;
+- *senza blocco schermo*: basta il tocco su «Approva», anche dalla schermata di blocco. **Chi ha
+  il telefono in mano può approvare `sudo`.** Il telefono lo dice alla registrazione: imposta un
+  PIN e registra di nuovo il telefono.
+
+La chiave resta nell'hardware sicuro in ogni caso: senza il telefono non si può firmare.
 
 **Rischi aperti.**
 - *Approvazione per abitudine*: codice che gira come l'utente può avviare `sudo` e aspettare.
@@ -122,8 +133,9 @@ registrazione da terminale, va fatta in una sessione di cui ti fidi.
 - *Registrazione in una sessione compromessa*: codice dell'utente può digitare nel terminale il
   codice di una propria chiave (tastiera virtuale). Registra il telefono solo in una sessione di
   cui ti fidi.
-- *Nessuna attestazione della chiave*: il computer si fida che il telefono abbia creato la chiave
-  con l'impronta obbligatoria; un'app modificata potrebbe non farlo.
+- *Nessuna attestazione della chiave*: il computer non sa come la chiave viene sbloccata (impronta,
+  blocco schermo o solo «Approva») e si fida dell'app; un'app modificata potrebbe creare una
+  chiave senza protezione.
 - *polkit*: polkit non dice quale utente chiede, quindi `polkit-1` è permesso solo se
   `polkit-agent-helper-1` è setuid. Con polkit ≥ 126, che lo esegue come servizio di sistema (per
   esempio su Arch), `enable polkit-1` viene rifiutato.

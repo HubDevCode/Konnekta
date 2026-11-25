@@ -1,10 +1,14 @@
 package org.konnekta.app.approve
 
+import android.app.Activity
+import android.app.KeyguardManager
 import android.os.Build
 import android.os.Bundle
+import android.security.keystore.UserNotAuthenticatedException
 import android.util.Base64
 import android.view.WindowManager
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_STRONG
 import androidx.biometric.BiometricPrompt
 import androidx.compose.foundation.layout.Arrangement
@@ -66,6 +70,14 @@ object PendingApprovals {
 class ApproveActivity : FragmentActivity() {
     private val io = Executors.newSingleThreadExecutor()
 
+    /** UNLOCK keys: what to do once the user has confirmed the phone PIN (true) or gone back (false). */
+    private var afterUnlock: ((Boolean) -> Unit)? = null
+    private val confirmUnlock = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        val next = afterUnlock
+        afterUnlock = null
+        next?.invoke(it.resultCode == Activity.RESULT_OK)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // Another app drawing over this screen must not trick the user.
@@ -91,7 +103,11 @@ class ApproveActivity : FragmentActivity() {
                 } else if (r == null) {
                     finish()
                 } else {
-                    ApproveScreen(r, onApprove = { approve(r) }, onDeny = { answer(r, JSONObject().put("result", "denied")) })
+                    val mode = remember(r.id) {
+                        val keys = ApproveKeys(this)
+                        if (r.kind == "enroll") ApproveKeys.modeFor(this) else keys.mode(r.deviceId)
+                    }
+                    ApproveScreen(r, mode, onApprove = { approve(r) }, onDeny = { answer(r, JSONObject().put("result", "denied")) })
                 }
             }
         }
@@ -126,19 +142,19 @@ class ApproveActivity : FragmentActivity() {
                         b.optString("host"), b.optString("user"), b.optString("service"),
                         b.optString("tty"), b.optString("rhost"), b.optLong("time"), b.optString("nonce"),
                     )
-                    val signer = keys.signerForApproval(r.deviceId)
-                    prompt(r, signer, title = "Approva ${b.optString("service")}") { s ->
+                    val slot = keys.currentSlotOrThrow(r.deviceId)
+                    sign(r, keys, slot, title = "Approva ${b.optString("service")}") { s ->
                         s.update(msg)
                         val sig = s.sign()
                         answer(r, JSONObject().put("result", "approved").put("signature", Base64.encodeToString(sig, Base64.NO_WRAP)))
                     }
                 }
                 "enroll" -> {
-                    val (slot, signer, spki) = keys.newKey(r.deviceId)
+                    val (slot, spki) = keys.newKey(r.deviceId, ApproveKeys.modeFor(this))
                     val msg = ApproveMessage.enrollment(
                         b.optString("host"), b.optString("user"), ApproveKeys.sha256Hex(spki), b.optLong("time"), b.optString("nonce"),
                     )
-                    prompt(r, signer, title = "Usa questo telefono per sudo", onFail = { keys.discard(r.deviceId, slot) }) { s ->
+                    sign(r, keys, slot, title = "Usa questo telefono per sudo", onFail = { keys.discard(r.deviceId, slot) }) { s ->
                         s.update(msg)
                         val sig = s.sign()
                         val body = JSONObject().put("result", "approved")
@@ -162,7 +178,62 @@ class ApproveActivity : FragmentActivity() {
         }
     }
 
-    /** Strong biometric only: the phone PIN can never sign. */
+    /**
+     * Sign with the key in `slot`, unlocked the way it was made: fingerprint, recent unlock of the
+     * phone (else confirm the PIN now), or nothing more than the Approve tap.
+     */
+    private fun sign(
+        r: PendingApprovals.Request,
+        keys: ApproveKeys,
+        slot: String,
+        title: String,
+        onFail: () -> Unit = {},
+        onSigned: (java.security.Signature) -> Unit,
+    ) {
+        when (keys.mode(r.deviceId, slot)) {
+            ApproveKeys.Mode.BIOMETRIC -> prompt(r, keys.signer(r.deviceId, slot), title, onFail, onSigned)
+            ApproveKeys.Mode.TAP -> signNow(r, { keys.signer(r.deviceId, slot) }, onFail, onSigned)
+            ApproveKeys.Mode.UNLOCK -> try {
+                signNow(r, { keys.signer(r.deviceId, slot) }, onFail, onSigned, rethrowLocked = true)
+            } catch (e: UserNotAuthenticatedException) {
+                val km = getSystemService(KeyguardManager::class.java)
+                @Suppress("DEPRECATION")
+                val intent = km.createConfirmDeviceCredentialIntent(title, "${r.body.optString("user")} su ${r.body.optString("host")}")
+                    ?: return run { onFail(); error(r, "the phone has no lock screen any more: register the phone again") }
+                afterUnlock = { ok ->
+                    if (ok) {
+                        signNow(r, { keys.signer(r.deviceId, slot) }, onFail, onSigned)
+                    } else {
+                        // Back from the PIN screen: stay on the request, the user can still deny.
+                        onFail()
+                    }
+                }
+                confirmUnlock.launch(intent)
+            }
+        }
+    }
+
+    /** Sign right away (TAP keys, or UNLOCK keys after a recent unlock). */
+    private fun signNow(
+        r: PendingApprovals.Request,
+        signer: () -> java.security.Signature,
+        onFail: () -> Unit,
+        onSigned: (java.security.Signature) -> Unit,
+        rethrowLocked: Boolean = false,
+    ) {
+        try {
+            onSigned(signer())
+        } catch (e: UserNotAuthenticatedException) {
+            if (rethrowLocked) throw e
+            onFail()
+            error(r, "the phone was not unlocked")
+        } catch (e: Exception) {
+            onFail()
+            error(r, e.message ?: "signing failed")
+        }
+    }
+
+    /** Strong biometric only: the phone PIN can never sign a BIOMETRIC key. */
     private fun prompt(
         r: PendingApprovals.Request,
         signer: java.security.Signature,
@@ -226,7 +297,7 @@ private fun CodeScreen(code: String, onDone: () -> Unit) {
 }
 
 @Composable
-private fun ApproveScreen(r: PendingApprovals.Request, onApprove: () -> Unit, onDeny: () -> Unit) {
+private fun ApproveScreen(r: PendingApprovals.Request, mode: ApproveKeys.Mode, onApprove: () -> Unit, onDeny: () -> Unit) {
     val b = r.body
     var busy by remember { mutableStateOf(false) }
     Surface(Modifier.fillMaxSize()) {
@@ -235,7 +306,17 @@ private fun ApproveScreen(r: PendingApprovals.Request, onApprove: () -> Unit, on
             if (r.kind == "enroll") {
                 Text("Usare questo telefono per approvare sudo?", style = MaterialTheme.typography.headlineSmall)
                 Text("Utente ${b.optString("user")} sul computer ${b.optString("host")} (${r.deviceName}).")
-                Text("Dopo l'impronta il telefono mostra un codice da confrontare con quello del computer.")
+                Text(
+                    when (mode) {
+                        ApproveKeys.Mode.BIOMETRIC -> "Dopo l'impronta il telefono mostra un codice da confrontare con quello del computer."
+                        ApproveKeys.Mode.UNLOCK -> "Questo telefono non ha un'impronta registrata: approverai le richieste da questa pagina, " +
+                            "confermando il blocco schermo se il telefono non è appena stato sbloccato. Dopo, il telefono mostra un codice " +
+                            "da confrontare con quello del computer."
+                        ApproveKeys.Mode.TAP -> "Questo telefono non ha né impronta né blocco schermo: chiunque lo tenga in mano potrà approvare " +
+                            "sudo con un tocco su «Approva». Imposta un PIN e registra di nuovo il telefono per più sicurezza. Dopo, il telefono " +
+                            "mostra un codice da confrontare con quello del computer."
+                    },
+                )
             } else {
                 Text("Approvare ${b.optString("service")}?", style = MaterialTheme.typography.headlineSmall)
                 Text("Utente: ${b.optString("user")}")
@@ -244,7 +325,11 @@ private fun ApproveScreen(r: PendingApprovals.Request, onApprove: () -> Unit, on
                 if (b.optString("rhost").isNotEmpty()) Text("Da remoto: ${b.optString("rhost")}")
                 Text("Ora: ${DateFormat.getTimeInstance().format(Date(b.optLong("time") * 1000))}")
                 Text(
-                    "Approva solo se hai appena scritto tu il comando.",
+                    "Approva solo se hai appena scritto tu il comando." + when (mode) {
+                        ApproveKeys.Mode.BIOMETRIC -> ""
+                        ApproveKeys.Mode.UNLOCK -> " Se il telefono è bloccato ti chiederà il PIN."
+                        ApproveKeys.Mode.TAP -> ""
+                    },
                     style = MaterialTheme.typography.bodySmall,
                 )
             }

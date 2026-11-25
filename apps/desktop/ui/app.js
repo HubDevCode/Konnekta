@@ -1164,7 +1164,7 @@ const PERMISSION_LABELS = {
   deck: 'Azioni del Mobile Deck', microphone: 'Microfono', camera: 'Fotocamera e webcam', desktop: 'Desktop remoto',
   systemAudio: 'Audio di sistema', doNotDisturb: 'Sincronizzazione Non disturbare', screenshots: 'Screenshot',
   findMyPhone: 'Trova il dispositivo', browseFiles: 'Sfoglia i file del computer', messages: 'SMS',
-  approve: 'Approvazione con impronta (sudo)',
+  approve: 'Approvazione di sudo dal telefono',
 };
 
 /** Devices found on the network, asked again at most every 5 seconds. */
@@ -2107,7 +2107,7 @@ function passwordModal(title, intro, okLabel, onOk) {
 async function enrollPhone(d) {
   const close = modal('Conferma sul telefono', h('div', { class: 'col', style: 'align-items:center;text-align:center' },
     h('div', { class: 'empty-ic' }, icon('lock', 34)),
-    h('p', {}, `Su ${d.name} appare la richiesta: confermala con l'impronta.`)));
+    h('p', {}, `Su ${d.name} appare la richiesta: confermala con l'impronta (sui telefoni senza impronta, con «Approva»).`)));
   let r;
   try {
     r = await invoke('approve_enroll', { deviceId: d.id });
@@ -2136,13 +2136,13 @@ async function approveCard() {
   return h('div', { class: 'card' },
     cardHead('lock', 'Approva sudo con l\'impronta', null, h('span', { class: `chip ${on ? 'ok' : 'warn'}` }, on ? 'attiva' : 'non attiva')),
     on
-      ? [h('p', { class: 'small' }, `sudo chiede prima a ${st.device}: confermi con l'impronta. La password resta sempre disponibile.`),
-        h('div', { class: 'card-foot' }, btn('Disattiva', () => passwordModal('Disattivare?', h('p', {}, 'sudo tornerà a chiedere solo la password. Il telefono potrebbe chiedere l\'impronta un\'ultima volta.'),
+      ? [h('p', { class: 'small' }, `sudo chiede prima a ${st.device}: confermi con l'impronta, o con «Approva» se il telefono non ce l'ha. La password resta sempre disponibile.`),
+        h('div', { class: 'card-foot' }, btn('Disattiva', () => passwordModal('Disattivare?', h('p', {}, 'sudo tornerà a chiedere solo la password. Il telefono potrebbe chiedere conferma un\'ultima volta.'),
           'Disattiva', async (password) => {
             await invoke('approve_disable', { password });
             toast('Approvazione disattivata');
           }), 'danger'))]
-      : [h('p', { class: 'small muted' }, 'Quando usi sudo il telefono chiede l\'impronta al posto della password (che resta sempre disponibile).'),
+      : [h('p', { class: 'small muted' }, 'Quando usi sudo il telefono chiede l\'impronta al posto della password (che resta sempre disponibile). Sui telefoni vecchi o senza impronta arriva la notifica e approvi con un tocco su «Approva».'),
         phones.length
           ? h('div', { class: 'card-foot' },
             phones.length > 1 ? h('select', { onchange: (e) => { pick = e.target.value; } }, phones.map((d) => h('option', { value: d.id }, d.name))) : null,

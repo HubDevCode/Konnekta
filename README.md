@@ -188,7 +188,9 @@ konnekta waybar                     # stato per un modulo Waybar
 
 Dall'app desktop: **Configurazione → Approva sudo con l'impronta → Attiva**. Confermi con
 l'impronta sul telefono, controlli che il codice sia uguale e il sistema chiede la password una
-volta sola (serve un agente polkit, presente in ogni desktop). Da terminale:
+volta sola (serve un agente polkit, presente in ogni desktop). Sui telefoni vecchi o senza
+impronta arriva la notifica e approvi dalla pagina della richiesta con «Approva» (con il PIN se
+il telefono è bloccato). Da terminale:
 
 ```bash
 cargo build --release -p konnekta-approve

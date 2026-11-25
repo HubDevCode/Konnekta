@@ -101,7 +101,7 @@ val PERMISSION_LABELS = mapOf(
     "findMyPhone" to "Trova il dispositivo",
     "browseFiles" to "Sfoglia i file del computer",
     "messages" to "SMS",
-    "approve" to "Approvazione con impronta (sudo)",
+    "approve" to "Approvazione di sudo dal telefono",
 )
 
 /**
