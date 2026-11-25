@@ -247,6 +247,31 @@ Tutti i diritti riservati. Il codice è visibile, ma copiarlo, modificarlo, rico
 
 Le novità di ogni versione, dalla più recente.
 
+### Novità della 2.6.2
+
+**L'app Android funziona da Android 6.0 in su** (prima serviva Android 9)
+- Versione per i telefoni a 32 bit (`armeabi-v7a`), oltre a quelle a 64 bit.
+- Sulle versioni vecchie le funzioni che Android non permette restano spente invece di fallire: lo schermo del
+  telefono va senza audio sotto Android 10, e il computer mostra «Rispondi» solo da Android 8 e «Rifiuta» e
+  «Riaggancia» solo da Android 9.
+- Android 6 e 7: le notifiche arrivano con suono e banner; «Rispondi» alle notifiche dal computer funziona di nuovo;
+  l'interruttore «Chiamate» si attiva.
+- La richiesta di approvazione di `sudo` compare anche a schermo bloccato, e «Trova il dispositivo» suona finché
+  non la fermi.
+- Android 6-9: i file ricevuti vanno nella cartella pubblica Download/Konnekta.
+
+**Approvare `sudo` senza impronta**
+- Sui telefoni vecchi o senza impronta arriva la notifica e approvi dalla pagina della richiesta con «Approva»:
+  con il PIN se il telefono è bloccato, oppure con un solo tocco se il telefono non ha un blocco schermo (il
+  telefono lo dice alla registrazione). Dettagli in [docs/SICUREZZA.md](docs/SICUREZZA.md#approvazione-di-sudo-con-limpronta).
+
+**Correzioni**
+- Telefono, Impostazioni: gli interruttori degli accessi del telefono (Chiamate, SMS, Screenshot, Microfono,
+  Fotocamera, Media, Non disturbare) si possono di nuovo spegnere. Aprono la pagina di Konnekta nelle impostazioni
+  di Android, perché un'app non può togliersi da sola un permesso. Se un permesso era stato rifiutato per sempre,
+  ora l'interruttore porta lì invece di non fare nulla.
+- Cavo USB: un errore passeggero di `adb` non costringe più il telefono alle porte fisse fino al riavvio.
+
 ### Novità della 2.6.1
 
 **Funzioni dal telefono di nuovo funzionanti (computer Linux)**

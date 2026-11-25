@@ -11,8 +11,8 @@ android {
         applicationId = "org.konnekta.app"
         minSdk = 23
         targetSdk = 36
-        versionCode = 9
-        versionName = "2.6.1"
+        versionCode = 10
+        versionName = "2.6.2"
         // The Rust core (libkonnekta_ffi.so) is built by scripts/build-android.sh.
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64") }
     }

@@ -20,6 +20,8 @@ Legenda: ✅ supportato · ⚠️ con requisiti/limiti · ❌ non possibile con 
 
 ## Telefono
 
+Android: dalla 6.0 (API 23) in su.
+
 | Funzione | Android | iOS |
 |---|---|---|
 | Discovery, pairing, TLS, permessi | ✅ | ✅ (app in primo piano) |
@@ -27,12 +29,12 @@ Legenda: ✅ supportato · ⚠️ con requisiti/limiti · ❌ non possibile con 
 | Touchpad, tastiera, presentazione, Mobile Deck, comandi, media del PC | ✅ | ✅ |
 | Mirroring notifiche (rispondi, azioni, ignora) | ✅ accesso notifiche | ❌ |
 | Chiamate: avviso / silenzia | ✅ | ❌ |
-| Chiamate: rispondi / rifiuta | ✅ Android 9+ | ❌ |
+| Chiamate: rispondi / rifiuta | ✅ rispondi da Android 8, rifiuta e riaggancia da Android 9 | ❌ |
 | Non disturbare | ✅ accesso "Non disturbare" | ❌ |
 | Screenshot automatici | ✅ | ✅ (Foto) |
 | Microfono → PC | ✅ | ✅ |
 | Fotocamera → PC | ✅ Camera2 + H.264 | 🚧 |
-| Schermo del telefono → PC | ✅ MediaProjection | ❌ (ReplayKit solo con estensione broadcast) |
+| Schermo del telefono → PC | ✅ MediaProjection (con l'audio da Android 10) | ❌ (ReplayKit solo con estensione broadcast) |
 | Desktop remoto del PC | ✅ decoder hardware | 🚧 |
 | Audio del PC | ✅ | ✅ |
 | Controllo media del telefono dal PC | ✅ | ❌ |
