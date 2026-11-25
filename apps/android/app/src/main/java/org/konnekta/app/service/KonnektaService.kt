@@ -146,6 +146,7 @@ class KonnektaService : Service() {
             .setContentTitle("Konnekta")
             .setContentText("Pronto a collegarsi ai tuoi computer")
             .setContentIntent(openApp())
+            .setPriority(NotificationCompat.PRIORITY_MIN)
             .setOngoing(true)
             .build()
         ServiceCompat.startForeground(this, N_SERVICE, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
@@ -380,6 +381,7 @@ class KonnektaService : Service() {
         )
         .setContentIntent(openApp())
         .addAction(0, "Invia appunti", org.konnekta.app.ui.ClipboardSendActivity.pending(this))
+        .setPriority(NotificationCompat.PRIORITY_MIN)
         .setOngoing(true)
         .build()
 
@@ -581,6 +583,7 @@ class KonnektaService : Service() {
                     .setContentTitle(title)
                     .setContentText("${body.optString("user")} su ${body.optString("host")}")
                     .setPriority(NotificationCompat.PRIORITY_HIGH)
+                    .setDefaults(NotificationCompat.DEFAULT_ALL) // sound and heads-up below Android 8 (no channels)
                     .setCategory(NotificationCompat.CATEGORY_CALL)
                     .setContentIntent(open)
                     .setFullScreenIntent(open, true)
@@ -684,6 +687,7 @@ class KonnektaService : Service() {
             .setContentText(text)
             .setContentIntent(tap)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setDefaults(NotificationCompat.DEFAULT_ALL) // sound and heads-up below Android 8 (no channels)
             .setAutoCancel(true)
         actions.forEach { (label, pi) -> b.addAction(0, label, pi) }
         nm.notify(id, b.build())
