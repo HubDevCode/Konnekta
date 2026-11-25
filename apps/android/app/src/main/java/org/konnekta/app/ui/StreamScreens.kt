@@ -104,7 +104,7 @@ fun rememberStreamStarter(): (StreamRequest) -> Unit {
     return { r ->
         val needed = buildList {
             if (r.plugin == "camera") add(Manifest.permission.CAMERA)
-            if (r.plugin in setOf("microphone", "phoneaudio") || r.params.optBoolean("withAudio")) add(Manifest.permission.RECORD_AUDIO)
+            if (r.plugin in setOf("microphone", "phoneaudio") || (r.params.optBoolean("withAudio") && android.os.Build.VERSION.SDK_INT >= 29)) add(Manifest.permission.RECORD_AUDIO)
         }.toTypedArray()
         waiting = r
         // The permission step always runs (instantly when already granted) so both paths share one flow.

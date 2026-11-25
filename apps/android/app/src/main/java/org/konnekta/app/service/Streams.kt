@@ -13,6 +13,7 @@ import android.media.MediaCodecInfo
 import android.media.MediaFormat
 import android.media.MediaRecorder
 import android.media.projection.MediaProjection
+import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.util.Log
@@ -162,6 +163,11 @@ object Streams {
                         .put("reason", "il telefono è collegato via Bluetooth: audio e video non sono disponibili")) }.start()
                     return null
                 }
+                if (plugin == "phoneaudio" && Build.VERSION.SDK_INT < 29) {
+                    Thread { send(deviceId, plugin, JSONObject().put("action", "stop").put("session", session)
+                        .put("reason", "l'audio del telefono serve Android 10 o successivo")) }.start()
+                    return null
+                }
                 val r = StreamRequest(deviceId, deviceName, plugin, session, params)
                 pending.update { l -> l.filterNot { it.key == r.key } + r }
                 return r
@@ -246,7 +252,7 @@ object Streams {
         onChanged?.invoke()
         send(r.deviceId, r.plugin, JSONObject().put("action", "offer").put("session", r.session).put("port", port).put("params", out))
         // "Screen with audio": the phone's sound goes as its own stream, on the same capture consent.
-        if (r.plugin == "phonescreen" && r.params.optBoolean("withAudio") && projection != null) {
+        if (r.plugin == "phonescreen" && r.params.optBoolean("withAudio") && projection != null && Build.VERSION.SDK_INT >= 29) {
             sharedAudio.add(r.deviceId)
             accept(ctx, core, newRequest(r.deviceId, r.deviceName, "phoneaudio", JSONObject().put("sharedProjection", true)), projection)
         }

@@ -140,7 +140,9 @@ fun ControlScreen(current: JSONObject?, open: (Route) -> Unit) {
     val start = rememberStreamStarter()
     val prefs = remember { ctx.getSharedPreferences("konnekta", android.content.Context.MODE_PRIVATE) }
     var front by remember { mutableStateOf(prefs.getBoolean("cameraFront", false)) }
-    var screenAudio by remember { mutableStateOf(prefs.getBoolean("screenAudio", true)) }
+    // Capturing the phone's sound needs Android 10: below it the screen goes alone.
+    val audioOk = android.os.Build.VERSION.SDK_INT >= 29
+    var screenAudio by remember { mutableStateOf(audioOk && prefs.getBoolean("screenAudio", true)) }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         if (current == null) {
             Hint("Associa un computer per controllarlo da qui.")
@@ -186,10 +188,10 @@ fun ControlScreen(current: JSONObject?, open: (Route) -> Unit) {
                         androidx.compose.material3.Switch(screenAudio, {
                             screenAudio = it
                             prefs.edit().putBoolean("screenAudio", it).apply()
-                        }, enabled = !on("phonescreen"), modifier = Modifier.padding(start = 4.dp))
+                        }, enabled = audioOk && !on("phonescreen"), modifier = Modifier.padding(start = 4.dp))
                     }
                 },
-            ) { toggle("phonescreen", JSONObject().put("withAudio", screenAudio)) },
+            ) { toggle("phonescreen", JSONObject().put("withAudio", screenAudio && audioOk)) },
             Fn(Icons.Filled.Headphones, "Audio del telefono",
                 if (on("phoneaudio") && !on("phonescreen")) "Dal vivo · tocca per fermare" else "Musica, video e giochi del telefono dalle casse di $name",
                 enabled = android.os.Build.VERSION.SDK_INT >= 29,
