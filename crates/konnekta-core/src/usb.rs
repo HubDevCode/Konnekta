@@ -148,12 +148,19 @@ pub async fn reverse(serial: &Arc<str>, local: u16) -> Result<(u16, Mapping)> {
                 let port = reported_port(&out)?;
                 return Ok((port, mapping(port)));
             }
-            res => {
+            Ok(_) => {
                 // Android 6: adbd accepts tcp:0 and listens on some port, but
-                // never says which. Drop that listener and choose the port.
-                tracing::info!(%serial, error = ?res.err(), "adb reverse tcp:0 unsupported, choosing the port");
+                // never says which. Drop that listener and choose the port,
+                // now and for the rest of this run.
+                tracing::info!(%serial, "adb reverse tcp:0 unsupported, choosing the port");
                 let _ = adb(&["-s", serial, "reverse", "--remove", "tcp:0"]).await;
                 NO_REVERSE_TCP0.lock().unwrap().push(serial.clone());
+            }
+            Err(e) => {
+                // Maybe only a passing failure (device offline, adb restarting):
+                // choose the port this time, try tcp:0 again next time.
+                tracing::info!(%serial, error = %e, "adb reverse tcp:0 failed, choosing the port this time");
+                let _ = adb(&["-s", serial, "reverse", "--remove", "tcp:0"]).await;
             }
         }
     }
