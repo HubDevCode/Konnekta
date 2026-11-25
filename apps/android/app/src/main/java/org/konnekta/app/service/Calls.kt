@@ -27,12 +27,13 @@ import java.util.concurrent.Executors
 class Calls(private val ctx: Context) {
     companion object {
         const val TAG = "Konnekta"
-        val PERMISSIONS = arrayOf(
-            Manifest.permission.READ_PHONE_STATE,
-            Manifest.permission.READ_CALL_LOG,
-            Manifest.permission.READ_CONTACTS,
-            Manifest.permission.ANSWER_PHONE_CALLS,
-        )
+        /** ANSWER_PHONE_CALLS exists from Android 8: below it the permission would never be granted. */
+        val PERMISSIONS = buildList {
+            add(Manifest.permission.READ_PHONE_STATE)
+            add(Manifest.permission.READ_CALL_LOG)
+            add(Manifest.permission.READ_CONTACTS)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) add(Manifest.permission.ANSWER_PHONE_CALLS)
+        }.toTypedArray()
     }
 
     private val io = Executors.newSingleThreadExecutor()
