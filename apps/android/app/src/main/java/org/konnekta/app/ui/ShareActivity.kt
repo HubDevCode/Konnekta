@@ -111,14 +111,11 @@ class ShareActivity : ComponentActivity() {
         }
     }
 
-    @Suppress("DEPRECATION")
-    private fun stream(i: Intent): Uri? =
-        if (Build.VERSION.SDK_INT >= 33) i.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java) else i.getParcelableExtra(Intent.EXTRA_STREAM)
+    // IntentCompat: the typed getters are used only from Android 14 (buggy on 13).
+    private fun stream(i: Intent): Uri? = androidx.core.content.IntentCompat.getParcelableExtra(i, Intent.EXTRA_STREAM, Uri::class.java)
 
-    @Suppress("DEPRECATION")
     private fun streams(i: Intent): List<Uri> =
-        (if (Build.VERSION.SDK_INT >= 33) i.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java)
-        else i.getParcelableArrayListExtra(Intent.EXTRA_STREAM)).orEmpty()
+        androidx.core.content.IntentCompat.getParcelableArrayListExtra(i, Intent.EXTRA_STREAM, Uri::class.java).orEmpty()
 
     private fun toast(msg: String) = Toast.makeText(applicationContext, msg, Toast.LENGTH_SHORT).show()
 }

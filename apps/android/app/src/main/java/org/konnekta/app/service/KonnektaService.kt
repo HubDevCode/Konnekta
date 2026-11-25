@@ -407,8 +407,7 @@ class KonnektaService : Service() {
             Streams.decline(r)
             return
         }
-        @Suppress("DEPRECATION")
-        val data: Intent? = if (Build.VERSION.SDK_INT >= 33) i.getParcelableExtra("projection", Intent::class.java) else i.getParcelableExtra("projection")
+        val data: Intent? = androidx.core.content.IntentCompat.getParcelableExtra(i, "projection", Intent::class.java)
         val projection = data?.let {
             getSystemService(android.media.projection.MediaProjectionManager::class.java).getMediaProjection(i.getIntExtra("resultCode", 0), it)
         }
