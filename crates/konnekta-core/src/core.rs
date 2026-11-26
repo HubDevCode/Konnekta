@@ -65,6 +65,10 @@ fn backoff(base: Duration, n: u32, max: Duration) -> Duration {
 }
 /// A device announced on the network this recently counts as reachable there.
 const SEEN_ON_NETWORK: Duration = Duration::from_secs(150);
+/// A paired device that does not answer (computer off, phone away) is
+/// dialed less and less often, up to this; seen on the network, or after
+/// a network change, it is dialed at once again.
+const RECONNECT_MAX: Duration = Duration::from_secs(120);
 
 pub(crate) struct LinkEntry {
     handle: DeviceHandle,
@@ -106,6 +110,8 @@ pub(crate) struct Inner {
     udp: Mutex<Option<Arc<UdpSocket>>>,
     adapter_udp: Mutex<[Option<Arc<UdpSocket>>; 2]>,
     dialing: Mutex<HashMap<String, Instant>>,
+    /// Reconnections to a paired device that failed in a row.
+    dial_failures: Mutex<HashMap<String, u32>>,
     pending: Mutex<HashMap<IpAddr, usize>>,
     discovered: Mutex<HashMap<String, (Announcement, Instant)>>,
     guard: Mutex<RequestGuard>,
@@ -205,6 +211,7 @@ impl KonnektaBuilder {
             udp: Mutex::new(None),
             adapter_udp: Mutex::new([None, None]),
             dialing: Mutex::default(),
+            dial_failures: Mutex::default(),
             pending: Mutex::default(),
             discovered: Mutex::default(),
             guard: Mutex::default(),
@@ -646,6 +653,7 @@ impl Konnekta {
     pub async fn refresh(&self) {
         self.inner.announce().await;
         self.inner.dialing.lock().unwrap().clear();
+        self.inner.dial_failures.lock().unwrap().clear();
         self.inner.clone().dial_paired().await;
     }
 
@@ -1358,7 +1366,12 @@ impl Inner {
     async fn dial_paired(self: Arc<Self>) {
         let cfg = self.config.read().unwrap().clone();
         let trusted: Vec<TrustedDevice> = self.trust.lock().unwrap().all().cloned().collect();
+        let every = Duration::from_secs(cfg.reconnect_interval_secs.max(1));
         for d in trusted {
+            if self.links.lock().unwrap().contains_key(&d.device_id) {
+                // Linked: the next loss starts again from the short wait.
+                self.dial_failures.lock().unwrap().remove(&d.device_id);
+            }
             if !cfg.speaks(d.protocol) || !self.wants(&d.device_id, Transport::Wifi) {
                 continue;
             }
@@ -1396,13 +1409,27 @@ impl Inner {
                             .dial(proto, Some(d.device_id.clone()), addr)
                             .await
                         {
-                            Ok(()) => return,
+                            Ok(()) => {
+                                this.dial_failures.lock().unwrap().remove(&d.device_id);
+                                return;
+                            }
                             Err(e) => {
                                 tracing::debug!(device = %d.name, %addr, "reconnect failed: {e:#}")
                             }
                         }
                     }
                 }
+                // Nowhere to be reached: wait longer before the next try.
+                let wait = {
+                    let mut f = this.dial_failures.lock().unwrap();
+                    let n = f.entry(d.device_id.clone()).or_default();
+                    *n = n.saturating_add(1);
+                    backoff(every, *n - 1, RECONNECT_MAX)
+                };
+                this.dialing
+                    .lock()
+                    .unwrap()
+                    .insert(format!("paired:{}", d.device_id), Instant::now() + wait);
             });
         }
     }
@@ -2079,6 +2106,7 @@ impl Inner {
         let this = self.clone();
         tokio::spawn(async move {
             this.dialing.lock().unwrap().clear();
+            this.dial_failures.lock().unwrap().clear();
             this.clone().dial_paired().await;
             if cfg!(not(any(target_os = "android", target_os = "ios"))) {
                 this.usb_tick().await;
