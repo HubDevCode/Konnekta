@@ -28,7 +28,7 @@ use tokio::runtime::Runtime;
 
 enum Stream {
     Writer(Arc<FrameSender>),
-    Reader(Arc<Mutex<mpsc::Receiver<Frame>>>),
+    Reader(Arc<Mutex<tokio::sync::mpsc::Receiver<Frame>>>),
     Pending,
 }
 
@@ -182,19 +182,14 @@ impl Handle {
             // A short queue: when the app falls behind, reading pauses and
             // TCP slows the sender down. Frames are never dropped here (a
             // missing video frame breaks the picture until the next keyframe).
-            let (tx, rx) = mpsc::sync_channel::<Frame>(8);
+            // The reading task waits for room (no polling: it sleeps until
+            // the app takes a frame).
+            let (tx, rx) = tokio::sync::mpsc::channel::<Frame>(8);
             let mut ch = ch;
             tokio::spawn(async move {
-                while let Ok(Some(mut f)) = read_frame(&mut ch).await {
-                    loop {
-                        match tx.try_send(f) {
-                            Ok(()) => break,
-                            Err(mpsc::TrySendError::Full(back)) => {
-                                f = back;
-                                tokio::time::sleep(Duration::from_millis(2)).await;
-                            }
-                            Err(mpsc::TrySendError::Disconnected(_)) => return,
-                        }
+                while let Ok(Some(f)) = read_frame(&mut ch).await {
+                    if tx.send(f).await.is_err() {
+                        return;
                     }
                 }
             });
@@ -451,11 +446,13 @@ pub unsafe extern "C" fn konnekta_stream_read(
     };
     let frame = {
         // The map lock is released here: waiting only blocks this channel.
-        let rx = rx.lock().unwrap();
-        match rx.recv_timeout(Duration::from_millis(timeout_ms.max(0) as u64)) {
-            Ok(f) => f,
-            Err(mpsc::RecvTimeoutError::Timeout) => return 0,
-            Err(mpsc::RecvTimeoutError::Disconnected) => return -1,
+        let mut rx = rx.lock().unwrap();
+        let wait = Duration::from_millis(timeout_ms.max(0) as u64);
+        // Called from an app thread, never from the runtime's own threads.
+        match h.rt.block_on(tokio::time::timeout(wait, rx.recv())) {
+            Ok(Some(f)) => f,
+            Err(_) => return 0,
+            Ok(None) => return -1,
         }
     };
     if frame.data.len() > cap || buf.is_null() {
