@@ -31,6 +31,8 @@ use tokio::task::AbortHandle;
 
 const DIAL_INTERVAL: Duration = Duration::from_secs(5);
 const SEND_QUEUE: usize = 512;
+/// Pause after a socket error before trying the socket again.
+const ERROR_PAUSE: Duration = Duration::from_millis(100);
 const JANITOR_INTERVAL: Duration = Duration::from_secs(2);
 const USB_INTERVAL: Duration = Duration::from_secs(3);
 /// Wait after a failed USB dial (phone without Konnekta running).
@@ -482,6 +484,12 @@ impl Konnekta {
                             let mut buf = vec![0u8; 16 * 1024];
                             loop {
                                 let Ok((n, from)) = sock.recv_from(&mut buf).await else {
+                                    // A lasting error would fail again at
+                                    // once: pause instead of spinning.
+                                    if weak.strong_count() == 0 {
+                                        break;
+                                    }
+                                    tokio::time::sleep(ERROR_PAUSE).await;
                                     continue;
                                 };
                                 let Some(inner) = weak.upgrade() else { break };
@@ -836,8 +844,18 @@ impl Konnekta {
 
 async fn accept_loop(weak: std::sync::Weak<Inner>, listener: TcpListener, proto: Protocol) {
     loop {
-        let Ok((tcp, from)) = listener.accept().await else {
-            continue;
+        let (tcp, from) = match listener.accept().await {
+            Ok(c) => c,
+            Err(e) => {
+                // Out of file descriptors and the like fail again at once:
+                // pause instead of spinning the CPU.
+                tracing::debug!("{} accept failed: {e}", proto.label());
+                if weak.strong_count() == 0 {
+                    break;
+                }
+                tokio::time::sleep(ERROR_PAUSE).await;
+                continue;
+            }
         };
         let Some(inner) = weak.upgrade() else { break };
         let Some(guard) = inner.clone().admit_pending(from.ip()) else {
