@@ -503,16 +503,33 @@ fn version_parts(v: &str) -> Vec<u64> {
         .collect()
 }
 
-/// The release asset built for this system: a plain executable on Linux, the
-/// `-setup.exe` installer on Windows.
+/// The AppImage this app runs from, if it does (`$APPIMAGE`, set by the
+/// AppImage runtime). Its own files are a read-only mount: an update
+/// replaces the AppImage file itself.
+fn appimage_file() -> Option<std::path::PathBuf> {
+    let p = std::path::PathBuf::from(std::env::var_os("APPIMAGE")?);
+    p.is_file().then_some(p)
+}
+
+/// The release asset built for this system: the AppImage when running as
+/// one, else a plain executable on Linux, the `-setup.exe` installer on
+/// Windows.
 fn pick_asset(assets: &[Value]) -> Option<(String, String)> {
     let arch = std::env::consts::ARCH;
+    // Tauri names AppImages by Debian architecture.
+    let appimage_arch = match arch {
+        "x86_64" => "amd64",
+        a => a,
+    };
+    let appimage = appimage_file().is_some();
     assets.iter().find_map(|a| {
         let name = a["name"].as_str()?;
         let url = a["browser_download_url"].as_str()?;
         let n = name.to_lowercase();
         let ok = if cfg!(target_os = "windows") {
             n.ends_with("-setup.exe")
+        } else if cfg!(target_os = "linux") && appimage {
+            n.ends_with(".appimage") && n.contains(appimage_arch)
         } else if cfg!(target_os = "linux") {
             n.starts_with("konnekta-desktop")
                 && n.contains("linux")
@@ -598,15 +615,45 @@ async fn install_update(app: AppHandle) -> Result<(), String> {
         #[cfg(not(target_os = "windows"))]
         {
             use std::os::unix::fs::PermissionsExt;
-            let tmp = exe.with_extension("update");
-            std::fs::write(&tmp, &bytes).map_err(|e| format!("cartella non scrivibile: {e}"))?;
+            // An AppImage runs from a read-only mount: replace the AppImage
+            // file, under the new version's name (the launcher entries follow
+            // it at the next start).
+            let (target, old) = match appimage_file() {
+                Some(img) => {
+                    let dir = img
+                        .parent()
+                        .map(std::path::Path::to_path_buf)
+                        .unwrap_or_default();
+                    (dir.join(&name), Some(img))
+                }
+                None => (exe.clone(), None),
+            };
+            let dir = target
+                .parent()
+                .map(std::path::Path::to_path_buf)
+                .unwrap_or_default();
+            let tmp = dir.join(format!(".{name}.update"));
+            std::fs::write(&tmp, &bytes).map_err(|e| {
+                if old.is_none() {
+                    format!(
+                        "Konnekta è installato in {} e non può aggiornarsi da solo ({e}): \
+                         aggiornalo con il gestore dei pacchetti o scarica la nuova versione",
+                        dir.display()
+                    )
+                } else {
+                    format!("cartella {} non scrivibile: {e}", dir.display())
+                }
+            })?;
             std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))
                 .map_err(|e| e.to_string())?;
-            std::fs::rename(&tmp, &exe).map_err(|e| e.to_string())?;
+            std::fs::rename(&tmp, &target).map_err(|e| e.to_string())?;
+            if let Some(old) = old.filter(|o| *o != target) {
+                let _ = std::fs::remove_file(old);
+            }
             konnekta_platform::host::command("sh")
                 .arg("-c")
                 .arg("sleep 1; exec \"$0\"")
-                .arg(&exe)
+                .arg(&target)
                 .spawn()
                 .map_err(|e| e.to_string())?;
         }

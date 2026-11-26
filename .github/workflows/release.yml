@@ -97,7 +97,8 @@ jobs:
           tauriScript: tauri
           releaseId: ${{ needs.create-release.outputs.id }}
           args: ${{ matrix.args }}
-      # Plain executable + checksum: what the in-app updater downloads on Linux.
+      # Plain executable + checksum: what the in-app updater downloads on Linux
+      # (outside an AppImage).
       - name: Updater asset (Linux)
         if: runner.os == 'Linux'
         env:
@@ -106,6 +107,11 @@ jobs:
           cp target/release/konnekta-desktop konnekta-desktop-linux-x86_64
           sha256sum konnekta-desktop-linux-x86_64 > konnekta-desktop-linux-x86_64.sha256
           gh release upload "${{ needs.create-release.outputs.tag }}" konnekta-desktop-linux-x86_64 konnekta-desktop-linux-x86_64.sha256 --clobber
+          # The AppImage updates itself too: publish its checksum.
+          for f in target/release/bundle/appimage/*.AppImage; do
+            (cd "$(dirname "$f")" && sha256sum "$(basename "$f")" > "$(basename "$f").sha256")
+            gh release upload "${{ needs.create-release.outputs.tag }}" "$f.sha256" --clobber
+          done
 
   cli:
     needs: create-release
