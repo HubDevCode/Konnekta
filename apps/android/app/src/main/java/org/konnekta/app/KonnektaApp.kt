@@ -1,6 +1,8 @@
 package org.konnekta.app
 
+import android.app.Activity
 import android.app.Application
+import android.os.Bundle
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -22,6 +24,15 @@ class KonnektaApp : Application() {
             _events.tryEmit(e)
         }
 
+        /** An activity of the app is on screen. */
+        @Volatile
+        var uiVisible = false
+            private set
+
+        /** Called on the main thread when [uiVisible] changes. */
+        @Volatile
+        var onUiVisible: (() -> Unit)? = null
+
         const val CH_SERVICE = "service"
         const val CH_ALERTS = "alerts"
         const val CH_APPROVE = "approve"
@@ -37,6 +48,20 @@ class KonnektaApp : Application() {
             nm.createNotificationChannel(NotificationChannel(CH_APPROVE, "Approvazioni", NotificationManager.IMPORTANCE_HIGH))
             nm.createNotificationChannel(NotificationChannel(CH_MEDIA, "Lettore del computer", NotificationManager.IMPORTANCE_LOW))
         }
+        registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
+            private var started = 0
+            override fun onActivityStarted(a: Activity) {
+                if (started++ == 0) { uiVisible = true; onUiVisible?.invoke() }
+            }
+            override fun onActivityStopped(a: Activity) {
+                if (--started <= 0) { started = 0; uiVisible = false; onUiVisible?.invoke() }
+            }
+            override fun onActivityCreated(a: Activity, b: Bundle?) {}
+            override fun onActivityResumed(a: Activity) {}
+            override fun onActivityPaused(a: Activity) {}
+            override fun onActivitySaveInstanceState(a: Activity, b: Bundle) {}
+            override fun onActivityDestroyed(a: Activity) {}
+        })
         // The service may start without the UI (boot, after an update).
         org.konnekta.app.state.Settings.load(this)
         org.konnekta.app.service.ClipboardSync.install(this)

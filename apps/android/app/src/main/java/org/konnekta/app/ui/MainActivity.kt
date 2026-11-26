@@ -194,10 +194,12 @@ private fun App() {
     val prompt by KonnektaService.pairPrompt.collectAsState()
     val route by Nav.route.collectAsState()
 
-    // Keep the device list fresh while the app is open.
+    // Keep the lists fresh while the app is open. Devices also follow the
+    // core's events (below): read again only now and then, in case.
     LaunchedEffect(Unit) {
+        var n = 0
         while (true) {
-            core(ui.toast) { it.callArray("devices") }?.let { Store.devices.value = it.objects() }
+            if (n++ % 5 == 0) core(ui.toast) { it.callArray("devices") }?.let { Store.devices.value = it.objects() }
             core(ui.toast) { it.callArray("discovered") }?.let { Store.nearby.value = it.objects() }
             delay(3000)
         }

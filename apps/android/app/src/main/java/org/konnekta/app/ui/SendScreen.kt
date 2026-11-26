@@ -84,10 +84,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.rotate
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -252,8 +251,6 @@ private fun SendPane(current: JSONObject?, open: (Route) -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 12.dp)) {
         Text("Dispositivi vicini", Modifier.weight(1f), style = MaterialTheme.typography.titleSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant)
-        val spin by rememberInfiniteTransition(label = "scan").animateFloat(
-            0f, 360f, infiniteRepeatable(tween(1000, easing = LinearEasing)), label = "scan")
         IconButton(onClick = {
             scope.launch {
                 core(ui.toast) { it.callArray("discovered") }?.let { Store.nearby.value = it.objects() }
@@ -264,7 +261,7 @@ private fun SendPane(current: JSONObject?, open: (Route) -> Unit) {
                     scanning = false
                 }
             }
-        }) { Icon(Icons.Filled.Sync, "Cerca di nuovo", Modifier.rotate(if (scanning) spin else 0f), tint = MaterialTheme.colorScheme.primary) }
+        }) { SyncIcon(scanning) }
         if (status?.optBoolean("running") == true) {
             IconButton(onClick = { askAddress = true }) {
                 Icon(Icons.Filled.AdsClick, "Invia a un indirizzo", tint = MaterialTheme.colorScheme.primary)
@@ -547,6 +544,17 @@ private fun InProgress(incoming: Boolean) {
 }
 
 /** How this phone appears to the others, and what it received. */
+/** The refresh icon, turning only while a search runs (no animation otherwise). */
+@Composable
+private fun SyncIcon(scanning: Boolean) {
+    val turn = if (scanning) {
+        val spin = rememberInfiniteTransition(label = "scan").animateFloat(
+            0f, 360f, infiniteRepeatable(tween(1000, easing = LinearEasing)), label = "scan")
+        Modifier.graphicsLayer { rotationZ = spin.value }
+    } else Modifier
+    Icon(Icons.Filled.Sync, "Cerca di nuovo", turn, tint = MaterialTheme.colorScheme.primary)
+}
+
 @Composable
 private fun ReceivePane() {
     val ui = LocalUi.current
@@ -557,13 +565,19 @@ private fun ReceivePane() {
     val name = st?.optString("alias")?.takeIf { it.isNotEmpty() }
         ?: ctx.getSharedPreferences("konnekta", android.content.Context.MODE_PRIVATE).getString("deviceName", null)
         ?: android.os.Build.MODEL
-    val pulse by rememberInfiniteTransition(label = "ready").animateFloat(
+    // Read in the layer, not in composition: only the ring is redrawn each frame.
+    val pulse = rememberInfiniteTransition(label = "ready").animateFloat(
         0f, 1f, infiniteRepeatable(tween(2400, easing = LinearEasing)), label = "ready")
     val scheme = MaterialTheme.colorScheme
     Column(Modifier.fillMaxWidth().padding(top = 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Box(Modifier.size(190.dp), contentAlignment = Alignment.Center) {
             // A ring that grows and fades: ready to receive.
-            Box(Modifier.size(150.dp).scale(1f + pulse * .25f).alpha((1f - pulse) * .7f).clip(CircleShape)
+            Box(Modifier.size(150.dp).graphicsLayer {
+                val p = pulse.value
+                scaleX = 1f + p * .25f
+                scaleY = 1f + p * .25f
+                alpha = (1f - p) * .7f
+            }.clip(CircleShape)
                 .border(3.dp, scheme.primary, CircleShape))
             Box(Modifier.size(150.dp).clip(CircleShape).background(Color(0xFF1E1E2E)), contentAlignment = Alignment.Center) {
                 Icon(painterResource(org.konnekta.app.R.drawable.ic_launcher_fg), null, Modifier.size(150.dp), tint = Color.Unspecified)

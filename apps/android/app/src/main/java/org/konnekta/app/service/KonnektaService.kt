@@ -14,6 +14,10 @@ import android.content.pm.ServiceInfo
 import android.media.AudioAttributes
 import android.media.Ringtone
 import android.media.RingtoneManager
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.Uri
 import android.net.wifi.WifiManager
 import android.os.BatteryManager
@@ -22,6 +26,7 @@ import android.os.Environment
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.PowerManager
 import android.util.Log
 import kotlinx.coroutines.flow.update
 import androidx.core.app.NotificationCompat
@@ -150,11 +155,22 @@ class KonnektaService : Service() {
             .setOngoing(true)
             .build()
         ServiceCompat.startForeground(this, N_SERVICE, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
-        // UDP announcements and mDNS need multicast on Wi-Fi.
+        // Hearing UDP announcements and mDNS needs multicast on Wi-Fi, which
+        // keeps the Wi-Fi chip from filtering packets (battery): held only
+        // while something is to be found (see updateMulticast).
         multicast = getSystemService(WifiManager::class.java)?.createMulticastLock("konnekta")?.apply {
             setReferenceCounted(false)
-            acquire()
         }
+        KonnektaApp.onUiVisible = { updateMulticast() }
+        registerReceiver(screen, IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_ON)
+            addAction(Intent.ACTION_SCREEN_OFF)
+        })
+        runCatching {
+            getSystemService(ConnectivityManager::class.java)?.registerNetworkCallback(
+                NetworkRequest.Builder().addTransportType(NetworkCapabilities.TRANSPORT_WIFI).build(), network)
+        }
+        updateMulticast()
         Thread(::run, "konnekta-core").start()
     }
 
@@ -283,6 +299,36 @@ class KonnektaService : Service() {
     private fun refreshDevices(core: Core) {
         runCatching { core.callArray("devices") }.getOrNull()?.let { a ->
             Store.devices.value = (0 until a.length()).mapNotNull { a.optJSONObject(it) }
+        }
+        updateMulticast()
+    }
+
+    private val screen = object : BroadcastReceiver() {
+        override fun onReceive(c: Context, i: Intent) {
+            updateMulticast()
+        }
+    }
+
+    /** A new Wi-Fi: look for the computers now (failed reconnections wait longer and longer). */
+    private val network = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(n: Network) {
+            io.execute { runCatching { KonnektaApp.core?.call("refresh") } }
+            updateMulticast()
+        }
+    }
+
+    /**
+     * Multicast on while the app is on screen, or while the screen is on and a
+     * paired computer is not connected. Otherwise nothing is to be found:
+     * linked computers need no discovery, and a computer reconnects by itself
+     * (it hears the phone's announcements, which go out without the lock).
+     */
+    private fun updateMulticast() {
+        main.post {
+            val m = multicast ?: return@post
+            val interactive = getSystemService(PowerManager::class.java)?.isInteractive != false
+            val want = running && (KonnektaApp.uiVisible || (interactive && Store.paired.any { !it.optBoolean("connected") }))
+            if (want && !m.isHeld) m.acquire() else if (!want && m.isHeld) m.release()
         }
     }
 
@@ -719,7 +765,10 @@ class KonnektaService : Service() {
         media?.stop(); calls?.stop(); sms?.stop(); dnd?.stop(); shots?.stop(); bluetooth?.stop()
         Streams.stopAll()
         runCatching { unregisterReceiver(battery) }
-        multicast?.release()
+        runCatching { unregisterReceiver(screen) }
+        runCatching { getSystemService(ConnectivityManager::class.java)?.unregisterNetworkCallback(network) }
+        KonnektaApp.onUiVisible = null
+        multicast?.let { if (it.isHeld) it.release() }
         io.shutdown()
         transfers.shutdownNow()
         super.onDestroy()
