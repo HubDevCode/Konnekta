@@ -37,6 +37,8 @@ const JANITOR_INTERVAL: Duration = Duration::from_secs(2);
 const USB_INTERVAL: Duration = Duration::from_secs(3);
 /// Wait after a failed USB dial (phone without Konnekta running).
 const USB_RETRY: Duration = Duration::from_secs(30);
+/// Each failed dial of the same phone doubles the wait, up to this.
+const USB_RETRY_MAX: Duration = Duration::from_secs(600);
 const BT_INTERVAL: Duration = Duration::from_secs(3);
 /// Wait after a failed Bluetooth dial (phone away, Konnekta not running).
 /// Short: a phone that opens Konnekta also dials us, but an older app only
@@ -55,7 +57,7 @@ struct BtPolling {
     open_retry: Option<Instant>,
     open_failures: u32,
     peers: Option<(Instant, Vec<bluetooth::Peer>)>,
-    /// Failed dials in a row, per phone address.
+    /// Failed dials in a row, per phone (`bt:` address, `usb:` serial key).
     failures: HashMap<String, u32>,
 }
 
@@ -1144,12 +1146,26 @@ impl Inner {
             }
             let this = self.clone();
             tokio::spawn(async move {
-                if let Err(e) = this.clone().dial_usb(serial.into()).await {
-                    tracing::debug!(%key, "USB dial failed: {e:#}");
-                    this.dialing
-                        .lock()
-                        .unwrap()
-                        .insert(key, Instant::now() + USB_RETRY);
+                match this.clone().dial_usb(serial.clone().into()).await {
+                    Ok(()) => {
+                        this.bt_polling.lock().unwrap().failures.remove(&key);
+                    }
+                    Err(e) => {
+                        tracing::debug!(%key, "USB dial failed: {e:#}");
+                        // Each try runs several adb commands: a phone that
+                        // does not answer (no Konnekta) is tried less often.
+                        let wait = {
+                            let mut p = this.bt_polling.lock().unwrap();
+                            let n = p.failures.entry(key.clone()).or_default();
+                            let wait = backoff(USB_RETRY, *n, USB_RETRY_MAX);
+                            *n = n.saturating_add(1);
+                            wait
+                        };
+                        this.dialing
+                            .lock()
+                            .unwrap()
+                            .insert(key, Instant::now() + wait);
+                    }
                 }
             });
         }
