@@ -200,7 +200,11 @@ impl Tracker {
         s.list = None;
         if !stopped_idle {
             // adb restarted or too old for track-devices: poll meanwhile.
-            let wait = if started.elapsed() < Duration::from_secs(5) { 300 } else { 2 };
+            let wait = if started.elapsed() < Duration::from_secs(5) {
+                300
+            } else {
+                2
+            };
             s.retry_at = Some(std::time::Instant::now() + Duration::from_secs(wait));
         }
     }

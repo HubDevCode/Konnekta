@@ -7,9 +7,9 @@
 
 use crate::input::{InputBackend, InputEvent};
 use crate::keys::{Key, Modifiers, SpecialKey};
+use crate::watch::LineWatcher;
 use anyhow::Result;
 use async_trait::async_trait;
-use crate::watch::LineWatcher;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -98,6 +98,7 @@ const IDLE_MAX_AGE: Duration = Duration::from_secs(60);
 const UNWATCHED_MAX_AGE: Duration = Duration::from_secs(1);
 
 type Stamp = (Option<u64>, u64, Instant);
+type StatusCache = HashMap<Option<String>, (Stamp, Option<MediaStatus>)>;
 
 /// Reads the player and the volume again only when they may have changed:
 /// a watcher line ([`crate::watch`]), an action sent from here, or the
@@ -108,7 +109,7 @@ pub struct Cached {
     volume: Option<&'static LineWatcher>,
     /// Bumped by every action sent through this backend.
     local: AtomicU64,
-    status: Mutex<HashMap<Option<String>, (Stamp, Option<MediaStatus>)>>,
+    status: Mutex<StatusCache>,
     vol: Mutex<Option<(Stamp, Option<u8>)>>,
 }
 

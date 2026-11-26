@@ -1215,8 +1215,7 @@ impl Inner {
                         let mut p = self.bt_polling.lock().unwrap();
                         p.open_failures = p.open_failures.saturating_add(1);
                         p.open_retry = Some(
-                            Instant::now()
-                                + backoff(BT_INTERVAL, p.open_failures, BT_RETRY_MAX),
+                            Instant::now() + backoff(BT_INTERVAL, p.open_failures, BT_RETRY_MAX),
                         );
                         return;
                     }
@@ -1258,7 +1257,11 @@ impl Inner {
             tokio::spawn(async move {
                 match this.clone().dial_bluetooth(&bluez, &peer.address).await {
                     Ok(()) => {
-                        this.bt_polling.lock().unwrap().failures.remove(&peer.address);
+                        this.bt_polling
+                            .lock()
+                            .unwrap()
+                            .failures
+                            .remove(&peer.address);
                     }
                     Err(e) => {
                         tracing::debug!(phone = %peer.name, "bluetooth dial failed: {e:#}");
@@ -1307,7 +1310,10 @@ impl Inner {
                     .insert(address.clone(), session);
                 // It answers: dial it at the normal pace again.
                 this.bt_polling.lock().unwrap().failures.remove(&address);
-                this.dialing.lock().unwrap().remove(&format!("bt:{address}"));
+                this.dialing
+                    .lock()
+                    .unwrap()
+                    .remove(&format!("bt:{address}"));
                 let b = bluez.clone();
                 tokio::spawn(async move {
                     if let Err(e) = this.clone().dial_bluetooth(&b, &address).await {

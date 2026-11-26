@@ -151,7 +151,10 @@ impl LineWatcher {
                 .saturating_mul(1 << s.quick_exits.min(6))
                 .min(RETRY_MAX);
             s.retry_at = Some(Instant::now() + wait);
-            tracing::debug!(program = self.program, "watcher ended at once, retry in {wait:?}");
+            tracing::debug!(
+                program = self.program,
+                "watcher ended at once, retry in {wait:?}"
+            );
         } else {
             // Ended after running fine (player daemon restart...): soon again.
             s.quick_exits = 0;
@@ -199,7 +202,10 @@ mod tests {
     static TICKS: LazyLock<LineWatcher> = LazyLock::new(|| {
         LineWatcher::new(
             "sh",
-            &["-c", "echo skip; sleep 0.2; echo a; sleep 0.2; echo b; sleep 30"],
+            &[
+                "-c",
+                "echo skip; sleep 0.2; echo a; sleep 0.2; echo b; sleep 30",
+            ],
             |l| l != "skip",
         )
     });

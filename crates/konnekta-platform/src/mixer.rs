@@ -90,8 +90,7 @@ impl Cached {
     }
 
     fn changed_here(&self) {
-        self.local
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.local.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }
 
     async fn around<T>(&self, f: impl std::future::Future<Output = Result<T>>) -> Result<T> {

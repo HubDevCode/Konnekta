@@ -37,7 +37,9 @@ pub fn fingerprint(b: &[u8]) -> u64 {
 /// data-control protocol: wlroots compositors, KDE; not GNOME).
 #[cfg(all(feature = "desktop", target_os = "linux"))]
 static WL_CHANGES: std::sync::LazyLock<crate::watch::LineWatcher> =
-    std::sync::LazyLock::new(|| crate::watch::LineWatcher::new("wl-paste", &["--watch", "echo"], |_| true));
+    std::sync::LazyLock::new(|| {
+        crate::watch::LineWatcher::new("wl-paste", &["--watch", "echo"], |_| true)
+    });
 
 #[cfg(feature = "desktop")]
 pub fn native() -> Arc<dyn ClipboardBackend> {
