@@ -32,6 +32,9 @@ pub const MAX_CLIPBOARD: usize = 256 * 1024;
 /// Largest text accepted from devices.
 pub const MAX_INCOMING_TEXT: usize = 1024 * 1024;
 pub const MAX_IMAGE: u64 = 16 * 1024 * 1024;
+/// With a change watcher, the clipboard is still read this often in case
+/// a change went unseen.
+const WATCHED_CHECK: Duration = Duration::from_secs(30);
 /// Total text kept in the history.
 pub const MAX_HISTORY_BYTES: usize = 16 * 1024 * 1024;
 /// Characters of each entry exposed in events (chat view).
@@ -87,7 +90,13 @@ struct State {
     current: Option<String>,
     /// When `current` changed (ms).
     changed_at: i64,
+    /// SHA-256 of the last PNG sent or received (no echo of an image).
     image_hash: Option<[u8; 32]>,
+    /// Backend fingerprint of the local image last seen.
+    image_id: Option<u64>,
+    /// Images were not looked at (nobody to send them to): the next look
+    /// only takes note, so an old image is not sent when a device connects.
+    image_stale: bool,
     history: VecDeque<HistoryEntry>,
     history_bytes: usize,
     /// Image transfers in flight, per device.
@@ -213,6 +222,44 @@ impl ClipboardPlugin {
         }
     }
 
+    /// Whether a connected device takes clipboard packets of type `ty`.
+    fn receivers(core: &CoreHandle, ty: &str) -> bool {
+        core.devices()
+            .iter()
+            .any(|d| d.has_permission(Permission::Clipboard) && d.supports(ty))
+    }
+
+    /// Send the local image if it changed: compared by the backend's cheap
+    /// fingerprint, encoded as PNG only when it did change.
+    async fn check_image(&self, core: &CoreHandle) {
+        let Ok(id) = self.platform.clipboard.image_id().await else {
+            return;
+        };
+        let changed = {
+            let mut s = self.state.lock().unwrap();
+            let stale = std::mem::take(&mut s.image_stale);
+            let c = id.is_some() && s.image_id != id;
+            s.image_id = id;
+            c && !stale
+        };
+        if !changed {
+            return;
+        }
+        let Ok(Some(png)) = self.platform.clipboard.get_png().await else {
+            return;
+        };
+        let h = hash(&png);
+        let fresh = {
+            let mut s = self.state.lock().unwrap();
+            let f = s.image_hash != Some(h);
+            s.image_hash = Some(h);
+            f
+        };
+        if fresh && (png.len() as u64) <= MAX_IMAGE {
+            self.broadcast_image(core, png).await;
+        }
+    }
+
     async fn broadcast_image(&self, core: &CoreHandle, png: Vec<u8>) {
         for dev in core.devices() {
             if dev.has_permission(Permission::Clipboard) && dev.supports(types::CLIPBOARD_IMAGE) {
@@ -263,6 +310,9 @@ impl ClipboardPlugin {
             s.image_hash = Some(h);
         }
         self.platform.clipboard.set_png(&data).await?;
+        if let Ok(id) = self.platform.clipboard.image_id().await {
+            self.state.lock().unwrap().image_id = id;
+        }
         dev.emit("clipboard", "image", json!({ "bytes": data.len() }));
         Ok(())
     }
@@ -296,19 +346,42 @@ impl Plugin for ClipboardPlugin {
         if let Ok(Some(t)) = self.platform.clipboard.get_text().await {
             self.state.lock().unwrap().current = Some(t);
         }
-        if let Ok(Some(png)) = self.platform.clipboard.get_png().await {
-            self.state.lock().unwrap().image_hash = Some(hash(&png));
+        if let Ok(id) = self.platform.clipboard.image_id().await {
+            self.state.lock().unwrap().image_id = id;
         }
         let me = self.clone();
         tokio::spawn(async move {
+            let watcher = me.platform.clipboard.changes();
+            let mut changes = watcher.map(|w| w.subscribe());
             let mut tick = tokio::time::interval(me.poll);
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             let mut n: u64 = 0;
             loop {
-                tick.tick().await;
+                // Watched (wl-paste --watch): read only after a change, with
+                // a rare check in case a change went unseen. Otherwise poll.
+                let watched = watcher.and_then(|w| w.generation()).is_some();
+                match changes.as_mut().filter(|_| watched) {
+                    Some(rx) => {
+                        rx.borrow_and_update();
+                        tokio::select! {
+                            _ = rx.changed() => {}
+                            _ = tokio::time::sleep(WATCHED_CHECK) => {}
+                        }
+                    }
+                    None => {
+                        tick.tick().await;
+                    }
+                }
                 if !core.is_alive() {
                     break;
                 }
                 n += 1;
+                let anyone = Self::receivers(&core, types::CLIPBOARD);
+                // Polling with nobody to send to: only keep up (history, and
+                // what a device gets when it connects), four times slower.
+                if !watched && !anyone && !n.is_multiple_of(4) {
+                    continue;
+                }
                 let cfg = me.config.get();
                 if let Ok(Some(text)) = me.platform.clipboard.get_text().await
                     && !text.is_empty()
@@ -325,20 +398,12 @@ impl Plugin for ClipboardPlugin {
                         );
                     }
                 }
-                // Images are checked less often (they are larger to read).
-                if cfg.images
-                    && n.is_multiple_of(4)
-                    && let Ok(Some(png)) = me.platform.clipboard.get_png().await
-                {
-                    let h = hash(&png);
-                    let changed = {
-                        let mut s = me.state.lock().unwrap();
-                        let c = s.image_hash != Some(h);
-                        s.image_hash = Some(h);
-                        c
-                    };
-                    if changed && cfg.auto_send && (png.len() as u64) <= MAX_IMAGE {
-                        me.broadcast_image(&core, png).await;
+                // Images are checked less often when polled (larger to read).
+                if cfg.images && (watched || n.is_multiple_of(4)) {
+                    if cfg.auto_send && Self::receivers(&core, types::CLIPBOARD_IMAGE) {
+                        me.check_image(&core).await;
+                    } else {
+                        me.state.lock().unwrap().image_stale = true;
                     }
                 }
             }

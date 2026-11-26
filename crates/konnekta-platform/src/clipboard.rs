@@ -13,7 +13,31 @@ pub trait ClipboardBackend: Send + Sync {
     async fn get_png(&self) -> Result<Option<Vec<u8>>> {
         Ok(None)
     }
+    /// A fingerprint of the current image, cheaper than [`Self::get_png`]
+    /// where the image is not stored as PNG (no encoding just to compare).
+    async fn image_id(&self) -> Result<Option<u64>> {
+        Ok(self.get_png().await?.map(|png| fingerprint(&png)))
+    }
+    /// A watcher that ticks at each clipboard change, where there is one:
+    /// the clipboard is then read only on change instead of polled.
+    fn changes(&self) -> Option<&'static crate::watch::LineWatcher> {
+        None
+    }
 }
+
+/// Fast fingerprint of some bytes (change detection, not security).
+pub fn fingerprint(b: &[u8]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    b.hash(&mut h);
+    h.finish()
+}
+
+/// `wl-paste --watch` runs `echo` at each new selection (needs the
+/// data-control protocol: wlroots compositors, KDE; not GNOME).
+#[cfg(all(feature = "desktop", target_os = "linux"))]
+static WL_CHANGES: std::sync::LazyLock<crate::watch::LineWatcher> =
+    std::sync::LazyLock::new(|| crate::watch::LineWatcher::new("wl-paste", &["--watch", "echo"], |_| true));
 
 #[cfg(feature = "desktop")]
 pub fn native() -> Arc<dyn ClipboardBackend> {
@@ -32,20 +56,17 @@ pub struct WlClipboard;
 #[async_trait]
 impl ClipboardBackend for WlClipboard {
     async fn get_text(&self) -> Result<Option<String>> {
-        let types = crate::cmd::output("wl-paste", &["--list-types"])
-            .await
-            .unwrap_or_default();
-        if !types
-            .lines()
-            .any(|t| t.starts_with("text/") || t == "UTF8_STRING" || t == "STRING")
-        {
-            return Ok(None);
-        }
+        // One program: `--type text` fails by itself when no text is offered
+        // (an image, an empty clipboard).
         Ok(
             crate::cmd::output("wl-paste", &["--no-newline", "--type", "text"])
                 .await
                 .ok(),
         )
+    }
+
+    fn changes(&self) -> Option<&'static crate::watch::LineWatcher> {
+        Some(&WL_CHANGES)
     }
 
     async fn set_text(&self, text: &str) -> Result<()> {
@@ -96,6 +117,7 @@ mod arboard_backend {
 
     enum Cmd {
         GetImage(oneshot::Sender<Result<Option<Rgba>>>),
+        ImageId(oneshot::Sender<Result<Option<u64>>>),
         Get(oneshot::Sender<Result<Option<String>>>),
         SetText(String, oneshot::Sender<Result<()>>),
         SetImage(Vec<u8>, usize, usize, oneshot::Sender<Result<()>>),
@@ -123,6 +145,7 @@ mod arboard_backend {
                             match cmd {
                                 Cmd::Get(r) => drop(r.send(Err(err()))),
                                 Cmd::GetImage(r) => drop(r.send(Err(err()))),
+                                Cmd::ImageId(r) => drop(r.send(Err(err()))),
                                 Cmd::SetText(_, r) | Cmd::SetImage(_, _, _, r) => {
                                     drop(r.send(Err(err())))
                                 }
@@ -142,6 +165,20 @@ mod arboard_backend {
                                         .map(|i| (i.bytes.into_owned(), i.width, i.height))
                                 };
                                 let _ = r.send(Ok(img));
+                            }
+                            Cmd::ImageId(r) => {
+                                // The pixels as they are: no PNG encoding
+                                // just to see whether the image changed.
+                                let id = if c.get_text().is_ok() {
+                                    None
+                                } else {
+                                    c.get_image().ok().map(|i| {
+                                        let mut id = super::fingerprint(&i.bytes);
+                                        id ^= (i.width as u64) << 32 | i.height as u64;
+                                        id
+                                    })
+                                };
+                                let _ = r.send(Ok(id));
                             }
                             Cmd::SetText(t, r) => {
                                 let _ = r.send(c.set_text(t).map_err(Into::into));
@@ -194,6 +231,10 @@ mod arboard_backend {
             })
             .await??;
             Ok(Some(png))
+        }
+
+        async fn image_id(&self) -> Result<Option<u64>> {
+            self.call(Cmd::ImageId).await
         }
 
         async fn set_png(&self, png: &[u8]) -> Result<()> {
