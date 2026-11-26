@@ -3,7 +3,8 @@
 //! KDE Connect Android app in compatibility mode.
 //!
 //! Messages live in memory only and are dropped when the phone disconnects;
-//! at most [`MAX_PER_THREAD`] per conversation and [`MAX_THREADS`] threads.
+//! at most [`MAX_PER_THREAD`] per conversation, [`MAX_THREADS`] threads and
+//! [`MAX_STORED_BYTES`] in all (the oldest messages go first).
 
 use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
@@ -17,6 +18,9 @@ use std::sync::Mutex;
 pub const MAX_PER_THREAD: usize = 500;
 pub const MAX_THREADS: usize = 300;
 pub const MAX_BODY: usize = 5000;
+/// All the messages of one phone together: the limits above alone would
+/// allow ~750 MB (300 threads of 500 messages of 5000 characters).
+pub const MAX_STORED_BYTES: usize = 16 * 1024 * 1024;
 const PAGE: i64 = 50;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -47,6 +51,16 @@ pub struct Message {
 impl Message {
     pub fn outgoing(&self) -> bool {
         self.kind == 2
+    }
+
+    /// Roughly the memory it takes.
+    fn size(&self) -> usize {
+        64 + self.body.len()
+            + self
+                .addresses
+                .iter()
+                .map(|a| 24 + a.address.len())
+                .sum::<usize>()
     }
 }
 
@@ -98,6 +112,27 @@ impl SmsPlugin {
                 Some(id) => threads.remove(&id),
                 None => break,
             };
+        }
+        // Too much text in all: forget the oldest messages, wherever they are.
+        let mut total: usize = threads
+            .values()
+            .flat_map(|t| t.values())
+            .map(Message::size)
+            .sum();
+        while total > MAX_STORED_BYTES {
+            let oldest = threads
+                .iter()
+                .filter_map(|(id, t)| Some((t.first_key_value()?.0.0, *id)))
+                .min()
+                .map(|(_, id)| id);
+            let Some(id) = oldest else { break };
+            let t = threads.get_mut(&id).expect("listed");
+            if let Some((_, m)) = t.pop_first() {
+                total = total.saturating_sub(m.size());
+            }
+            if t.is_empty() {
+                threads.remove(&id);
+            }
         }
         changed
     }
@@ -271,6 +306,24 @@ mod tests {
             "body": body, "addresses": [{ "address": "+39 333 0000000" }], "event": 1, "sub_id": 1
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn total_size_is_capped_oldest_first() {
+        let p = SmsPlugin::default();
+        let body = "x".repeat(MAX_BODY);
+        // ~5 KB each: 4000 messages are about 20 MB, over the cap.
+        let msgs: Vec<Message> = (0..4000)
+            .map(|i| msg(i + 1, i % 200 + 1, i, 1, &body))
+            .collect();
+        p.merge("d", msgs);
+        let s = p.store.lock().unwrap();
+        let all: Vec<&Message> = s["d"].values().flat_map(|t| t.values()).collect();
+        let total: usize = all.iter().map(|m| m.size()).sum();
+        assert!(total <= MAX_STORED_BYTES);
+        // The newest message stays; the oldest went.
+        assert!(all.iter().any(|m| m.date == 3999));
+        assert!(!all.iter().any(|m| m.date == 0));
     }
 
     #[test]
