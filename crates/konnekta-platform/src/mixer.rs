@@ -61,12 +61,94 @@ pub trait MixerBackend: Send + Sync {
     async fn move_app(&self, app: u32, output: u32) -> Result<()>;
 }
 
+/// Longest the state is reused while the watcher reports no change.
+const WATCHED_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(30);
+/// Without a watcher: one read shared by the callers of the same second.
+const UNWATCHED_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Reads the mixer again only after a change (`pactl subscribe`), a change
+/// made from here or the maximum age: a read starts five `pactl` programs.
+pub struct Cached {
+    inner: std::sync::Arc<dyn MixerBackend>,
+    watcher: Option<&'static crate::watch::LineWatcher>,
+    local: std::sync::atomic::AtomicU64,
+    #[allow(clippy::type_complexity)]
+    last: std::sync::Mutex<Option<((Option<u64>, u64, std::time::Instant), Option<MixerState>)>>,
+}
+
+impl Cached {
+    pub fn new(
+        inner: std::sync::Arc<dyn MixerBackend>,
+        watcher: Option<&'static crate::watch::LineWatcher>,
+    ) -> Self {
+        Self {
+            inner,
+            watcher,
+            local: Default::default(),
+            last: Default::default(),
+        }
+    }
+
+    fn changed_here(&self) {
+        self.local
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    async fn around<T>(&self, f: impl std::future::Future<Output = Result<T>>) -> Result<T> {
+        self.changed_here();
+        let r = f.await;
+        self.changed_here();
+        r
+    }
+}
+
+#[async_trait]
+impl MixerBackend for Cached {
+    async fn state(&self) -> Result<Option<MixerState>> {
+        let now = (
+            self.watcher.and_then(crate::watch::LineWatcher::generation),
+            self.local.load(std::sync::atomic::Ordering::SeqCst),
+            std::time::Instant::now(),
+        );
+        let max_age = if now.0.is_some() {
+            WATCHED_MAX_AGE
+        } else {
+            UNWATCHED_MAX_AGE
+        };
+        if let Some((at, s)) = self.last.lock().unwrap().as_ref()
+            && at.0 == now.0
+            && at.1 == now.1
+            && now.2.duration_since(at.2) < max_age
+        {
+            return Ok(s.clone());
+        }
+        let s = self.inner.state().await?;
+        *self.last.lock().unwrap() = Some((now, s.clone()));
+        Ok(s)
+    }
+    async fn set_volume(&self, kind: MixerKind, id: u32, volume: u16) -> Result<()> {
+        self.around(self.inner.set_volume(kind, id, volume)).await
+    }
+    async fn set_mute(&self, kind: MixerKind, id: u32, muted: bool) -> Result<()> {
+        self.around(self.inner.set_mute(kind, id, muted)).await
+    }
+    async fn set_default(&self, kind: MixerKind, id: u32) -> Result<()> {
+        self.around(self.inner.set_default(kind, id)).await
+    }
+    async fn move_app(&self, app: u32, output: u32) -> Result<()> {
+        self.around(self.inner.move_app(app, output)).await
+    }
+}
+
 #[cfg(feature = "desktop")]
 pub fn native() -> std::sync::Arc<dyn MixerBackend> {
     use std::sync::Arc;
     #[cfg(target_os = "linux")]
     if crate::cmd::exists("pactl") {
-        return Arc::new(linux::Pactl);
+        return Arc::new(Cached::new(
+            Arc::new(linux::Pactl),
+            Some(&crate::watch::PULSE),
+        ));
     }
     Arc::new(crate::mock::Unsupported)
 }

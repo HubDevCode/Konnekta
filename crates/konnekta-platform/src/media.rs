@@ -9,8 +9,12 @@ use crate::input::{InputBackend, InputEvent};
 use crate::keys::{Key, Modifiers, SpecialKey};
 use anyhow::Result;
 use async_trait::async_trait;
+use crate::watch::LineWatcher;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MediaAction {
@@ -68,12 +72,155 @@ pub trait MediaBackend: Send + Sync {
 pub fn native(input: Arc<dyn InputBackend>) -> Arc<dyn MediaBackend> {
     #[cfg(target_os = "linux")]
     if crate::cmd::exists("playerctl") {
-        return Arc::new(linux::Playerctl { input });
+        return Arc::new(Cached::new(
+            Arc::new(linux::Playerctl { input }),
+            Some(&crate::watch::PLAYERS),
+            Some(&crate::watch::PULSE),
+        ));
     }
     #[cfg(target_os = "macos")]
-    return Arc::new(macos::AppleScript { input });
+    return Arc::new(Cached::new(
+        Arc::new(macos::AppleScript { input }),
+        None,
+        None,
+    ));
     #[allow(unreachable_code)]
     Arc::new(MediaKeys { input })
+}
+
+/// Longest a status is reused while a watcher reports no change: playing,
+/// the position moves (a seek in the player itself sends no line); paused,
+/// nothing moves.
+const PLAYING_MAX_AGE: Duration = Duration::from_secs(10);
+const IDLE_MAX_AGE: Duration = Duration::from_secs(60);
+/// Without a watcher: answers are shared by everyone asking within this
+/// time (the media plugin and the Deck buttons ask about the same second).
+const UNWATCHED_MAX_AGE: Duration = Duration::from_secs(1);
+
+type Stamp = (Option<u64>, u64, Instant);
+
+/// Reads the player and the volume again only when they may have changed:
+/// a watcher line ([`crate::watch`]), an action sent from here, or the
+/// maximum age. Each read of the Linux backend starts a program.
+pub struct Cached {
+    inner: Arc<dyn MediaBackend>,
+    players: Option<&'static LineWatcher>,
+    volume: Option<&'static LineWatcher>,
+    /// Bumped by every action sent through this backend.
+    local: AtomicU64,
+    status: Mutex<HashMap<Option<String>, (Stamp, Option<MediaStatus>)>>,
+    vol: Mutex<Option<(Stamp, Option<u8>)>>,
+}
+
+impl Cached {
+    pub fn new(
+        inner: Arc<dyn MediaBackend>,
+        players: Option<&'static LineWatcher>,
+        volume: Option<&'static LineWatcher>,
+    ) -> Self {
+        Self {
+            inner,
+            players,
+            volume,
+            local: AtomicU64::new(0),
+            status: Mutex::default(),
+            vol: Mutex::default(),
+        }
+    }
+
+    fn stamp(&self, w: Option<&'static LineWatcher>) -> Stamp {
+        (
+            w.and_then(LineWatcher::generation),
+            self.local.load(Ordering::SeqCst),
+            Instant::now(),
+        )
+    }
+
+    fn fresh(old: &Stamp, now: &Stamp, max_age: Duration) -> bool {
+        let max_age = if now.0.is_some() {
+            max_age
+        } else {
+            UNWATCHED_MAX_AGE
+        };
+        old.0 == now.0 && old.1 == now.1 && now.2.duration_since(old.2) < max_age
+    }
+
+    fn changed_here(&self) {
+        self.local.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+#[async_trait]
+impl MediaBackend for Cached {
+    async fn players(&self) -> Result<Vec<String>> {
+        self.inner.players().await
+    }
+
+    async fn status(&self, player: Option<&str>) -> Result<Option<MediaStatus>> {
+        let key = player.filter(|p| !p.is_empty()).map(str::to_owned);
+        // Taken before reading: a change during the read makes it stale.
+        let now = self.stamp(self.players);
+        if let Some((at, s)) = self.status.lock().unwrap().get(&key) {
+            let age = if s.as_ref().is_some_and(|s| s.is_playing) {
+                PLAYING_MAX_AGE
+            } else {
+                IDLE_MAX_AGE
+            };
+            if Self::fresh(at, &now, age) {
+                // Playing, the position moved on since it was read.
+                let mut s = s.clone();
+                if let Some(s) = s.as_mut().filter(|s| s.is_playing) {
+                    let moved = now.2.duration_since(at.2).as_millis() as i64;
+                    s.position_ms += moved;
+                    if s.length_ms > 0 {
+                        s.position_ms = s.position_ms.min(s.length_ms);
+                    }
+                }
+                return Ok(s);
+            }
+        }
+        let s = self.inner.status(player).await?;
+        let mut m = self.status.lock().unwrap();
+        // Players come and go: keep the table small.
+        if m.len() > 16 {
+            m.clear();
+        }
+        m.insert(key, (now, s.clone()));
+        Ok(s)
+    }
+
+    async fn action(&self, player: Option<&str>, action: MediaAction) -> Result<()> {
+        self.changed_here();
+        let r = self.inner.action(player, action).await;
+        self.changed_here();
+        r
+    }
+
+    async fn seek(&self, player: Option<&str>, offset_us: i64) -> Result<()> {
+        self.changed_here();
+        let r = self.inner.seek(player, offset_us).await;
+        self.changed_here();
+        r
+    }
+
+    async fn volume(&self) -> Result<Option<u8>> {
+        let now = self.stamp(self.volume);
+        if let Some((at, v)) = *self.vol.lock().unwrap()
+            && Self::fresh(&at, &now, IDLE_MAX_AGE)
+        {
+            return Ok(v);
+        }
+        let v = self.inner.volume().await?;
+        *self.vol.lock().unwrap() = Some((now, v));
+        Ok(v)
+    }
+
+    async fn set_volume(&self, v: u8) -> Result<()> {
+        self.changed_here();
+        let r = self.inner.set_volume(v).await;
+        self.changed_here();
+        r
+    }
 }
 
 /// Fallback: drive players with media keys (no metadata).
