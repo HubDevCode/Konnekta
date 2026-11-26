@@ -40,6 +40,27 @@ const BT_INTERVAL: Duration = Duration::from_secs(3);
 /// Short: a phone that opens Konnekta also dials us, but an older app only
 /// waits to be dialed.
 const BT_RETRY: Duration = Duration::from_secs(8);
+/// Each failed Bluetooth dial of the same phone doubles the wait, up to this.
+const BT_RETRY_MAX: Duration = Duration::from_secs(300);
+/// The paired phones are asked of BlueZ this often (several D-Bus calls
+/// per paired device), not at every tick.
+const BT_PEERS_EVERY: Duration = Duration::from_secs(30);
+
+/// What the Bluetooth tick remembers between rounds.
+#[derive(Default)]
+struct BtPolling {
+    /// BlueZ could not be opened: not before then.
+    open_retry: Option<Instant>,
+    open_failures: u32,
+    peers: Option<(Instant, Vec<bluetooth::Peer>)>,
+    /// Failed dials in a row, per phone address.
+    failures: HashMap<String, u32>,
+}
+
+/// `base` doubled `n` times, at most `max`.
+fn backoff(base: Duration, n: u32, max: Duration) -> Duration {
+    base.saturating_mul(1u32 << n.min(16)).min(max)
+}
 /// A device announced on the network this recently counts as reachable there.
 const SEEN_ON_NETWORK: Duration = Duration::from_secs(150);
 
@@ -96,6 +117,7 @@ pub(crate) struct Inner {
     bt_known: Mutex<HashMap<String, String>>,
     /// BlueZ, opened on first use.
     bluez: tokio::sync::Mutex<Option<Arc<bluetooth::Bluez>>>,
+    bt_polling: Mutex<BtPolling>,
     /// Phone: loopback port where the Android app bridges Bluetooth.
     bt_port: Mutex<Option<u16>>,
     /// Device behind each adb serial, once a link came up, and the serials
@@ -190,6 +212,7 @@ impl KonnektaBuilder {
             bt_sessions: Mutex::default(),
             bt_known: Mutex::default(),
             bluez: tokio::sync::Mutex::new(None),
+            bt_polling: Mutex::default(),
             bt_port: Mutex::new(None),
             usb_known: Mutex::default(),
             usb_attached: Mutex::default(),
@@ -1142,14 +1165,33 @@ impl Inner {
         let bluez = {
             let mut g = self.bluez.lock().await;
             if g.is_none() {
+                if self
+                    .bt_polling
+                    .lock()
+                    .unwrap()
+                    .open_retry
+                    .is_some_and(|t| Instant::now() < t)
+                {
+                    return;
+                }
                 match bluetooth::open_bluez().await {
                     Ok(b) => {
                         let b = Arc::new(b);
                         self.clone().take_bt_incoming(b.clone());
                         *g = Some(b);
+                        let mut p = self.bt_polling.lock().unwrap();
+                        p.open_failures = 0;
+                        p.open_retry = None;
                     }
                     Err(e) => {
                         tracing::debug!("bluetooth unavailable: {e:#}");
+                        // No adapter / no BlueZ: ask less and less often.
+                        let mut p = self.bt_polling.lock().unwrap();
+                        p.open_failures = p.open_failures.saturating_add(1);
+                        p.open_retry = Some(
+                            Instant::now()
+                                + backoff(BT_INTERVAL, p.open_failures, BT_RETRY_MAX),
+                        );
                         return;
                     }
                 }
@@ -1160,7 +1202,23 @@ impl Inner {
             .lock()
             .unwrap()
             .retain(|_, s| !s.is_closed());
-        for peer in bluez.peers().await {
+        let cached = self
+            .bt_polling
+            .lock()
+            .unwrap()
+            .peers
+            .as_ref()
+            .filter(|(at, _)| at.elapsed() < BT_PEERS_EVERY)
+            .map(|(_, p)| p.clone());
+        let peers = match cached {
+            Some(p) => p,
+            None => {
+                let p = bluez.peers().await;
+                self.bt_polling.lock().unwrap().peers = Some((Instant::now(), p.clone()));
+                p
+            }
+        };
+        for peer in peers {
             let key = format!("bt:{}", peer.address);
             // Unknown phones are tried (they may run Konnekta); a known one
             // only when Bluetooth would be better than its current link.
@@ -1172,12 +1230,26 @@ impl Inner {
             let this = self.clone();
             let bluez = bluez.clone();
             tokio::spawn(async move {
-                if let Err(e) = this.clone().dial_bluetooth(&bluez, &peer.address).await {
-                    tracing::debug!(phone = %peer.name, "bluetooth dial failed: {e:#}");
-                    this.dialing
-                        .lock()
-                        .unwrap()
-                        .insert(key, Instant::now() + BT_RETRY);
+                match this.clone().dial_bluetooth(&bluez, &peer.address).await {
+                    Ok(()) => {
+                        this.bt_polling.lock().unwrap().failures.remove(&peer.address);
+                    }
+                    Err(e) => {
+                        tracing::debug!(phone = %peer.name, "bluetooth dial failed: {e:#}");
+                        // A phone away or without Konnekta: each failure
+                        // doubles the wait (it dials us itself when it opens).
+                        let wait = {
+                            let mut p = this.bt_polling.lock().unwrap();
+                            let n = p.failures.entry(peer.address.clone()).or_default();
+                            let wait = backoff(BT_RETRY, *n, BT_RETRY_MAX);
+                            *n = n.saturating_add(1);
+                            wait
+                        };
+                        this.dialing
+                            .lock()
+                            .unwrap()
+                            .insert(key, Instant::now() + wait);
+                    }
                 }
             });
         }
@@ -1207,6 +1279,9 @@ impl Inner {
                     .lock()
                     .unwrap()
                     .insert(address.clone(), session);
+                // It answers: dial it at the normal pace again.
+                this.bt_polling.lock().unwrap().failures.remove(&address);
+                this.dialing.lock().unwrap().remove(&format!("bt:{address}"));
                 let b = bluez.clone();
                 tokio::spawn(async move {
                     if let Err(e) = this.clone().dial_bluetooth(&b, &address).await {
