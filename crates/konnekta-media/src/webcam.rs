@@ -21,8 +21,9 @@ use tokio::sync::Mutex;
 pub const WIDTH: u32 = 1280;
 pub const HEIGHT: u32 = 720;
 const FRAME: usize = (WIDTH * HEIGHT * 3 / 2) as usize;
-/// Pictures per second while no phone streams.
-const IDLE_FPS: u64 = 10;
+/// Pictures per second while no phone streams: enough for the device to
+/// stay listed and for video apps to show it, at a fifth of the work.
+const IDLE_FPS: u64 = 2;
 /// The idle picture comes back this long after the last phone picture.
 const LIVE_HOLD_MS: u64 = 700;
 
@@ -130,6 +131,10 @@ impl Webcam {
                 "30",
                 "-i",
                 "-",
+                // Pictures are only copied to the device: one thread is
+                // plenty (the default pool holds ~20 MB more for nothing).
+                "-threads",
+                "1",
                 // Each picture out as it comes, never repeated or dropped.
                 "-fps_mode",
                 "passthrough",
