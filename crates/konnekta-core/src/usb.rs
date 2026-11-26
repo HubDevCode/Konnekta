@@ -22,8 +22,21 @@ pub(crate) fn same_host(a: IpAddr, b: IpAddr) -> bool {
     a == b || (a.is_loopback() && b.is_loopback())
 }
 
-/// The adb program: `PATH`, then the usual Android SDK folders.
+/// The adb program: `PATH`, then the usual Android SDK folders. Looked up
+/// again at most once a minute (every adb call asks).
 pub fn find_adb() -> Option<PathBuf> {
+    static FOUND: Mutex<Option<(std::time::Instant, Option<PathBuf>)>> = Mutex::new(None);
+    if let Some((at, p)) = FOUND.lock().unwrap().as_ref()
+        && at.elapsed() < Duration::from_secs(60)
+    {
+        return p.clone();
+    }
+    let p = look_for_adb();
+    *FOUND.lock().unwrap() = Some((std::time::Instant::now(), p.clone()));
+    p
+}
+
+fn look_for_adb() -> Option<PathBuf> {
     let exe = if cfg!(windows) { "adb.exe" } else { "adb" };
     let mut dirs: Vec<PathBuf> = konnekta_platform::host::path()
         .map(|p| std::env::split_paths(&p).collect())
@@ -64,16 +77,133 @@ async fn adb(args: &[&str]) -> Result<String> {
 }
 
 /// Serials of the attached devices that authorized this computer.
+///
+/// From `adb track-devices`, which stays connected to the adb server and
+/// prints the list only when it changes; `adb devices` while it cannot run.
 pub async fn devices() -> Vec<String> {
+    if let Some(list) = TRACKER.list() {
+        return list;
+    }
     let Ok(out) = adb(&["devices"]).await else {
         return Vec::new();
     };
+    parse_devices(&out)
+}
+
+fn parse_devices(out: &str) -> Vec<String> {
     out.lines()
         .filter_map(|l| {
             let (serial, state) = l.split_once('\t')?;
             (state.trim() == "device").then(|| serial.trim().to_owned())
         })
         .collect()
+}
+
+/// The tracker stops when nobody asked for this long (USB turned off).
+const TRACK_IDLE: Duration = Duration::from_secs(60);
+
+struct Tracker {
+    state: Mutex<TrackState>,
+}
+
+#[derive(Default)]
+struct TrackState {
+    running: bool,
+    /// Last list adb sent (None until the first one).
+    list: Option<Vec<String>>,
+    last_used: Option<std::time::Instant>,
+    retry_at: Option<std::time::Instant>,
+}
+
+static TRACKER: Tracker = Tracker {
+    state: Mutex::new(TrackState {
+        running: false,
+        list: None,
+        last_used: None,
+        retry_at: None,
+    }),
+};
+
+impl Tracker {
+    /// The current list, starting the tracker if needed; `None` while it
+    /// has no list (starting, or adb too old / missing).
+    fn list(&'static self) -> Option<Vec<String>> {
+        let now = std::time::Instant::now();
+        let mut s = self.state.lock().unwrap();
+        s.last_used = Some(now);
+        if s.running {
+            return s.list.clone();
+        }
+        if s.retry_at.is_some_and(|t| now < t) {
+            return None;
+        }
+        let path = find_adb()?;
+        let mut cmd = konnekta_platform::host::command_async(path);
+        cmd.arg("track-devices")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true);
+        #[cfg(windows)]
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+        let Ok(mut child) = cmd.spawn() else {
+            s.retry_at = Some(now + Duration::from_secs(60));
+            return None;
+        };
+        let Some(out) = child.stdout.take() else {
+            s.retry_at = Some(now + Duration::from_secs(60));
+            return None;
+        };
+        s.running = true;
+        s.list = None;
+        tokio::spawn(self.follow(child, out, now));
+        None
+    }
+
+    async fn follow(
+        &'static self,
+        child: tokio::process::Child,
+        mut out: tokio::process::ChildStdout,
+        started: std::time::Instant,
+    ) {
+        use tokio::io::AsyncReadExt;
+        let _child = child;
+        let read = async {
+            loop {
+                // Each list: 4 hex digits of length, then `serial\tstate\n`...
+                let mut len = [0u8; 4];
+                out.read_exact(&mut len).await.ok()?;
+                let len = usize::from_str_radix(std::str::from_utf8(&len).ok()?, 16).ok()?;
+                let mut body = vec![0u8; len.min(64 * 1024)];
+                out.read_exact(&mut body).await.ok()?;
+                let list = parse_devices(&String::from_utf8_lossy(&body));
+                self.state.lock().unwrap().list = Some(list);
+            }
+            #[allow(unreachable_code)]
+            Some(())
+        };
+        let idle = async {
+            loop {
+                tokio::time::sleep(TRACK_IDLE / 4).await;
+                let last = self.state.lock().unwrap().last_used;
+                if last.is_none_or(|t| t.elapsed() > TRACK_IDLE) {
+                    return;
+                }
+            }
+        };
+        let stopped_idle = tokio::select! {
+            _ = read => false,
+            _ = idle => true,
+        };
+        let mut s = self.state.lock().unwrap();
+        s.running = false;
+        s.list = None;
+        if !stopped_idle {
+            // adb restarted or too old for track-devices: poll meanwhile.
+            let wait = if started.elapsed() < Duration::from_secs(5) { 300 } else { 2 };
+            s.retry_at = Some(std::time::Instant::now() + Duration::from_secs(wait));
+        }
+    }
 }
 
 /// `adb forward|reverse tcp:0 ...` prints the port it picked.
