@@ -247,6 +247,28 @@ Tutti i diritti riservati. Il codice è visibile, ma copiarlo, modificarlo, rico
 
 Le novità di ogni versione, dalla più recente.
 
+### Novità della 2.6.3
+
+**Molte meno risorse a riposo** (misurato sul computer con il telefono collegato: da circa il 9% di un core a
+meno dell'1%, da circa 290 programmi lanciati al minuto a meno di 20)
+- Appunti, musica, volume, mixer e «Non disturbare» si rileggono solo quando cambiano, invece di lanciare un
+  programma ogni mezzo secondo o ogni secondo (`wl-paste --watch`, `playerctl --follow`, `pactl subscribe`,
+  `gsettings monitor`, che restano in ascolto).
+- Le immagini negli appunti si confrontano senza ricomprimerle in PNG ogni due secondi.
+- La «Konnekta Camera» a riposo manda 2 immagini al secondo invece di 10, e il suo ffmpeg usa metà della memoria.
+- Cavo USB: `adb track-devices` al posto di `adb devices` ogni 3 secondi. Bluetooth: i telefoni associati si
+  chiedono ogni 30 secondi invece che ogni 3.
+- Un computer spento, un telefono lontano o che non risponde vengono richiamati sempre meno spesso (fino a qualche
+  minuto); appena tornano in rete il collegamento riparte subito.
+- Android: il Wi-Fi riceve il multicast solo quando serve cercare i computer (meno batteria); la pagina Invia non
+  ridisegna più lo schermo di continuo.
+- Corretti due casi in cui un errore di rete poteva tenere la CPU al 100%.
+
+**Aggiornamento automatico dell'AppImage**
+- L'AppImage si aggiorna da sola: prima falliva con «cartella non scrivibile… os error 30» (scriveva dentro la
+  propria cartella di sola lettura). Il nuovo file prende il nome della nuova versione e i collegamenti del menu lo
+  seguono. Dalla 2.6.2 o prima va installata a mano un'ultima volta.
+
 ### Novità della 2.6.2
 
 **L'app Android funziona da Android 6.0 in su** (prima serviva Android 9)
