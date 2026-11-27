@@ -247,6 +247,11 @@ Tutti i diritti riservati. Il codice è visibile, ma copiarlo, modificarlo, rico
 
 Le novità di ogni versione, dalla più recente.
 
+### Novità della 2.6.4
+
+- Android: desktop remoto, schermo secondario e audio del computer non fanno più chiudere l'app (errore della 2.6.3,
+  al primo fotogramma ricevuto dal computer).
+
 ### Novità della 2.6.3
 
 **Molte meno risorse a riposo** (misurato sul computer con il telefono collegato: da circa il 9% di un core a
