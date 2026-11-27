@@ -110,6 +110,7 @@ fn start(config_json: &str, data_dir: &str) -> Result<Handle> {
         .and_then(Value::as_bool)
         .unwrap_or(false);
     let pending = Arc::new(PendingPayloads::default());
+    log_panics();
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
@@ -444,16 +445,18 @@ pub unsafe extern "C" fn konnekta_stream_read(
         Some(Stream::Reader(rx)) => rx.clone(),
         _ => return -1,
     };
-    let frame = {
-        // The map lock is released here: waiting only blocks this channel.
-        let mut rx = rx.lock().unwrap();
-        let wait = Duration::from_millis(timeout_ms.max(0) as u64);
-        // Called from an app thread, never from the runtime's own threads.
-        match h.rt.block_on(tokio::time::timeout(wait, rx.recv())) {
-            Ok(Some(f)) => f,
-            Err(_) => return 0,
-            Ok(None) => return -1,
-        }
+    let wait = Duration::from_millis(timeout_ms.max(0) as u64);
+    // The map lock is released here: waiting only blocks this channel.
+    // A panic must not cross into the app (it would abort the process):
+    // the stream ends instead.
+    let got = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut rx = rx.lock().unwrap_or_else(|e| e.into_inner());
+        next_frame(&h.rt, &mut rx, wait)
+    }));
+    let frame = match got {
+        Ok(Some(Some(f))) => f,
+        Ok(Some(None)) => return 0,
+        Ok(None) | Err(_) => return -1,
     };
     if frame.data.len() > cap || buf.is_null() {
         return -2;
@@ -498,9 +501,90 @@ pub unsafe extern "C" fn konnekta_stop(h: *mut Handle) {
     h.rt.shutdown_timeout(Duration::from_secs(2));
 }
 
+/// Panics go to logcat (Android drops stderr): a crash report then says
+/// what failed instead of only `abort` in an unnamed frame.
+fn log_panics() {
+    #[cfg(target_os = "android")]
+    {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            #[link(name = "log")]
+            unsafe extern "C" {
+                fn __android_log_write(prio: i32, tag: *const c_char, text: *const c_char) -> i32;
+            }
+            let default = std::panic::take_hook();
+            std::panic::set_hook(Box::new(move |info| {
+                let text = format!("{info}");
+                if let Ok(t) = CString::new(text.replace('\0', " ")) {
+                    // 6 = ANDROID_LOG_ERROR
+                    unsafe { __android_log_write(6, c"konnekta-rust".as_ptr(), t.as_ptr()) };
+                }
+                default(info);
+            }));
+        });
+    }
+}
+
+/// The next frame of a reader stream, waiting up to `wait`, from an app
+/// thread (outside the runtime): `Some(None)` on timeout, `None` once the
+/// stream ended. The timeout is built inside the runtime: `tokio::time`
+/// panics when a timer is created on a thread outside it.
+fn next_frame(
+    rt: &Runtime,
+    rx: &mut tokio::sync::mpsc::Receiver<Frame>,
+    wait: Duration,
+) -> Option<Option<Frame>> {
+    rt.block_on(async {
+        match tokio::time::timeout(wait, rx.recv()).await {
+            Ok(Some(f)) => Some(Some(f)),
+            Ok(None) => None,
+            Err(_) => Some(None),
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What `konnekta_stream_read` does on the app's audio / video thread:
+    /// a plain thread, outside the runtime (it used to abort the app at the
+    /// first frame: the timer was made before entering the runtime).
+    #[test]
+    fn reads_frames_from_a_thread_outside_the_runtime() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<Frame>(8);
+        let app = std::thread::spawn(move || {
+            let mut got = Vec::new();
+            loop {
+                match next_frame(&rt, &mut rx, Duration::from_millis(100)) {
+                    Some(Some(f)) => got.push(f.pts_us),
+                    Some(None) => got.push(u64::MAX), // timeout
+                    None => break,
+                }
+            }
+            got
+        });
+        std::thread::sleep(Duration::from_millis(250));
+        tx.blocking_send(Frame::new(FrameKind::Audio, 7, vec![1, 2, 3]))
+            .unwrap();
+        tx.blocking_send(Frame::new(FrameKind::Audio, 8, vec![4]))
+            .unwrap();
+        drop(tx);
+        let got = app.join().expect("no panic on the app thread");
+        // Timeouts while nothing came, then both frames, then the end.
+        assert!(got.iter().take_while(|p| **p == u64::MAX).count() >= 1);
+        assert_eq!(
+            got.into_iter()
+                .filter(|p| *p != u64::MAX)
+                .collect::<Vec<_>>(),
+            [7, 8]
+        );
+    }
 
     #[test]
     fn start_call_stop() {
